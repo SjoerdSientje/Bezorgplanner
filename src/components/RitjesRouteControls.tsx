@@ -4,13 +4,6 @@ import { useState } from "react";
 
 type GoedkeurenMode = "replace" | "morgen";
 
-// Tijdopties per 15 minuten van 07:00 t/m 20:00
-const TIJDOPTIES: string[] = [];
-for (let h = 7; h <= 20; h++) {
-  for (const m of [0, 15, 30, 45]) {
-    TIJDOPTIES.push(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
-  }
-}
 
 interface Props {
   onRouteGenerated?: () => void;
@@ -82,18 +75,14 @@ export default function RitjesRouteControls({ onRouteGenerated }: Props) {
             </label>
             <input
               id="vertrektijd"
-              type="text"
-              list="vertrektijd-opties"
+              type="time"
+              min="07:00"
+              max="15:00"
+              step={900}
               value={vertrektijd}
               onChange={(e) => setVertrektijd(e.target.value)}
-              placeholder="HH:MM"
-              className="w-24 rounded-lg border border-koopje-black/20 px-3 py-2 text-sm text-koopje-black focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
+              className="rounded-lg border border-koopje-black/20 px-3 py-2 text-sm text-koopje-black focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
             />
-            <datalist id="vertrektijd-opties">
-              {TIJDOPTIES.map((t) => (
-                <option key={t} value={t} />
-              ))}
-            </datalist>
           </div>
           <button
             type="button"
