@@ -176,10 +176,12 @@ export async function POST(request: NextRequest) {
       const toolResults: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
 
       for (const tc of msg.tool_calls) {
-        if (tc.function?.name !== "set_aankomsttijd_slots") continue;
+        // Nieuwe OpenAI-typen hebben verschillende tool_call-varianten; gebruik een veilige any-cast voor function-calls
+        const fn = (tc as any).function;
+        if (!fn || fn.name !== "set_aankomsttijd_slots") continue;
         let args: { updates?: Array<{ order_nummer: string; aankomsttijd_slot: string }> };
         try {
-          args = JSON.parse(tc.function.arguments ?? "{}");
+          args = JSON.parse(fn.arguments ?? "{}");
         } catch {
           toolResults.push({
             role: "tool" as const,
