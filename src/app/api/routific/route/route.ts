@@ -55,14 +55,14 @@ export async function POST(request: NextRequest) {
 
     // Gebruik fetchAllOrders om row-limit bug te omzeilen, filter daarna in JS
     const allOrders = await fetchAllOrders();
-    const rows = allOrders.filter((o) => {
-      if (o.status !== "ritjes_vandaag") return false;
-      if (!o.meenemen_in_planning) return false;
-      const opmerking = ((o.datum_opmerking as string) ?? "").toLowerCase();
+    const rows = (allOrders as unknown as OrderForRoute[]).filter((o) => {
+      if ((o as unknown as Record<string, unknown>).status !== "ritjes_vandaag") return false;
+      if (!(o as unknown as Record<string, unknown>).meenemen_in_planning) return false;
+      const opmerking = (((o as unknown as Record<string, unknown>).datum_opmerking as string) ?? "").toLowerCase();
       const heeftVandaag = opmerking.includes("vandaag");
-      const heeftDatum = (o.datum as string | null) === planningDate;
+      const heeftDatum = ((o as unknown as Record<string, unknown>).datum as string | null) === planningDate;
       return heeftVandaag || heeftDatum;
-    }) as OrderForRoute[];
+    });
     if (rows.length === 0) {
       return NextResponse.json({
         ok: true,
