@@ -75,8 +75,16 @@ export default function RitjesRouteControls({ onRouteGenerated }: Props) {
             <input
               id="vertrektijd"
               type="time"
+              step={900}
               value={vertrektijd}
               onChange={(e) => setVertrektijd(e.target.value)}
+              onKeyDown={(e) => {
+                // Sta typen toe door de waarde direct als tekst te parsen
+                if (e.key.length === 1 || e.key === "Backspace" || e.key === "Delete") {
+                  const input = e.currentTarget;
+                  setTimeout(() => setVertrektijd(input.value), 0);
+                }
+              }}
               className="rounded-lg border border-koopje-black/20 px-3 py-2 text-sm text-koopje-black focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
             />
           </div>
