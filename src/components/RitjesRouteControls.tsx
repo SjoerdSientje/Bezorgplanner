@@ -1,9 +1,65 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 
 type GoedkeurenMode = "replace" | "morgen";
 
+const TIJDOPTIES: string[] = [];
+for (let h = 7; h <= 15; h++) {
+  for (const m of [0, 15, 30, 45]) {
+    if (h === 15 && m > 0) break;
+    TIJDOPTIES.push(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
+  }
+}
+
+function TijdPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  return (
+    <div ref={ref} className="relative flex items-center">
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="HH:MM"
+        className="w-20 rounded-l-lg border border-r-0 border-koopje-black/20 px-2 py-2 text-sm text-koopje-black focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
+      />
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="rounded-r-lg border border-koopje-black/20 bg-stone-50 px-2 py-2 text-koopje-black/60 hover:bg-stone-100"
+        tabIndex={-1}
+      >
+        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full z-50 mt-1 max-h-48 w-28 overflow-y-auto rounded-lg border border-stone-200 bg-white shadow-lg">
+          {TIJDOPTIES.map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => { onChange(t); setOpen(false); }}
+              className={`block w-full px-3 py-1.5 text-left text-sm hover:bg-koopje-orange-light ${value === t ? "bg-koopje-orange/10 font-semibold text-koopje-orange" : "text-koopje-black"}`}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface Props {
   onRouteGenerated?: () => void;
@@ -73,16 +129,7 @@ export default function RitjesRouteControls({ onRouteGenerated }: Props) {
             <label htmlFor="vertrektijd" className="text-sm font-medium text-koopje-black">
               Vertrektijd
             </label>
-            <input
-              id="vertrektijd"
-              type="time"
-              min="07:00"
-              max="15:00"
-              step={900}
-              value={vertrektijd}
-              onChange={(e) => setVertrektijd(e.target.value)}
-              className="rounded-lg border border-koopje-black/20 px-3 py-2 text-sm text-koopje-black focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
-            />
+            <TijdPicker value={vertrektijd} onChange={setVertrektijd} />
           </div>
           <button
             type="button"
