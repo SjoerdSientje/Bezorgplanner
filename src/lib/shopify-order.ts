@@ -52,7 +52,7 @@ export function passesRitjesFilter(order: ShopifyOrder): boolean {
   const hasProefrit = tags.includes("proefrit");
 
   if (hasTerugbrengen || hasOphalen || hasReparatieAanHuis || hasProefrit) return true;
-  if (totalPrice > 600 && !hasWinkel) return true;
+  if (totalPrice > 500 && !hasWinkel) return true;
   return false;
 }
 
@@ -164,7 +164,7 @@ function getAantalFietsen(order: ShopifyOrder): number {
     tags.includes("proefrit");
 
   if (isReparatieType) return lineItems.length;
-  const priceLimit = 600;
+  const priceLimit = 500;
   return lineItems.filter((item) => {
     const p = typeof item.price === "string" ? parseFloat(item.price) : Number(item.price ?? 0);
     return p > priceLimit;
