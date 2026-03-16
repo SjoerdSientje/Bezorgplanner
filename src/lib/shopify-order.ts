@@ -190,7 +190,55 @@ export interface LineItemForJson {
   price: number;
   isFiets: boolean;
   properties: { name: string; value: string }[];
+  /** Standaard inbegrepen producten die altijd bij deze fiets worden meegeleverd */
+  defaultItems: string[];
 }
+
+/**
+ * Haalt het korte modelnaam op uit een productnaam.
+ * 'V20 PRO Fatbike 2026 + ringslot | Combi-Deal 🔥' → 'V20 PRO'
+ */
+export function extractModelnaamVanProduct(naam: string): string {
+  const match = naam.match(/^(.+?)\s+fatbike/i);
+  if (match) return match[1].trim();
+  // Fallback: eerste twee woorden
+  const words = naam.trim().split(/\s+/);
+  return words.slice(0, 2).join(" ");
+}
+
+/**
+ * Geeft de standaard inbegrepen producten voor een fiets op basis van modelnaam.
+ * Universeel (elke fiets): fietspompje + opladerdoosje.
+ * Model-specifiek: toegevoegd via MODEL_SPECIFIEKE_PRODUCTEN lookup.
+ */
+function getDefaultItemsVoorFiets(naam: string): string[] {
+  const model = extractModelnaamVanProduct(naam);
+
+  // Universeel voor elke fiets > €500
+  const items: string[] = [
+    "Fietspompje",
+    `Opladerdoosje ${model}`,
+  ];
+
+  // Model-specifieke standaardproducten (hier uitbreiden zodra bekend)
+  const modelSpecifiek = MODEL_SPECIFIEKE_PRODUCTEN[model.toUpperCase()] ?? [];
+  items.push(...modelSpecifiek);
+
+  return items;
+}
+
+/**
+ * Lookup voor model-specifieke standaardproducten.
+ * Sleutel = modelnaam in HOOFDLETTERS (bijv. "V20 PRO").
+ * Waarden = array van productnamen die standaard worden meegeleverd.
+ *
+ * Wordt aangevuld zodra de specifieke producten per model bekend zijn.
+ */
+const MODEL_SPECIFIEKE_PRODUCTEN: Record<string, string[]> = {
+  // Voorbeeld (uitcommentariëren tot data bekend is):
+  // "V20 PRO": ["Ringslot V20 PRO"],
+  // "F26": ["Bagagedrager F26"],
+};
 
 /** Bouw een JSON-string van alle line items met naam, prijs en montage-properties (voor fietsen). */
 export function buildLineItemsJson(order: ShopifyOrder): string | null {
@@ -216,7 +264,9 @@ export function buildLineItemsJson(order: ShopifyOrder): string | null {
           .map((p) => ({ name: p.name!, value: String(p.value!) }))
       : [];
 
-    return { name: item.name ?? "", price, isFiets, properties };
+    const defaultItems = isFiets ? getDefaultItemsVoorFiets(item.name ?? "") : [];
+
+    return { name: item.name ?? "", price, isFiets, properties, defaultItems };
   });
 
   // Fietsen eerst, daarna accessoires

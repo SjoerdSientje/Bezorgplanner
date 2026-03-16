@@ -7,6 +7,7 @@ interface LineItem {
   price: number;
   isFiets: boolean;
   properties: { name: string; value: string }[];
+  defaultItems?: string[];
 }
 
 interface Props {
@@ -108,6 +109,22 @@ export default function ProductenCell({ value, lineItemsJson }: Props) {
                         </li>
                       ))}
                     </ul>
+                  )}
+
+                  {item.defaultItems && item.defaultItems.length > 0 && (
+                    <div className="mt-1.5 border-t border-dashed border-stone-200 pt-1.5">
+                      <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-stone-400">
+                        Standaard inbegrepen
+                      </p>
+                      <ul className="space-y-0.5">
+                        {item.defaultItems.map((d, j) => (
+                          <li key={j} className="flex items-center gap-1.5 text-xs text-stone-500">
+                            <span className="text-[10px]">📦</span>
+                            {d}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   )}
                 </div>
               ))}
