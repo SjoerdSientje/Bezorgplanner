@@ -18,9 +18,15 @@ export interface ShopifyCustomer {
   phone?: string | null;
 }
 
+export interface ShopifyLineItemProperty {
+  name?: string | null;
+  value?: string | null;
+}
+
 export interface ShopifyLineItem {
   name?: string | null;
   price?: string | number | null;
+  properties?: ShopifyLineItemProperty[] | null;
 }
 
 export interface ShopifyOrder {
@@ -176,6 +182,49 @@ function getProducten(order: ShopifyOrder): string {
   return items.map((i) => i.name ?? "").filter(Boolean).join("\n");
 }
 
+const PRICE_LIMIT_FIETS = 500;
+const EXCLUDE_PROPERTY_NAME = "_Personalize";
+
+export interface LineItemForJson {
+  name: string;
+  price: number;
+  isFiets: boolean;
+  properties: { name: string; value: string }[];
+}
+
+/** Bouw een JSON-string van alle line items met naam, prijs en montage-properties (voor fietsen). */
+export function buildLineItemsJson(order: ShopifyOrder): string | null {
+  const items = order.line_items ?? [];
+  if (!items.length) return null;
+
+  const structured: LineItemForJson[] = items.map((item) => {
+    const price =
+      typeof item.price === "string"
+        ? parseFloat(item.price)
+        : Number(item.price ?? 0);
+    const isFiets = price > PRICE_LIMIT_FIETS;
+
+    const properties = isFiets
+      ? (item.properties ?? [])
+          .filter(
+            (p) =>
+              p.name &&
+              p.name !== EXCLUDE_PROPERTY_NAME &&
+              p.value != null &&
+              String(p.value).trim() !== ""
+          )
+          .map((p) => ({ name: p.name!, value: String(p.value!) }))
+      : [];
+
+    return { name: item.name ?? "", price, isFiets, properties };
+  });
+
+  // Fietsen eerst, daarna accessoires
+  structured.sort((a, b) => Number(b.isFiets) - Number(a.isFiets));
+
+  return JSON.stringify(structured);
+}
+
 /** Datum uit created_at (YYYY-MM-DD) */
 function getDatum(order: ShopifyOrder): string | null {
   const created = order.created_at;
@@ -219,6 +268,7 @@ export interface RitjesOrderRow {
   model: string | null;
   serienummer: string | null;
   mp_tags: string | null;
+  line_items_json: string | null;
 }
 
 /** Bepaal type uit tags */
@@ -264,6 +314,7 @@ export function mapShopifyOrderToRitjesRow(order: ShopifyOrder): RitjesOrderRow 
     model: null,
     serienummer: null,
     mp_tags: null,
+    line_items_json: buildLineItemsJson(order),
   };
 }
 

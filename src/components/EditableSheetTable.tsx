@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 
 const ROWS = 50;
 
@@ -10,6 +10,12 @@ interface EditableSheetTableProps {
   initialData?: string[][];
   /** Wordt aangeroepen bij onBlur van een cel: (rowIndex, header, value). Gebruik om wijzigingen naar de backend te persisten. */
   onCellBlur?: (rowIndex: number, header: string, value: string) => void;
+  /**
+   * Optionele custom cel-renderers per kolomnaam.
+   * Als een renderer aanwezig is voor een header wordt de standaard <input> vervangen
+   * door de uitvoer van deze functie.
+   */
+  cellRenderers?: Record<string, (rowIndex: number, value: string) => React.ReactNode>;
 }
 
 function createEmptyGrid(headers: readonly string[]): string[][] {
@@ -30,7 +36,7 @@ function padToRows(rows: string[][], colCount: number): string[][] {
   return result.slice(0, ROWS);
 }
 
-export default function EditableSheetTable({ headers, initialData, onCellBlur }: EditableSheetTableProps) {
+export default function EditableSheetTable({ headers, initialData, onCellBlur, cellRenderers }: EditableSheetTableProps) {
   const colCount = (headers as string[]).length;
   const [values, setValues] = useState<string[][]>(() =>
     initialData ? padToRows(initialData, colCount) : createEmptyGrid(headers)
@@ -80,21 +86,29 @@ export default function EditableSheetTable({ headers, initialData, onCellBlur }:
         <tbody>
           {values.map((row, i) => (
             <tr key={i}>
-              {row.map((cellValue, j) => (
-                <td
-                  key={j}
-                  className="min-w-[4rem] border border-stone-300 p-0 align-top"
-                >
-                  <input
-                    type="text"
-                    value={cellValue}
-                    onChange={(e) => handleChange(i, j, e.target.value)}
-                    onBlur={() => handleBlur(i, j)}
-                    className="w-full min-w-[4rem] border-0 bg-transparent px-2 py-1.5 text-stone-700 outline-none focus:bg-koopje-orange-light/30 focus:ring-1 focus:ring-koopje-orange/50"
-                    aria-label={`Rij ${i + 1}, ${headers[j]}`}
-                  />
-                </td>
-              ))}
+              {row.map((cellValue, j) => {
+                const header = headers[j];
+                const customRenderer = cellRenderers?.[header];
+                return (
+                  <td
+                    key={j}
+                    className="min-w-[4rem] border border-stone-300 p-0 align-top"
+                  >
+                    {customRenderer ? (
+                      customRenderer(i, cellValue)
+                    ) : (
+                      <input
+                        type="text"
+                        value={cellValue}
+                        onChange={(e) => handleChange(i, j, e.target.value)}
+                        onBlur={() => handleBlur(i, j)}
+                        className="w-full min-w-[4rem] border-0 bg-transparent px-2 py-1.5 text-stone-700 outline-none focus:bg-koopje-orange-light/30 focus:ring-1 focus:ring-koopje-orange/50"
+                        aria-label={`Rij ${i + 1}, ${header}`}
+                      />
+                    )}
+                  </td>
+                );
+              })}
             </tr>
           ))}
         </tbody>

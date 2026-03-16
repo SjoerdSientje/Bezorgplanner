@@ -55,6 +55,7 @@ export async function POST(request: NextRequest) {
       model: row.model,
       serienummer: row.serienummer,
       mp_tags: row.mp_tags,
+      line_items_json: row.line_items_json,
     };
 
     if (existing) {

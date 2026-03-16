@@ -6,6 +6,7 @@ import Header from "@/components/Header";
 import EditableSheetTable from "@/components/EditableSheetTable";
 import RitjesRouteControls from "@/components/RitjesRouteControls";
 import SparrenMetSientje from "@/components/SparrenMetSientje";
+import ProductenCell from "@/components/ProductenCell";
 import {
   RITJES_HEADERS,
   ordersToTableRows,
@@ -36,6 +37,18 @@ export default function RitjesVandaagPage() {
   }, [fetchRitjes]);
 
   const tableRows = useMemo(() => ordersToTableRows(orders), [orders]);
+
+  const cellRenderers = useMemo(
+    () => ({
+      "Product(en)": (rowIndex: number, value: string) => {
+        const order = orders[rowIndex];
+        const lineItemsJson =
+          order != null ? (order.line_items_json as string | null | undefined) ?? null : null;
+        return <ProductenCell value={value} lineItemsJson={lineItemsJson} />;
+      },
+    }),
+    [orders]
+  );
 
   const handleCellBlur = useCallback(
     async (rowIndex: number, header: string, value: string) => {
@@ -108,6 +121,7 @@ export default function RitjesVandaagPage() {
               headers={RITJES_HEADERS}
               initialData={tableRows}
               onCellBlur={handleCellBlur}
+              cellRenderers={cellRenderers}
             />
           )}
         </div>

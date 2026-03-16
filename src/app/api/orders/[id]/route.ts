@@ -30,6 +30,7 @@ const ALLOWED_KEYS = new Set([
   "betaald_bedrag",
   "aankomsttijd_slot",
   "mp_tags",
+  "line_items_json",
 ]);
 
 export async function PATCH(
