@@ -206,39 +206,91 @@ export function extractModelnaamVanProduct(naam: string): string {
   return words.slice(0, 2).join(" ");
 }
 
-/**
- * Geeft de standaard inbegrepen producten voor een fiets op basis van modelnaam.
- * Universeel (elke fiets): fietspompje + opladerdoosje.
- * Model-specifiek: toegevoegd via MODEL_SPECIFIEKE_PRODUCTEN lookup.
- */
-function getDefaultItemsVoorFiets(naam: string): string[] {
-  const model = extractModelnaamVanProduct(naam);
+/** Normaliseert een Levering-waarde: trim + verwijder afsluitende dubbele punt + lowercase. */
+function normaliseerLevering(v: string): string {
+  return v.trim().replace(/:$/, "").trim().toLowerCase();
+}
 
-  // Universeel voor elke fiets > €500
-  const items: string[] = [
-    "Fietspompje",
-    `Opladerdoosje ${model}`,
-  ];
-
-  // Model-specifieke standaardproducten (hier uitbreiden zodra bekend)
-  const modelSpecifiek = MODEL_SPECIFIEKE_PRODUCTEN[model.toUpperCase()] ?? [];
-  items.push(...modelSpecifiek);
-
-  return items;
+/** Case-insensitieve vergelijking van modelnaam tegen een lijst van doelmodellen. */
+function matchesModels(model: string, targets: string[]): boolean {
+  const ml = model.toLowerCase().trim();
+  return targets.some((t) => t.toLowerCase().trim() === ml);
 }
 
 /**
- * Lookup voor model-specifieke standaardproducten.
- * Sleutel = modelnaam in HOOFDLETTERS (bijv. "V20 PRO").
- * Waarden = array van productnamen die standaard worden meegeleverd.
+ * Geeft de standaard inbegrepen producten voor een fiets,
+ * op basis van modelnaam én de Levering-property uit Shopify.
  *
- * Wordt aangevuld zodra de specifieke producten per model bekend zijn.
+ * Altijd (elke fiets > €500):
+ *   - Fietspompje
+ *   - Opladerdoosje {model}
+ *
+ * Afhankelijk van Levering-waarde + model: zie implementatie.
  */
-const MODEL_SPECIFIEKE_PRODUCTEN: Record<string, string[]> = {
-  // Voorbeeld (uitcommentariëren tot data bekend is):
-  // "V20 PRO": ["Ringslot V20 PRO"],
-  // "F26": ["Bagagedrager F26"],
-};
+function getDefaultItemsVoorFiets(
+  naam: string,
+  rawProperties: ShopifyLineItemProperty[]
+): string[] {
+  const model = extractModelnaamVanProduct(naam);
+  const naamLower = naam.toLowerCase();
+
+  const items: string[] = ["Fietspompje", `Opladerdoosje ${model}`];
+
+  const isEngweOfAdo =
+    naamLower.includes("engwe") || naamLower.includes("ado");
+
+  const leveringRaw =
+    rawProperties.find((p) => p.name?.toLowerCase().trim() === "levering")
+      ?.value ?? "";
+  const levering = normaliseerLevering(leveringRaw);
+
+  if (levering === "volledig rijklaar") {
+    // Alle fietsen behalve Engwe/Ado
+    if (!isEngweOfAdo) {
+      items.push("ART-2 kettingslot", "telefoontasje");
+    }
+
+    // V8 MAX ultra + V8 ultra
+    if (matchesModels(model, ["V8 MAX ultra", "V8 ultra"])) {
+      items.push("goedkope spiegel links");
+    }
+
+    // Voorrekje-modellen
+    if (
+      matchesModels(model, [
+        "V20 Limited", "GT20", "V8 ultra mini", "V8 MAX ultra", "V8 ultra",
+        "V8 PRO", "V8 PRO MAX", "Q8", "S20 PRO", "H9", "V20 PRO comfort",
+      ])
+    ) {
+      items.push("voorrekje");
+    }
+  } else if (levering === "in doos") {
+    // Alle fietsen behalve Engwe/Ado
+    if (!isEngweOfAdo) {
+      items.push("ART-2 kettingslot");
+    }
+
+    // Accu-modellen
+    if (
+      matchesModels(model, [
+        "V20 Pro", "V20 Limited", "S20 Pro", "V20 mini", "V20 Pro Comfort",
+      ])
+    ) {
+      items.push("accu");
+    }
+
+    // Display + losse oplader
+    if (
+      matchesModels(model, [
+        "V20 Pro", "V20 Pro comfort", "V20 Limited", "S20 Pro",
+      ])
+    ) {
+      items.push("display", "losse oplader");
+    }
+  }
+
+  return items;
+}
 
 /** Bouw een JSON-string van alle line items met naam, prijs en montage-properties (voor fietsen). */
 export function buildLineItemsJson(order: ShopifyOrder): string | null {
@@ -264,7 +316,10 @@ export function buildLineItemsJson(order: ShopifyOrder): string | null {
           .map((p) => ({ name: p.name!, value: String(p.value!) }))
       : [];
 
-    const defaultItems = isFiets ? getDefaultItemsVoorFiets(item.name ?? "") : [];
+    const rawProps = item.properties ?? [];
+    const defaultItems = isFiets
+      ? getDefaultItemsVoorFiets(item.name ?? "", rawProps)
+      : [];
 
     return { name: item.name ?? "", price, isFiets, properties, defaultItems };
   });
