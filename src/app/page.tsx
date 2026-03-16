@@ -97,7 +97,7 @@ export default function Home() {
                   Paklijst genereren
                 </span>
                 <span className="mt-1 text-sm text-koopje-black/60">
-                  Binnenkort beschikbaar
+                  Accessoires en standaardproducten voor vandaag
                 </span>
               </Link>
             </li>
