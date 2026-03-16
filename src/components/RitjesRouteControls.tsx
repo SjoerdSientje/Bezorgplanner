@@ -80,16 +80,20 @@ export default function RitjesRouteControls({ onRouteGenerated }: Props) {
             <label htmlFor="vertrektijd" className="text-sm font-medium text-koopje-black">
               Vertrektijd
             </label>
-            <select
+            <input
               id="vertrektijd"
-              value={TIJDOPTIES.includes(vertrektijd) ? vertrektijd : TIJDOPTIES[0]}
+              type="text"
+              list="vertrektijd-opties"
+              value={vertrektijd}
               onChange={(e) => setVertrektijd(e.target.value)}
-              className="rounded-lg border border-koopje-black/20 px-3 py-2 text-sm text-koopje-black focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
-            >
+              placeholder="HH:MM"
+              className="w-24 rounded-lg border border-koopje-black/20 px-3 py-2 text-sm text-koopje-black focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
+            />
+            <datalist id="vertrektijd-opties">
               {TIJDOPTIES.map((t) => (
-                <option key={t} value={t}>{t}</option>
+                <option key={t} value={t} />
               ))}
-            </select>
+            </datalist>
           </div>
           <button
             type="button"
