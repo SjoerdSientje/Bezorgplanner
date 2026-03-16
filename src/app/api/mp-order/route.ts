@@ -2,6 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { verwerkGarantiebewijs } from "@/lib/garantiebewijs";
 
+/** Extraheer fietsmodel: 'V20 PRO Fatbike 2026 + ringslot | Combi-Deal 🔥' → 'V20 PRO' */
+function extractModel(producten: string | null): string | null {
+  if (!producten) return null;
+  const match = producten.match(/^(.+?)\s+fatbike/i);
+  if (match) return match[1].trim();
+  return producten.split(/[|,]/)[0].trim() || null;
+}
+
 /**
  * POST /api/mp-order
  * Slaat een nieuwe Marktplaats order op in Supabase.
@@ -54,14 +62,6 @@ export async function POST(request: NextRequest) {
     const mm = String(nu.getMonth() + 1).padStart(2, "0");
     const yyyy = nu.getFullYear();
     const datumDb = `${yyyy}-${mm}-${dd}`;
-
-    // Extraheer fietsmodel: 'V20 PRO Fatbike 2026 + ringslot | Combi-Deal 🔥' → 'V20 PRO'
-    function extractModel(producten: string | null): string | null {
-      if (!producten) return null;
-      const match = producten.match(/^(.+?)\s+fatbike/i);
-      if (match) return match[1].trim();
-      return producten.split(/[|,]/)[0].trim() || null;
-    }
 
     // Genereer ordernummer
     const supabaseTemp = createClient(supabaseUrl, serviceKey);
