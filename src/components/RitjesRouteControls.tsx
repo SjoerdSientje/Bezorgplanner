@@ -30,7 +30,8 @@ function TijdPicker({ value, onChange }: { value: string; onChange: (v: string) 
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder="HH:MM"
+        onBlur={(e) => { if (!e.target.value.trim()) onChange("10:30"); }}
+        placeholder="10:30"
         className="w-20 rounded-l-lg border border-r-0 border-koopje-black/20 px-2 py-2 text-sm text-koopje-black focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
       />
       <button
