@@ -1,0 +1,16 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --koopje-orange: #f7941d;
+    --koopje-black: #000000;
+  }
+  body {
+    background-color: #ffffff;
+    color: var(--koopje-black);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}

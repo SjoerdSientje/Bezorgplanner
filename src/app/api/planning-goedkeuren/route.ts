@@ -1,0 +1,129 @@
+import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
+import { getPlanningDateForGoedkeuren } from "@/lib/planning-date";
+
+/**
+ * POST /api/planning-goedkeuren
+ * Body: { mode: "replace" | "morgen" }
+ *
+ * "replace": verwijdert de bestaande planning_slots voor planningDate en zet nieuwe slots.
+ * "morgen":  houdt de bestaande slots staan; voegt de nieuwe slots toe voor planningDate.
+ *            Zo blijven bezorgingen die nog bezig zijn staan als aparte sectie.
+ *
+ * planningDate = vandaag (vóór 17:00) of morgen (vanaf 17:00).
+ */
+export async function POST(request: NextRequest) {
+  try {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const serviceKey =
+      process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (!supabaseUrl || !serviceKey) {
+      return NextResponse.json(
+        { error: "Supabase niet geconfigureerd." },
+        { status: 500 }
+      );
+    }
+
+    const body = await request.json().catch(() => ({}));
+    const mode: "replace" | "morgen" = body.mode === "morgen" ? "morgen" : "replace";
+
+    const supabase = createClient(supabaseUrl, serviceKey);
+    const { date: planningDate } = getPlanningDateForGoedkeuren();
+
+    // Orders ophalen die in aanmerking komen
+    const { data: orders, error: queryError } = await supabase
+      .from("orders")
+      .select("id, order_nummer, aankomsttijd_slot")
+      .eq("status", "ritjes_vandaag")
+      .eq("meenemen_in_planning", true)
+      .not("aankomsttijd_slot", "is", null)
+      .or(`datum_opmerking.ilike.%vandaag%,datum.eq.${planningDate}`);
+
+    if (queryError) {
+      console.error("[api/planning-goedkeuren]", queryError);
+      return NextResponse.json(
+        { error: "Orders ophalen mislukt." },
+        { status: 500 }
+      );
+    }
+
+    const rows = (orders ?? []).filter(
+      (o) => (o.aankomsttijd_slot ?? "").toString().trim().length > 0
+    );
+    if (rows.length === 0) {
+      return NextResponse.json({
+        ok: true,
+        message: "Geen orders om goed te keuren (geen orders met tijdslot die voldoen aan de criteria).",
+        count: 0,
+        planningDate,
+        mode,
+      });
+    }
+
+    const sorted = [...rows].sort((a, b) => {
+      const startA = ((a.aankomsttijd_slot ?? "").toString().split(" - ")[0] ?? "");
+      const startB = ((b.aankomsttijd_slot ?? "").toString().split(" - ")[0] ?? "");
+      return startA.localeCompare(startB);
+    });
+
+    if (mode === "replace") {
+      // Verwijder bestaande slots voor dezelfde datum zodat planning volledig vervangen wordt
+      await supabase.from("planning_slots").delete().eq("datum", planningDate);
+    } else {
+      // "morgen": verwijder alleen eventuele eerder aangemaakte morgen-slots voor dezelfde datum
+      // (zodat een dubbele morgen-goedkeuring de vorige morgen-planning correct bijwerkt)
+      const orderIdsInNewPlanning = sorted.map((o) => o.id);
+      const { data: existingSlots } = await supabase
+        .from("planning_slots")
+        .select("id, order_id")
+        .eq("datum", planningDate);
+
+      const toDelete = (existingSlots ?? [])
+        .filter((s: { id: string; order_id: string }) =>
+          orderIdsInNewPlanning.includes(s.order_id)
+        )
+        .map((s: { id: string }) => s.id);
+
+      if (toDelete.length > 0) {
+        await supabase.from("planning_slots").delete().in("id", toDelete);
+      }
+    }
+
+    const slotsToInsert = sorted.map((o, i) => ({
+      datum: planningDate,
+      order_id: o.id,
+      volgorde: i + 1,
+      aankomsttijd: (o.aankomsttijd_slot ?? "").toString().trim(),
+      tijd_opmerking: "",
+    }));
+
+    const { error: insertErr } = await supabase.from("planning_slots").insert(slotsToInsert);
+    if (insertErr) {
+      console.error("[api/planning-goedkeuren] insert:", insertErr);
+      return NextResponse.json(
+        { error: "Planning opslaan mislukt.", detail: insertErr.message },
+        { status: 500 }
+      );
+    }
+
+    const orderIds = sorted.map((o) => o.id);
+    await supabase.from("orders").update({ status: "gepland" }).in("id", orderIds);
+
+    return NextResponse.json({
+      ok: true,
+      message:
+        mode === "replace"
+          ? `Planning vervangen: ${sorted.length} order(s) in de planning gezet.`
+          : `${sorted.length} order(s) toegevoegd als ritjes voor morgen.`,
+      count: sorted.length,
+      planningDate,
+      mode,
+    });
+  } catch (e) {
+    console.error("[api/planning-goedkeuren]", e);
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "Unknown error" },
+      { status: 500 }
+    );
+  }
+}
