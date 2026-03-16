@@ -4,6 +4,14 @@ import { useState } from "react";
 
 type GoedkeurenMode = "replace" | "morgen";
 
+// Tijdopties per 15 minuten van 07:00 t/m 20:00
+const TIJDOPTIES: string[] = [];
+for (let h = 7; h <= 20; h++) {
+  for (const m of [0, 15, 30, 45]) {
+    TIJDOPTIES.push(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
+  }
+}
+
 interface Props {
   onRouteGenerated?: () => void;
 }
@@ -72,21 +80,16 @@ export default function RitjesRouteControls({ onRouteGenerated }: Props) {
             <label htmlFor="vertrektijd" className="text-sm font-medium text-koopje-black">
               Vertrektijd
             </label>
-            <input
+            <select
               id="vertrektijd"
-              type="time"
-              step={900}
-              value={vertrektijd}
+              value={TIJDOPTIES.includes(vertrektijd) ? vertrektijd : TIJDOPTIES[0]}
               onChange={(e) => setVertrektijd(e.target.value)}
-              onKeyDown={(e) => {
-                // Sta typen toe door de waarde direct als tekst te parsen
-                if (e.key.length === 1 || e.key === "Backspace" || e.key === "Delete") {
-                  const input = e.currentTarget;
-                  setTimeout(() => setVertrektijd(input.value), 0);
-                }
-              }}
               className="rounded-lg border border-koopje-black/20 px-3 py-2 text-sm text-koopje-black focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
-            />
+            >
+              {TIJDOPTIES.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
           </div>
           <button
             type="button"
