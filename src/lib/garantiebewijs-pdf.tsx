@@ -105,6 +105,7 @@ function Doc({ d }: { d: GarantiePdfData }) {
 }
 
 export async function genereerGarantiePdf(data: GarantiePdfData): Promise<Buffer> {
-  const buf = await renderToBuffer(React.createElement(Doc, { d: data }));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const buf = await renderToBuffer(React.createElement(Doc, { d: data }) as any);
   return Buffer.from(buf);
 }

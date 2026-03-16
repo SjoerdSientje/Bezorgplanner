@@ -5,14 +5,14 @@ import { useState, useCallback, useEffect } from "react";
 const ROWS = 50;
 
 interface EditableSheetTableProps {
-  headers: string[];
+  headers: readonly string[];
   /** Optioneel: data uit Ritjes voor vandaag (bv. van API). Elke rij is een array van celwaarden in de volgorde van headers. Bij wijziging wordt de tabel bijgewerkt. */
   initialData?: string[][];
   /** Wordt aangeroepen bij onBlur van een cel: (rowIndex, header, value). Gebruik om wijzigingen naar de backend te persisten. */
   onCellBlur?: (rowIndex: number, header: string, value: string) => void;
 }
 
-function createEmptyGrid(headers: string[]): string[][] {
+function createEmptyGrid(headers: readonly string[]): string[][] {
   return Array.from({ length: ROWS }, () =>
     Array.from({ length: headers.length }, () => "")
   );
@@ -31,7 +31,7 @@ function padToRows(rows: string[][], colCount: number): string[][] {
 }
 
 export default function EditableSheetTable({ headers, initialData, onCellBlur }: EditableSheetTableProps) {
-  const colCount = headers.length;
+  const colCount = (headers as string[]).length;
   const [values, setValues] = useState<string[][]>(() =>
     initialData ? padToRows(initialData, colCount) : createEmptyGrid(headers)
   );
