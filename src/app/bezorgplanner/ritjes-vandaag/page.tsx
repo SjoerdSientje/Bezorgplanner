@@ -38,8 +38,46 @@ export default function RitjesVandaagPage() {
 
   const tableRows = useMemo(() => ordersToTableRows(orders), [orders]);
 
+  const deleteOrder = useCallback(
+    async (rowIndex: number) => {
+      if (rowIndex < 0 || rowIndex >= orders.length) return;
+      const order = orders[rowIndex];
+      const id = order?.id as string | undefined;
+      const orderNummer = String((order as any)?.order_nummer ?? "").trim();
+      if (!id) return;
+
+      const ok = window.confirm(
+        `Order verwijderen uit Ritjes voor vandaag?\n\n${orderNummer || id}\n\nDit verwijdert de order definitief uit het systeem.`
+      );
+      if (!ok) return;
+
+      try {
+        const res = await fetch(`/api/orders/${id}`, { method: "DELETE" });
+        if (res.ok) {
+          await fetchRitjes();
+        }
+      } catch {
+        // stil falen of later toast
+      }
+    },
+    [orders, fetchRitjes]
+  );
+
   const cellRenderers = useMemo(
     () => ({
+      "Order Nummer": (rowIndex: number, value: string) => (
+        <div className="flex items-center justify-between gap-2 px-2 py-1.5">
+          <span className="min-w-0 flex-1 truncate text-sm text-stone-700">{value}</span>
+          <button
+            type="button"
+            onClick={() => deleteOrder(rowIndex)}
+            className="shrink-0 rounded-lg border border-stone-200 bg-white px-2 py-1 text-xs text-stone-500 transition hover:border-red-300 hover:bg-red-50 hover:text-red-700"
+            title="Verwijder order"
+          >
+            Verwijder
+          </button>
+        </div>
+      ),
       "Product(en)": (rowIndex: number, value: string) => {
         const order = orders[rowIndex];
         const lineItemsJson =
@@ -47,7 +85,7 @@ export default function RitjesVandaagPage() {
         return <ProductenCell value={value} lineItemsJson={lineItemsJson} />;
       },
     }),
-    [orders]
+    [orders, deleteOrder]
   );
 
   const handleCellBlur = useCallback(

@@ -76,6 +76,46 @@ export async function GET(
   }
 }
 
+export async function DELETE(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const id = (await params).id;
+    if (!id) {
+      return NextResponse.json({ error: "Order-id ontbreekt." }, { status: 400 });
+    }
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const serviceKey =
+      process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (!supabaseUrl || !serviceKey) {
+      return NextResponse.json(
+        { error: "Supabase niet geconfigureerd." },
+        { status: 500 }
+      );
+    }
+
+    const supabase = createClient(supabaseUrl, serviceKey);
+    const { error } = await supabase.from("orders").delete().eq("id", id);
+    if (error) {
+      console.error("[api/orders DELETE]", error);
+      return NextResponse.json(
+        { error: "Verwijderen mislukt.", detail: error.message },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({ ok: true }, { headers: { "Cache-Control": "no-store" } });
+  } catch (e) {
+    console.error("[api/orders DELETE]", e);
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "Unknown error" },
+      { status: 500 }
+    );
+  }
+}
+
 export async function PATCH(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
