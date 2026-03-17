@@ -108,24 +108,31 @@ export function parseNote(note: string | null | undefined): {
   const text = (note ?? "").trim();
   if (!text) return def;
 
-  const lower = text.toLowerCase();
   const out = { ...def };
 
-  if (lower.includes("tijd")) {
-    const match = text.match(/(?:tijd|Tijd)\s*[:\-]?\s*([^\n]+)/i);
+  {
+    // Alleen als er echt een regel begint met "Tijd"
+    const match = text.match(/^\s*tijd\s*[:\-]?\s*([^\n]+)/im);
     const raw = match ? match[1].trim() : "";
-    out.bezorgtijdVoorkeur = raw || def.bezorgtijdVoorkeur;
-    if (out.bezorgtijdVoorkeur.toLowerCase().includes("tussen") && !out.bezorgtijdVoorkeur.includes(":")) {
-      out.bezorgtijdVoorkeur = out.bezorgtijdVoorkeur.replace(/(\d{1,2})\s*en\s*(\d{1,2})/i, "$1:00 - $2:00");
+    if (raw) {
+      out.bezorgtijdVoorkeur = raw;
+      if (out.bezorgtijdVoorkeur.toLowerCase().includes("tussen") && !out.bezorgtijdVoorkeur.includes(":")) {
+        out.bezorgtijdVoorkeur = out.bezorgtijdVoorkeur.replace(
+          /(\d{1,2})\s*en\s*(\d{1,2})/i,
+          "$1:00 - $2:00"
+        );
+      }
     }
   }
-  if (lower.includes("datum")) {
-    const match = text.match(/(?:datum|Datum)\s*[:\-]?\s*([^\n]+)/i);
-    out.datumOpmerking = match ? match[1].trim() : def.datumOpmerking;
+  {
+    // Alleen als er echt een regel begint met "Datum" (niet "Geboortedatum")
+    const match = text.match(/^\s*datum\s*[:\-]?\s*([^\n]+)/im);
+    if (match) out.datumOpmerking = match[1].trim() || def.datumOpmerking;
   }
-  if (lower.includes("opmerking")) {
-    const match = text.match(/(?:opmerking|Opmerking)\s*[:\-]?\s*([^\n]+)/i);
-    out.opmerkingenKlant = match ? match[1].trim() : def.opmerkingenKlant;
+  {
+    // Alleen als er echt een regel begint met "Opmerking"
+    const match = text.match(/^\s*opmerking\s*[:\-]?\s*([^\n]+)/im);
+    if (match) out.opmerkingenKlant = match[1].trim() || def.opmerkingenKlant;
   }
 
   return out;
