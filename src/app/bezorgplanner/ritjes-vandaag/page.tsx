@@ -146,17 +146,23 @@ export default function RitjesVandaagPage() {
               headers={RITJES_HEADERS}
               initialData={tableRows}
               onCellBlur={handleCellBlur}
-              rowActions={(rowIndex) =>
-                orders[rowIndex]?.id ? (
+              rowActions={(rowIndex) => {
+                const hasId = Boolean(orders[rowIndex]?.id);
+                return (
                   <button
                     type="button"
-                    onClick={() => deleteOrder(rowIndex)}
-                    className="rounded-lg border border-stone-200 bg-white p-1.5 text-stone-400 transition hover:border-red-300 hover:bg-red-50 hover:text-red-700"
-                    title="Verwijder order"
-                    aria-label="Verwijder order"
+                    onClick={() => hasId && deleteOrder(rowIndex)}
+                    disabled={!hasId}
+                    className={`rounded-lg border p-2 transition ${
+                      hasId
+                        ? "border-stone-200 bg-stone-50 text-stone-500 hover:border-red-300 hover:bg-red-50 hover:text-red-700"
+                        : "border-transparent bg-transparent text-transparent"
+                    }`}
+                    title={hasId ? "Verwijder order" : ""}
+                    aria-label={hasId ? "Verwijder order" : "Geen order"}
                   >
                     <svg
-                      className="h-4 w-4"
+                      className="h-5 w-5"
                       fill="none"
                       stroke="currentColor"
                       viewBox="0 0 24 24"
@@ -169,8 +175,8 @@ export default function RitjesVandaagPage() {
                       />
                     </svg>
                   </button>
-                ) : null
-              }
+                );
+              }}
               cellRenderers={cellRenderers}
             />
           )}
