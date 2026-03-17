@@ -24,11 +24,22 @@ type OrderDetail = {
   line_items_json?: string | null;
 };
 
+function shouldIgnoreAfrondenChecklistItem(label: string): boolean {
+  const n = label.trim().toLowerCase();
+  if (!n) return true;
+  // Alleen echte producten; geen levering/montage labels
+  if (n === "volledig rijklaar") return true;
+  if (n === "rijklaar") return true;
+  if (n === "in doos") return true;
+  return false;
+}
+
 function parseChecklist(order: OrderDetail): Array<{ label: string; count: number }> {
   const counts = new Map<string, number>();
   const add = (s: string) => {
     const key = s.trim();
     if (!key) return;
+    if (shouldIgnoreAfrondenChecklistItem(key)) return;
     counts.set(key, (counts.get(key) ?? 0) + 1);
   };
 

@@ -11,6 +11,16 @@ interface LineItemFromJson {
   defaultItems?: string[];
 }
 
+function shouldIgnorePaklijstItemName(name: string): boolean {
+  const n = name.trim().toLowerCase();
+  if (!n) return true;
+  // Levering/montage labels horen niet in paklijst
+  if (n === "volledig rijklaar") return true;
+  if (n === "rijklaar") return true;
+  if (n === "in doos") return true;
+  return false;
+}
+
 /** Vandaag in DD-MM-YYYY formaat */
 function todayDDMMYYYY(): string {
   const d = new Date();
@@ -48,6 +58,7 @@ export async function GET() {
     const add = (naam: string) => {
       const n = naam.trim();
       if (!n) return;
+      if (shouldIgnorePaklijstItemName(n)) return;
       counts[n] = (counts[n] ?? 0) + 1;
     };
 

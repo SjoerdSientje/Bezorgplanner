@@ -237,6 +237,16 @@ function expandQtyFromPrefix(raw: string): string[] {
   return Array.from({ length: qty }, () => name);
 }
 
+function shouldIgnoreExtraProductName(name: string): boolean {
+  const n = name.trim().toLowerCase();
+  if (!n) return true;
+  // Deze zijn geen losse producten voor paklijst/afronden; het zijn levering/montage labels
+  if (n === "volledig rijklaar") return true;
+  if (n === "rijklaar") return true;
+  if (n === "in doos") return true;
+  return false;
+}
+
 /**
  * Handmatig aangemaakte Shopify orders hebben vaak geen properties.
  * In dat geval staan extra's in de producttitel: '... rijklaar + kettingslot + voorrekje gemonteerd'
@@ -269,7 +279,10 @@ function parseExtrasFromManualBikeTitle(title: string): {
       continue;
     }
     for (const expanded of expandQtyFromPrefix(e)) {
-      if (expanded.trim()) extraItems.push(expanded.trim());
+      const trimmed = expanded.trim();
+      if (!trimmed) continue;
+      if (shouldIgnoreExtraProductName(trimmed)) continue;
+      extraItems.push(trimmed);
     }
   }
 
