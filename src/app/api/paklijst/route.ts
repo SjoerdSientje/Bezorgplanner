@@ -45,11 +45,11 @@ export async function GET() {
     // Tel alle accessoire-producten op
     const counts: Record<string, number> = {};
 
-    function add(naam: string) {
+    const add = (naam: string) => {
       const n = naam.trim();
       if (!n) return;
       counts[n] = (counts[n] ?? 0) + 1;
-    }
+    };
 
     for (const order of orders) {
       const raw = order.line_items_json as string | null | undefined;

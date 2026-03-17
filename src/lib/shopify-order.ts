@@ -29,6 +29,10 @@ export interface ShopifyLineItem {
   properties?: ShopifyLineItemProperty[] | null;
 }
 
+export interface ShopifyShippingLine {
+  title?: string | null;
+}
+
 export interface ShopifyOrder {
   id?: string | number | null;
   name?: string | null;
@@ -44,21 +48,31 @@ export interface ShopifyOrder {
   shipping_address?: ShopifyAddress | null;
   billing_address?: ShopifyAddress | null;
   line_items?: ShopifyLineItem[] | null;
+  shipping_lines?: ShopifyShippingLine[] | null;
 }
+
+const SHIPPING_EXCLUDE_TITLE = "koopjefatbike showroom";
 
 /** Order komt alleen in Ritjes voor vandaag als hij door dit filter gaat */
 export function passesRitjesFilter(order: ShopifyOrder): boolean {
+  // Uitsluiten: shipping line title is (case insensitive) "koopjefatbike showroom"
+  const shippingLines = order.shipping_lines ?? [];
+  const isShowroom = shippingLines.some(
+    (line) =>
+      (line.title ?? "").trim().toLowerCase() === SHIPPING_EXCLUDE_TITLE.toLowerCase()
+  );
+  if (isShowroom) return false;
+
   const totalPrice = parseFloat(String(order.total_price ?? 0));
   const tags = (order.tags ?? "").toLowerCase();
 
-  const hasWinkel = tags.includes("winkel");
   const hasTerugbrengen = tags.includes("terugbrengen");
   const hasOphalen = tags.includes("ophalen");
   const hasReparatieAanHuis = tags.includes("reparatie aan huis");
   const hasProefrit = tags.includes("proefrit");
 
   if (hasTerugbrengen || hasOphalen || hasReparatieAanHuis || hasProefrit) return true;
-  if (totalPrice > 500 && !hasWinkel) return true;
+  if (totalPrice > 500) return true;
   return false;
 }
 

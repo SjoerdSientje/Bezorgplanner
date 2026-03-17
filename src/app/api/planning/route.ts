@@ -23,6 +23,7 @@ export async function GET() {
     const { data: slots, error: slotsErr } = await supabase
       .from("planning_slots")
       .select("id, datum, volgorde, aankomsttijd, tijd_opmerking, status, order_id")
+      .neq("status", "afgerond")
       .order("datum", { ascending: true })
       .order("volgorde", { ascending: true });
 
