@@ -10,6 +10,8 @@ interface EditableSheetTableProps {
   initialData?: string[][];
   /** Wordt aangeroepen bij onBlur van een cel: (rowIndex, header, value). Gebruik om wijzigingen naar de backend te persisten. */
   onCellBlur?: (rowIndex: number, header: string, value: string) => void;
+  /** Optionele acties links naast de eerste kolom (bijv. prullenbak). */
+  rowActions?: (rowIndex: number) => React.ReactNode;
   /**
    * Optionele custom cel-renderers per kolomnaam.
    * Als een renderer aanwezig is voor een header wordt de standaard <input> vervangen
@@ -36,7 +38,7 @@ function padToRows(rows: string[][], colCount: number): string[][] {
   return result.slice(0, ROWS);
 }
 
-export default function EditableSheetTable({ headers, initialData, onCellBlur, cellRenderers }: EditableSheetTableProps) {
+export default function EditableSheetTable({ headers, initialData, onCellBlur, rowActions, cellRenderers }: EditableSheetTableProps) {
   const colCount = (headers as string[]).length;
   const [values, setValues] = useState<string[][]>(() =>
     initialData ? padToRows(initialData, colCount) : createEmptyGrid(headers)
@@ -73,6 +75,9 @@ export default function EditableSheetTable({ headers, initialData, onCellBlur, c
       <table className="w-full min-w-max border-collapse text-left text-sm">
         <thead>
           <tr className="bg-stone-100">
+            {rowActions && (
+              <th className="w-10 whitespace-nowrap border border-stone-300 px-2 py-2 font-medium text-stone-800" />
+            )}
             {headers.map((h) => (
               <th
                 key={h}
@@ -86,6 +91,13 @@ export default function EditableSheetTable({ headers, initialData, onCellBlur, c
         <tbody>
           {values.map((row, i) => (
             <tr key={i}>
+              {rowActions && (
+                <td className="border border-stone-300 p-0 align-top">
+                  <div className="flex h-full items-start justify-center px-1 py-1.5">
+                    {rowActions(i)}
+                  </div>
+                </td>
+              )}
               {row.map((cellValue, j) => {
                 const header = headers[j];
                 const customRenderer = cellRenderers?.[header];
