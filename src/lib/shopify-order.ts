@@ -215,6 +215,72 @@ export interface LineItemForJson {
   defaultItems: string[];
 }
 
+function looksLikeMontageTekst(s: string): boolean {
+  const t = s.toLowerCase();
+  return (
+    t.includes("montage") ||
+    t.includes("monteren") ||
+    t.includes("gemonteerd") ||
+    t.includes("gemonteerde") ||
+    t.includes("gemont") // vangt 'gemonteer...' varianten
+  );
+}
+
+function expandQtyFromPrefix(raw: string): string[] {
+  const s = raw.trim();
+  if (!s) return [];
+  const m = s.match(/^(\d+)\s*x\s*(.+)$/i);
+  if (!m) return [s];
+  const qty = Math.max(1, Math.min(50, parseInt(m[1], 10) || 1));
+  const name = (m[2] ?? "").trim();
+  if (!name) return [s];
+  return Array.from({ length: qty }, () => name);
+}
+
+/**
+ * Handmatig aangemaakte Shopify orders hebben vaak geen properties.
+ * In dat geval staan extra's in de producttitel: '... rijklaar + kettingslot + voorrekje gemonteerd'
+ * - Extra's → losse non-fiets items
+ * - Montage-achtige tekst → property onder de fiets
+ */
+function parseExtrasFromManualBikeTitle(title: string): {
+  baseName: string;
+  extraItems: string[];
+  montageProperties: { name: string; value: string }[];
+} {
+  const parts = String(title ?? "")
+    .split("+")
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  if (parts.length <= 1) {
+    return { baseName: String(title ?? "").trim(), extraItems: [], montageProperties: [] };
+  }
+
+  const baseName = parts[0];
+  const extras = parts.slice(1);
+
+  const montageBits: string[] = [];
+  const extraItems: string[] = [];
+
+  for (const e of extras) {
+    if (looksLikeMontageTekst(e)) {
+      montageBits.push(e);
+      continue;
+    }
+    for (const expanded of expandQtyFromPrefix(e)) {
+      if (expanded.trim()) extraItems.push(expanded.trim());
+    }
+  }
+
+  const montageProperties =
+    montageBits.length > 0
+      ? [{ name: "Montage", value: montageBits.join(" + ") }]
+      : [];
+
+  return { baseName, extraItems, montageProperties };
+}
+
 /**
  * Haalt het korte modelnaam op uit een productnaam.
  * 'V20 PRO Fatbike 2026 + ringslot | Combi-Deal 🔥' → 'V20 PRO'
@@ -318,15 +384,48 @@ export function buildLineItemsJson(order: ShopifyOrder): string | null {
   const items = order.line_items ?? [];
   if (!items.length) return null;
 
-  const structured: LineItemForJson[] = items.map((item) => {
+  const structured: LineItemForJson[] = [];
+
+  for (const item of items) {
     const price =
       typeof item.price === "string"
         ? parseFloat(item.price)
         : Number(item.price ?? 0);
     const isFiets = price > PRICE_LIMIT_FIETS;
 
+    const rawProps = item.properties ?? [];
+    const hasProps = rawProps.length > 0;
+
+    if (isFiets && !hasProps) {
+      // Handmatige Shopify titel parsing
+      const parsed = parseExtrasFromManualBikeTitle(item.name ?? "");
+
+      const properties = parsed.montageProperties;
+      const defaultItems = getDefaultItemsVoorFiets(parsed.baseName, rawProps);
+
+      structured.push({
+        name: parsed.baseName,
+        price,
+        isFiets: true,
+        properties,
+        defaultItems,
+      });
+
+      for (const extra of parsed.extraItems) {
+        structured.push({
+          name: extra,
+          price: 0,
+          isFiets: false,
+          properties: [],
+          defaultItems: [],
+        });
+      }
+
+      continue;
+    }
+
     const properties = isFiets
-      ? (item.properties ?? [])
+      ? rawProps
           .filter(
             (p) =>
               p.name &&
@@ -337,13 +436,18 @@ export function buildLineItemsJson(order: ShopifyOrder): string | null {
           .map((p) => ({ name: p.name!, value: String(p.value!) }))
       : [];
 
-    const rawProps = item.properties ?? [];
     const defaultItems = isFiets
       ? getDefaultItemsVoorFiets(item.name ?? "", rawProps)
       : [];
 
-    return { name: item.name ?? "", price, isFiets, properties, defaultItems };
-  });
+    structured.push({
+      name: item.name ?? "",
+      price,
+      isFiets,
+      properties,
+      defaultItems,
+    });
+  }
 
   // Fietsen eerst, daarna accessoires
   structured.sort((a, b) => Number(b.isFiets) - Number(a.isFiets));
