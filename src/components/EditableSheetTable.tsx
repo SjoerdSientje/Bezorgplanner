@@ -6,17 +6,12 @@ const ROWS = 50;
 
 interface EditableSheetTableProps {
   headers: readonly string[];
-  /** Optioneel: data uit Ritjes voor vandaag (bv. van API). Elke rij is een array van celwaarden in de volgorde van headers. Bij wijziging wordt de tabel bijgewerkt. */
   initialData?: string[][];
-  /** Wordt aangeroepen bij onBlur van een cel: (rowIndex, header, value). Gebruik om wijzigingen naar de backend te persisten. */
   onCellBlur?: (rowIndex: number, header: string, value: string) => void;
-  /** Optionele acties links naast de eerste kolom (bijv. prullenbak). */
-  rowActions?: (rowIndex: number) => React.ReactNode;
-  /**
-   * Optionele custom cel-renderers per kolomnaam.
-   * Als een renderer aanwezig is voor een header wordt de standaard <input> vervangen
-   * door de uitvoer van deze functie.
-   */
+  /** Aantal echte datarijen (wordt gebruikt om actie-iconen zichtbaar te maken). */
+  dataRowCount?: number;
+  /** Optionele actie per data-rij (bijv. prullenbak). */
+  rowAction?: (rowIndex: number) => void;
   cellRenderers?: Record<string, (rowIndex: number, value: string) => React.ReactNode>;
 }
 
@@ -38,7 +33,14 @@ function padToRows(rows: string[][], colCount: number): string[][] {
   return result.slice(0, ROWS);
 }
 
-export default function EditableSheetTable({ headers, initialData, onCellBlur, rowActions, cellRenderers }: EditableSheetTableProps) {
+export default function EditableSheetTable({
+  headers,
+  initialData,
+  onCellBlur,
+  dataRowCount,
+  rowAction,
+  cellRenderers,
+}: EditableSheetTableProps) {
   const colCount = (headers as string[]).length;
   const [values, setValues] = useState<string[][]>(() =>
     initialData ? padToRows(initialData, colCount) : createEmptyGrid(headers)
@@ -70,13 +72,16 @@ export default function EditableSheetTable({ headers, initialData, onCellBlur, r
     [headers, values, onCellBlur]
   );
 
+  const hasActionCol = Boolean(rowAction);
+  const totalDataRows = dataRowCount ?? 0;
+
   return (
     <div className="overflow-x-auto rounded-xl border-2 border-stone-300 bg-white shadow-sm">
       <table className="w-full min-w-max border-collapse text-left text-sm">
         <thead>
           <tr className="bg-stone-100">
-            {rowActions && (
-              <th className="w-10 whitespace-nowrap border border-stone-300 px-2 py-2 font-medium text-stone-800" />
+            {hasActionCol && (
+              <th className="w-8 border border-stone-300" />
             )}
             {headers.map((h) => (
               <th
@@ -89,40 +94,51 @@ export default function EditableSheetTable({ headers, initialData, onCellBlur, r
           </tr>
         </thead>
         <tbody>
-          {values.map((row, i) => (
-            <tr key={i}>
-              {rowActions && (
-                <td className="border border-stone-300 p-0 align-top">
-                  <div className="flex h-full items-start justify-center px-1 py-1.5">
-                    {rowActions(i)}
-                  </div>
-                </td>
-              )}
-              {row.map((cellValue, j) => {
-                const header = headers[j];
-                const customRenderer = cellRenderers?.[header];
-                return (
-                  <td
-                    key={j}
-                    className="min-w-[4rem] border border-stone-300 p-0 align-top"
-                  >
-                    {customRenderer ? (
-                      customRenderer(i, cellValue)
-                    ) : (
-                      <input
-                        type="text"
-                        value={cellValue}
-                        onChange={(e) => handleChange(i, j, e.target.value)}
-                        onBlur={() => handleBlur(i, j)}
-                        className="w-full min-w-[4rem] border-0 bg-transparent px-2 py-1.5 text-stone-700 outline-none focus:bg-koopje-orange-light/30 focus:ring-1 focus:ring-koopje-orange/50"
-                        aria-label={`Rij ${i + 1}, ${header}`}
-                      />
-                    )}
+          {values.map((row, i) => {
+            const isDataRow = i < totalDataRows;
+            return (
+              <tr key={i}>
+                {hasActionCol && (
+                  <td className="w-8 border border-stone-300 p-0 align-middle">
+                    {isDataRow ? (
+                      <button
+                        type="button"
+                        onClick={() => rowAction!(i)}
+                        className="flex w-full items-center justify-center py-1 text-stone-400 transition hover:text-red-600"
+                        title="Verwijder order"
+                        aria-label="Verwijder order"
+                      >
+                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                            d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7h6m-7 0V5a1 1 0 011-1h4a1 1 0 011 1v2" />
+                        </svg>
+                      </button>
+                    ) : null}
                   </td>
-                );
-              })}
-            </tr>
-          ))}
+                )}
+                {row.map((cellValue, j) => {
+                  const header = headers[j];
+                  const customRenderer = cellRenderers?.[header];
+                  return (
+                    <td key={j} className="min-w-[4rem] border border-stone-300 p-0 align-top">
+                      {customRenderer ? (
+                        customRenderer(i, cellValue)
+                      ) : (
+                        <input
+                          type="text"
+                          value={cellValue}
+                          onChange={(e) => handleChange(i, j, e.target.value)}
+                          onBlur={() => handleBlur(i, j)}
+                          className="w-full min-w-[4rem] border-0 bg-transparent px-2 py-1.5 text-stone-700 outline-none focus:bg-koopje-orange-light/30 focus:ring-1 focus:ring-koopje-orange/50"
+                          aria-label={`Rij ${i + 1}, ${header}`}
+                        />
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

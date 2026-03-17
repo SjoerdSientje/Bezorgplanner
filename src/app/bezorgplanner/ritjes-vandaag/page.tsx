@@ -146,37 +146,8 @@ export default function RitjesVandaagPage() {
               headers={RITJES_HEADERS}
               initialData={tableRows}
               onCellBlur={handleCellBlur}
-              rowActions={(rowIndex) => {
-                const hasId = Boolean(orders[rowIndex]?.id);
-                return (
-                  <button
-                    type="button"
-                    onClick={() => hasId && deleteOrder(rowIndex)}
-                    disabled={!hasId}
-                    className={`rounded-lg border p-2 transition ${
-                      hasId
-                        ? "border-stone-200 bg-stone-50 text-stone-500 hover:border-red-300 hover:bg-red-50 hover:text-red-700"
-                        : "border-transparent bg-transparent text-transparent"
-                    }`}
-                    title={hasId ? "Verwijder order" : ""}
-                    aria-label={hasId ? "Verwijder order" : "Geen order"}
-                  >
-                    <svg
-                      className="h-5 w-5"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7h6m-7 0V5a1 1 0 011-1h4a1 1 0 011 1v2"
-                      />
-                    </svg>
-                  </button>
-                );
-              }}
+              dataRowCount={orders.length}
+              rowAction={deleteOrder}
               cellRenderers={cellRenderers}
             />
           )}
