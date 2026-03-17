@@ -63,15 +63,40 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, updated: existing.id }, { status: 200 });
     }
 
-    const { data: inserted, error } = await supabase
+    let inserted: { id: string } | null = null;
+    let insertError = null;
+
+    // Eerste poging: volledige rij inclusief line_items_json
+    const { data: d1, error: e1 } = await supabase
       .from("orders")
       .insert(insertRow)
       .select("id")
       .single();
 
-    if (error) {
-      console.error("[webhooks/shopify] Supabase error:", error);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+    if (e1) {
+      console.error("[webhooks/shopify] Supabase insert error:", e1.message);
+
+      // Tweede poging zonder line_items_json (kolom bestaat mogelijk nog niet)
+      if (e1.message?.includes("line_items_json")) {
+        console.warn("[webhooks/shopify] Retry zonder line_items_json");
+        const { line_items_json: _omit, ...rowWithoutJson } = insertRow;
+        const { data: d2, error: e2 } = await supabase
+          .from("orders")
+          .insert(rowWithoutJson)
+          .select("id")
+          .single();
+        inserted = d2;
+        insertError = e2;
+      } else {
+        insertError = e1;
+      }
+    } else {
+      inserted = d1;
+    }
+
+    if (insertError) {
+      console.error("[webhooks/shopify] Definitieve insert-fout:", insertError);
+      return NextResponse.json({ error: insertError.message }, { status: 500 });
     }
 
     return NextResponse.json({ ok: true, id: inserted?.id }, { status: 200 });
