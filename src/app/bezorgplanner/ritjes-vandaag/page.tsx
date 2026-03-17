@@ -65,6 +65,37 @@ export default function RitjesVandaagPage() {
 
   const cellRenderers = useMemo(
     () => ({
+      "Adress URL": (_rowIndex: number, value: string) =>
+        value ? (
+          <a
+            href={value}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block truncate px-2 py-1.5 text-sm text-koopje-orange underline underline-offset-2 hover:text-koopje-orange/80"
+          >
+            📍 Kaart
+          </a>
+        ) : (
+          <span className="block px-2 py-1.5 text-sm text-stone-300">—</span>
+        ),
+      "Bel link": (_rowIndex: number, value: string) => {
+        const naam = orders[_rowIndex]
+          ? String((orders[_rowIndex] as any).naam ?? "").trim()
+          : "";
+        const label = naam ? `Bel ${naam}` : "Bellen";
+        return value ? (
+          <a
+            href={value}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block truncate px-2 py-1.5 text-sm text-koopje-orange underline underline-offset-2 hover:text-koopje-orange/80"
+          >
+            📞 {label}
+          </a>
+        ) : (
+          <span className="block px-2 py-1.5 text-sm text-stone-300">—</span>
+        );
+      },
       "Product(en)": (rowIndex: number, value: string) => {
         const order = orders[rowIndex];
         const lineItemsJson =
