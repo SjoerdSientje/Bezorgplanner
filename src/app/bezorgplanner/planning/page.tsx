@@ -50,6 +50,36 @@ function formatCell(value: unknown): string {
   return String(value);
 }
 
+function normalizeToE164(input: string): string | null {
+  const s = String(input ?? "").trim();
+  if (!s) return null;
+  const compact = s.replace(/[()\s-]/g, "");
+  if (!compact) return null;
+  if (compact.startsWith("+")) return compact;
+  if (compact.startsWith("00")) return `+${compact.slice(2)}`;
+  if (compact.startsWith("0")) return `+31${compact.slice(1)}`;
+  if (/^\d{8,15}$/.test(compact)) return `+${compact}`;
+  return null;
+}
+
+function extractPhoneFromBelLink(value: string): string | null {
+  const v = String(value ?? "").trim();
+  if (!v) return null;
+  if (v.toLowerCase().startsWith("tel:")) return normalizeToE164(v.slice(4));
+  try {
+    const url = new URL(v);
+    if (url.hostname.toLowerCase().includes("call.ctrlq.org")) {
+      const path = url.pathname.replace(/^\//, "");
+      return normalizeToE164(path);
+    }
+  } catch {
+    // ignore
+  }
+  const plusMatch = v.match(/(\+\d{8,15})/);
+  if (plusMatch) return plusMatch[1];
+  return normalizeToE164(v);
+}
+
 function PlanningTabel({ rows, label, labelColor }: { rows: PlanningRow[]; label: string; labelColor: string }) {
   return (
     <div className="mb-8">
@@ -83,12 +113,48 @@ function PlanningTabel({ rows, label, labelColor }: { rows: PlanningRow[]; label
                       {formatCell(row.order_nummer)} afronden
                     </Link>
                   </td>
+                  {/* Naam */} 
+                  <td className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700">{formatCell(row.naam)}</td>
+                  {/* Aankomsttijd */} 
+                  <td className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700">{formatCell(row.aankomsttijd)}</td>
+                  {/* Tijd opmerking */} 
+                  <td className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700">{formatCell(row.tijd_opmerking)}</td>
+                  {/* Adress URL */} 
+                  <td className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700">
+                    {row.adres_url ? (
+                      <a href={row.adres_url} target="_blank" rel="noopener noreferrer" className="text-koopje-orange underline underline-offset-2">
+                        📍 Kaart
+                      </a>
+                    ) : (
+                      ""
+                    )}
+                  </td>
+                  {/* Bel link */} 
+                  <td className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700">
+                    {(() => {
+                      const phone =
+                        normalizeToE164(row.telefoon_nummer) ?? extractPhoneFromBelLink(row.bel_link);
+                      return phone ? (
+                        <a href={`tel:${phone}`} className="text-koopje-orange underline underline-offset-2">
+                          📞 Bellen
+                        </a>
+                      ) : (
+                        ""
+                      );
+                    })()}
+                  </td>
+                  {/* Rest */} 
                   {[
-                    row.naam, row.aankomsttijd, row.tijd_opmerking,
-                    row.adres_url, row.bel_link, row.bestelling_totaal_prijs,
-                    row.betaald, row.aantal_fietsen, row.producten,
-                    row.opmerking_klant, row.volledig_adres, row.telefoon_nummer,
-                    row.order_nummer, row.email, row.link_aankoopbewijs,
+                    row.bestelling_totaal_prijs,
+                    row.betaald,
+                    row.aantal_fietsen,
+                    row.producten,
+                    row.opmerking_klant,
+                    row.volledig_adres,
+                    row.telefoon_nummer,
+                    row.order_nummer,
+                    row.email,
+                    row.link_aankoopbewijs,
                   ].map((v, i) => (
                     <td key={i} className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700">
                       {formatCell(v)}

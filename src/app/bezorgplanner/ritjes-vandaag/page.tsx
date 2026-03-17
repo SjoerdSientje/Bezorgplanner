@@ -15,6 +15,41 @@ import {
 } from "@/lib/ritjes-mapping";
 import StuurAppjesButton from "@/components/StuurAppjesButton";
 
+function normalizeToE164(input: string): string | null {
+  const s = String(input ?? "").trim();
+  if (!s) return null;
+  // remove common separators
+  const compact = s.replace(/[()\s-]/g, "");
+  if (!compact) return null;
+  if (compact.startsWith("+")) return compact;
+  if (compact.startsWith("00")) return `+${compact.slice(2)}`;
+  if (compact.startsWith("0")) return `+31${compact.slice(1)}`;
+  // fallback: digits only
+  if (/^\d{8,15}$/.test(compact)) return `+${compact}`;
+  return null;
+}
+
+function extractPhoneFromBelLink(value: string): string | null {
+  const v = String(value ?? "").trim();
+  if (!v) return null;
+  // tel:+316...
+  if (v.toLowerCase().startsWith("tel:")) return normalizeToE164(v.slice(4));
+  // https://call.ctrlq.org/+316...
+  try {
+    const url = new URL(v);
+    if (url.hostname.toLowerCase().includes("call.ctrlq.org")) {
+      const path = url.pathname.replace(/^\//, "");
+      return normalizeToE164(path);
+    }
+  } catch {
+    // ignore
+  }
+  // Spreadsheet-style formula: =HYPERLINK("https://call.ctrlq.org/"&"+316...";"Bel ...")
+  const plusMatch = v.match(/(\+\d{8,15})/);
+  if (plusMatch) return plusMatch[1];
+  return normalizeToE164(v);
+}
+
 export default function RitjesVandaagPage() {
   const [orders, setOrders] = useState<RitjesOrderFromApi[]>([]);
   const [loading, setLoading] = useState(true);
@@ -83,11 +118,15 @@ export default function RitjesVandaagPage() {
           ? String((orders[_rowIndex] as any).naam ?? "").trim()
           : "";
         const label = naam ? `Bel ${naam}` : "Bellen";
-        return value ? (
+        const order = orders[_rowIndex] as any;
+        const phone =
+          normalizeToE164(String(order?.telefoon_e164 ?? "")) ??
+          normalizeToE164(String(order?.telefoon_nummer ?? "")) ??
+          extractPhoneFromBelLink(value);
+        const href = phone ? `tel:${phone}` : null;
+        return href ? (
           <a
-            href={value}
-            target="_blank"
-            rel="noopener noreferrer"
+            href={href}
             className="block truncate px-2 py-1.5 text-sm text-koopje-orange underline underline-offset-2 hover:text-koopje-orange/80"
           >
             📞 {label}
