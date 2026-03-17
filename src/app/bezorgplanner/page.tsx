@@ -21,7 +21,7 @@ export default function BezorgplannerPage() {
           </div>
 
           <p className="text-koopje-black/70">
-            Overzicht van de sheets: ritjes voor vandaag, planning en bezorgde orders.
+            Overzicht van de sheets: ritjes voor vandaag en planning.
           </p>
 
           <ul className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -41,24 +41,6 @@ export default function BezorgplannerPage() {
               >
                 <span className="font-medium text-koopje-black">Planning</span>
                 <span className="mt-1 block text-sm text-koopje-black/60">Route en tijdsloten voor de dag</span>
-              </Link>
-            </li>
-            <li>
-              <Link
-                href="/bezorgplanner/bezorgde-orders"
-                className="block rounded-xl border border-koopje-black/10 bg-white p-5 shadow-sm transition hover:border-koopje-orange hover:shadow"
-              >
-                <span className="font-medium text-koopje-black">Bezorgde orders</span>
-                <span className="mt-1 block text-sm text-koopje-black/60">Afgeronde bezorgingen (Shopify)</span>
-              </Link>
-            </li>
-            <li>
-              <Link
-                href="/bezorgplanner/mp-orders"
-                className="block rounded-xl border border-koopje-black/10 bg-white p-5 shadow-sm transition hover:border-koopje-orange hover:shadow"
-              >
-                <span className="font-medium text-koopje-black">MP orders</span>
-                <span className="mt-1 block text-sm text-koopje-black/60">Marktplaats-orders (bezorgd en winkel)</span>
               </Link>
             </li>
           </ul>
