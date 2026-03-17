@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { verwerkGarantiebewijs } from "@/lib/garantiebewijs";
+import {
+  extractModelnaamVanProduct,
+  buildLineItemsJson,
+  type ShopifyLineItem,
+} from "@/lib/shopify-order";
 
 /** Extraheer fietsmodel: 'V20 PRO Fatbike 2026 + ringslot | Combi-Deal 🔥' → 'V20 PRO' */
 function extractModel(producten: string | null): string | null {
@@ -8,6 +13,38 @@ function extractModel(producten: string | null): string | null {
   const match = producten.match(/^(.+?)\s+fatbike/i);
   if (match) return match[1].trim();
   return producten.split(/[|,]/)[0].trim() || null;
+}
+
+interface ProductRegel {
+  type: "fiets" | "extra";
+  naam: string;
+  levering: "Volledig rijklaar" | "In doos";
+  montageOpmerking: string;
+}
+
+/**
+ * Bouw line_items_json vanuit de MP producten-lijst.
+ * Fietsen krijgen een hoge dummy-prijs (999) zodat isFiets=true en
+ * de bestaande getDefaultItemsVoorFiets() correct werkt.
+ */
+function buildMpLineItemsJson(productenLijst: ProductRegel[]): string | null {
+  if (!productenLijst?.length) return null;
+
+  const lineItems: ShopifyLineItem[] = productenLijst.map((p) => {
+    if (p.type === "fiets") {
+      const props = [
+        { name: "Levering", value: p.levering },
+        ...(p.montageOpmerking?.trim()
+          ? [{ name: "Montage opmerking", value: p.montageOpmerking.trim() }]
+          : []),
+      ];
+      return { name: p.naam, price: 999, properties: props };
+    }
+    return { name: p.naam, price: 0, properties: [] };
+  });
+
+  // Hergebruik buildLineItemsJson via een nep-order object
+  return buildLineItemsJson({ line_items: lineItems });
 }
 
 /**
@@ -83,20 +120,35 @@ export async function POST(request: NextRequest) {
     }
 
     const totaalPrijs = body.totaal_prijs ? parseFloat(String(body.totaal_prijs)) : null;
-    const producten = (body.producten ?? "").trim() || null;
 
-    // Accessoires + montage samenvoegen in producten voor bezorging
-    const accRaw = (body.accessoires ?? "").trim();
-    const monRaw = (body.montage ?? "").trim();
-    const accVal = accRaw && accRaw.toLowerCase() !== "x" ? accRaw : null;
-    const monVal = monRaw && monRaw.toLowerCase() !== "x" ? monRaw : null;
-    const extraParts = [
-      accVal ? `Accessoires: ${accVal}` : null,
-      monVal ? `Montage: ${monVal}` : null,
-    ].filter(Boolean);
-    const productenBezorging = producten
-      ? (extraParts.length ? `${producten} | ${extraParts.join(" | ")}` : producten)
-      : (extraParts.join(" | ") || null);
+    // Nieuwe producten-lijst van form (bevat fiets/extra + levering + montage)
+    const productenLijst: ProductRegel[] = Array.isArray(body.producten_lijst)
+      ? body.producten_lijst
+      : [];
+
+    // Producten-tekst: namen van alle producten, newline-separated
+    const productenTekst = productenLijst.length
+      ? productenLijst.map((p) => p.naam).filter(Boolean).join("\n")
+      : ((body.producten ?? "").trim() || null);
+
+    // Fallback voor oud formaat (zonder producten_lijst)
+    const producten = productenTekst;
+
+    // Aantal fietsen: tel fietsen uit producten_lijst, of gebruik los veld
+    const aantalFietsenBerekend = productenLijst.length
+      ? productenLijst.filter((p) => p.type === "fiets").length
+      : (body.aantal_fietsen ? parseInt(String(body.aantal_fietsen), 10) : null);
+
+    // Model: eerste fiets uit lijst
+    const eersteFiets = productenLijst.find((p) => p.type === "fiets");
+    const modelBerekend = eersteFiets
+      ? extractModelnaamVanProduct(eersteFiets.naam)
+      : extractModel(producten);
+
+    // line_items_json
+    const lineItemsJson = productenLijst.length
+      ? buildMpLineItemsJson(productenLijst)
+      : null;
 
     const insert = {
       source: "mp" as const,
@@ -110,11 +162,12 @@ export async function POST(request: NextRequest) {
       telefoon_e164: e164 || null,
       bel_link: belLink,
       email: (body.email ?? "").trim() || null,
-      producten: soort === "bezorging" ? productenBezorging : producten,
+      producten,
       bestelling_totaal_prijs: totaalPrijs,
-      aantal_fietsen: body.aantal_fietsen ? parseInt(String(body.aantal_fietsen), 10) : null,
+      aantal_fietsen: aantalFietsenBerekend,
       serienummer: soort === "afhaal" ? ((body.serienummer ?? "").trim() || null) : null,
-      model: soort === "bezorging" ? extractModel(producten) : null,
+      model: soort === "bezorging" ? modelBerekend : null,
+      line_items_json: lineItemsJson,
       datum: datumDb,
       meenemen_in_planning: soort === "bezorging" ? true : false,
 

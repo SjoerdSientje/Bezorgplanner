@@ -6,6 +6,16 @@ import { useRouter } from "next/navigation";
 import Header from "@/components/Header";
 
 type Soort = "bezorging" | "afhaal";
+type ProductType = "fiets" | "extra";
+type Levering = "Volledig rijklaar" | "In doos";
+
+interface ProductRegel {
+  id: number;
+  type: ProductType;
+  naam: string;
+  levering: Levering;
+  montageOpmerking: string;
+}
 
 interface FormData {
   naam: string;
@@ -19,11 +29,7 @@ interface FormData {
   bezorgtijd_voorkeur: string;
   datum_voorkeur: string;
   opmerking: string;
-  producten: string;
-  accessoires: string;
-  montage: string;
   totaal_prijs: string;
-  aantal_fietsen: string;
 }
 
 const EMPTY: FormData = {
@@ -38,43 +44,31 @@ const EMPTY: FormData = {
   bezorgtijd_voorkeur: "",
   datum_voorkeur: "",
   opmerking: "",
-  producten: "",
-  accessoires: "",
-  montage: "",
   totaal_prijs: "",
-  aantal_fietsen: "",
 };
 
+let nextId = 1;
+function mkId() { return nextId++; }
+
+function defaultProduct(): ProductRegel {
+  return { id: mkId(), type: "fiets", naam: "", levering: "Volledig rijklaar", montageOpmerking: "" };
+}
+
 function Field({
-  label,
-  id,
-  type = "text",
-  value,
-  onChange,
-  placeholder,
-  required,
-  hint,
+  label, id, type = "text", value, onChange, placeholder, required, hint,
 }: {
-  label: string;
-  id: keyof FormData;
-  type?: string;
-  value: string;
+  label: string; id: keyof FormData; type?: string; value: string;
   onChange: (id: keyof FormData, v: string) => void;
-  placeholder?: string;
-  required?: boolean;
-  hint?: string;
+  placeholder?: string; required?: boolean; hint?: string;
 }) {
   return (
     <div>
       <label htmlFor={id} className="mb-1 block text-sm font-medium text-koopje-black">
-        {label}
-        {required && <span className="ml-1 text-koopje-orange">*</span>}
+        {label}{required && <span className="ml-1 text-koopje-orange">*</span>}
       </label>
       {hint && <p className="mb-1.5 text-xs text-koopje-black/50">{hint}</p>}
       <input
-        id={id}
-        type={type}
-        value={value}
+        id={id} type={type} value={value}
         onChange={(e) => onChange(id, e.target.value)}
         placeholder={placeholder}
         className="w-full rounded-xl border border-koopje-black/20 px-3 py-2.5 text-sm text-koopje-black placeholder:text-koopje-black/30 focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
@@ -83,10 +77,31 @@ function Field({
   );
 }
 
+function LeveringKeuze({ value, onChange }: { value: Levering; onChange: (v: Levering) => void }) {
+  return (
+    <div className="flex gap-2">
+      {(["Volledig rijklaar", "In doos"] as Levering[]).map((opt) => (
+        <button
+          key={opt} type="button"
+          onClick={() => onChange(opt)}
+          className={`flex-1 rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
+            value === opt
+              ? "border-koopje-orange bg-koopje-orange-light text-koopje-orange"
+              : "border-stone-200 bg-white text-stone-500 hover:border-koopje-orange/40"
+          }`}
+        >
+          {opt}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function NieuweMarktplaatsOrderPage() {
   const router = useRouter();
   const [soort, setSoort] = useState<Soort | null>(null);
   const [form, setForm] = useState<FormData>(EMPTY);
+  const [producten, setProducten] = useState<ProductRegel[]>([defaultProduct()]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -102,31 +117,41 @@ export default function NieuweMarktplaatsOrderPage() {
     setSuccess(null);
   }
 
+  function updateProduct(id: number, patch: Partial<ProductRegel>) {
+    setProducten((prev) => prev.map((p) => p.id === id ? { ...p, ...patch } : p));
+  }
+
+  function removeProduct(id: number) {
+    setProducten((prev) => prev.filter((p) => p.id !== id));
+  }
+
+  function addProduct() {
+    setProducten((prev) => [...prev, defaultProduct()]);
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!soort) return;
-    if (!form.naam.trim()) {
-      setError("Naam klant is verplicht.");
-      return;
-    }
+    if (!form.naam.trim()) { setError("Naam klant is verplicht."); return; }
+    if (producten.some((p) => !p.naam.trim())) { setError("Vul alle productnamen in."); return; }
+
     setLoading(true);
     setError(null);
     setSuccess(null);
     setGarantieWarning(null);
+
     try {
       const res = await fetch("/api/mp-order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ soort, ...form }),
+        body: JSON.stringify({ soort, ...form, producten_lijst: producten }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setError(data.error ?? "Opslaan mislukt.");
-        return;
-      }
+      if (!res.ok) { setError(data.error ?? "Opslaan mislukt."); return; }
       setSuccess(data.message ?? "Order opgeslagen.");
       if (data.garantieError) setGarantieWarning(data.garantieError);
       setForm(EMPTY);
+      setProducten([defaultProduct()]);
       setSoort(null);
       const redirectUrl = soort === "bezorging"
         ? "/bezorgplanner/ritjes-vandaag"
@@ -145,25 +170,19 @@ export default function NieuweMarktplaatsOrderPage() {
       <main className="min-h-[calc(100vh-4rem)] bg-white">
         <div className="mx-auto max-w-xl px-4 py-8 sm:px-6 sm:py-12">
           <div className="mb-6 flex items-center gap-4">
-            <Link
-              href="/"
-              className="text-koopje-black/60 transition hover:text-koopje-black"
-              aria-label="Terug naar dashboard"
-            >
+            <Link href="/" className="text-koopje-black/60 transition hover:text-koopje-black" aria-label="Terug">
               <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
               </svg>
             </Link>
-            <h1 className="text-xl font-semibold text-koopje-black sm:text-2xl">
-              Nieuwe Marktplaats order
-            </h1>
+            <h1 className="text-xl font-semibold text-koopje-black sm:text-2xl">Nieuwe Marktplaats order</h1>
           </div>
 
           {success && (
             <div className="mb-6 space-y-3">
               <div className="rounded-xl border border-green-200 bg-green-50 px-5 py-4 text-sm text-green-800">
                 <p className="font-semibold">✓ {success}</p>
-                <p className="mt-1 text-green-700/80">Je wordt doorgestuurd naar MP orders…</p>
+                <p className="mt-1 text-green-700/80">Je wordt doorgestuurd…</p>
               </div>
               {garantieWarning && (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-800">
@@ -174,27 +193,24 @@ export default function NieuweMarktplaatsOrderPage() {
             </div>
           )}
 
-          {/* Vraag 1: afgehaald of bezorgen */}
+          {/* Soort */}
           <div className="mb-6">
             <p className="mb-3 text-sm font-medium text-koopje-black">
               Afgehaald of bezorgen?<span className="ml-1 text-koopje-orange">*</span>
             </p>
             <div className="flex gap-3">
               {(["afhaal", "bezorging"] as Soort[]).map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => handleSoortChange(s)}
+                <button key={s} type="button" onClick={() => handleSoortChange(s)}
                   className={`flex-1 rounded-xl border-2 px-4 py-3 text-left transition ${
                     soort === s
                       ? "border-koopje-orange bg-koopje-orange-light"
                       : "border-koopje-black/10 bg-white hover:border-koopje-orange/40"
                   }`}
                 >
-                  <span className="block font-medium text-koopje-black text-sm">
+                  <span className="block text-sm font-medium text-koopje-black">
                     {s === "afhaal" ? "Afgehaald" : "Bezorgen"}
                   </span>
-                  <span className="block text-xs text-koopje-black/60 mt-0.5">
+                  <span className="mt-0.5 block text-xs text-koopje-black/60">
                     {s === "afhaal" ? "Klant haalt op in winkel" : "Order wordt bij klant bezorgd"}
                   </span>
                 </button>
@@ -205,108 +221,166 @@ export default function NieuweMarktplaatsOrderPage() {
           {soort && (
             <form onSubmit={handleSubmit} className="space-y-8">
 
-              {/* Blok: Klantgegevens */}
+              {/* Klantgegevens */}
               <div className="space-y-4 rounded-xl border border-koopje-black/10 bg-koopje-black/[0.02] px-5 py-5">
-                <p className="text-xs font-semibold uppercase tracking-wide text-koopje-black/50">
-                  Klantgegevens
-                </p>
-
-                {/* Serienummer: alleen bij afhaal */}
+                <p className="text-xs font-semibold uppercase tracking-wide text-koopje-black/50">Klantgegevens</p>
                 {soort === "afhaal" && (
                   <Field label="Serienummer" id="serienummer" value={form.serienummer} onChange={setField} placeholder="bijv. XYZ123456" />
                 )}
-
                 <Field label="Naam klant" id="naam" value={form.naam} onChange={setField} placeholder="Voor- en achternaam" required />
-
                 <div className="grid grid-cols-[1fr_6rem] gap-3">
                   <Field label="Straatnaam" id="straatnaam" value={form.straatnaam} onChange={setField} placeholder="Hoofdstraat" />
                   <Field label="Huisnummer" id="huisnummer" value={form.huisnummer} onChange={setField} placeholder="12B" />
                 </div>
-
                 <div className="grid grid-cols-[7rem_1fr] gap-3">
                   <Field label="Postcode" id="postcode" value={form.postcode} onChange={setField} placeholder="1234 AB" />
                   <Field label="Woonplaats" id="woonplaats" value={form.woonplaats} onChange={setField} placeholder="Amsterdam" />
                 </div>
-
                 <Field label="Telefoonnummer" id="telefoonnummer" type="tel" value={form.telefoonnummer} onChange={setField} placeholder="06 12345678" />
                 <Field label="Email" id="email" type="email" value={form.email} onChange={setField} placeholder="klant@email.nl" />
               </div>
 
-              {/* Blok: Bezorggegevens — alleen bij bezorgen */}
+              {/* Bezorggegevens */}
               {soort === "bezorging" && (
                 <div className="space-y-4 rounded-xl border border-koopje-orange/30 bg-koopje-orange-light/20 px-5 py-5">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-koopje-orange">
-                    Bezorggegevens
-                  </p>
-                  <Field
-                    label="Bezorgtijd voorkeur"
-                    id="bezorgtijd_voorkeur"
-                    value={form.bezorgtijd_voorkeur}
-                    onChange={setField}
-                    placeholder="bijv. na 16:00 of x"
-                    hint="Vul 'x' in als de klant geen voorkeur heeft"
-                  />
-                  <Field
-                    label="Datum voorkeur"
-                    id="datum_voorkeur"
-                    value={form.datum_voorkeur}
-                    onChange={setField}
-                    placeholder="bijv. 14 april of x"
-                    hint="Vul 'x' in als de klant geen voorkeur heeft"
-                  />
-                  <Field
-                    label="Opmerking klant / Sjoerd"
-                    id="opmerking"
-                    value={form.opmerking}
-                    onChange={setField}
-                    placeholder="bijv. bellen voor bezorging of x"
-                    hint="Vul 'x' in als er geen opmerking is"
-                  />
+                  <p className="text-xs font-semibold uppercase tracking-wide text-koopje-orange">Bezorggegevens</p>
+                  <Field label="Bezorgtijd voorkeur" id="bezorgtijd_voorkeur" value={form.bezorgtijd_voorkeur} onChange={setField}
+                    placeholder="bijv. na 16:00 of x" hint="Vul 'x' in als de klant geen voorkeur heeft" />
+                  <Field label="Datum voorkeur" id="datum_voorkeur" value={form.datum_voorkeur} onChange={setField}
+                    placeholder="bijv. 14 april of x" hint="Vul 'x' in als de klant geen voorkeur heeft" />
+                  <Field label="Opmerking klant / Sjoerd" id="opmerking" value={form.opmerking} onChange={setField}
+                    placeholder="bijv. bellen voor bezorging of x" hint="Vul 'x' in als er geen opmerking is" />
                 </div>
               )}
 
-              {/* Blok: Bestelling */}
+              {/* Producten */}
               <div className="space-y-4 rounded-xl border border-koopje-black/10 bg-koopje-black/[0.02] px-5 py-5">
-                <p className="text-xs font-semibold uppercase tracking-wide text-koopje-black/50">
-                  Bestelling
-                </p>
-                <Field label="Product(en)" id="producten" value={form.producten} onChange={setField} placeholder='bijv. Fatbike Sport 26" zwart' required />
-                {soort === "bezorging" && (
-                  <Field
-                    label="Accessoires"
-                    id="accessoires"
-                    value={form.accessoires}
-                    onChange={setField}
-                    placeholder="bijv. slot, fietsbel, tas"
-                    hint="Vul 'x' in als er geen accessoires zijn"
+                <p className="text-xs font-semibold uppercase tracking-wide text-koopje-black/50">Producten</p>
+
+                <div className="space-y-4">
+                  {producten.map((product, idx) => (
+                    <div
+                      key={product.id}
+                      className={`relative rounded-xl border px-4 py-4 ${
+                        product.type === "fiets"
+                          ? "border-koopje-orange/30 bg-orange-50/60"
+                          : "border-stone-200 bg-white"
+                      }`}
+                    >
+                      {/* Header rij */}
+                      <div className="mb-3 flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold text-koopje-black/60">
+                          {idx === 0 ? "Product 1 (fiets)" : `Product ${idx + 1}`}
+                        </span>
+                        {idx > 0 && (
+                          <div className="flex items-center gap-2">
+                            {/* Fiets / Extra toggle */}
+                            <div className="flex overflow-hidden rounded-lg border border-stone-200">
+                              {(["fiets", "extra"] as ProductType[]).map((t) => (
+                                <button key={t} type="button"
+                                  onClick={() => updateProduct(product.id, { type: t })}
+                                  className={`px-3 py-1 text-xs font-medium transition ${
+                                    product.type === t
+                                      ? "bg-koopje-orange text-white"
+                                      : "bg-white text-stone-500 hover:bg-stone-50"
+                                  }`}
+                                >
+                                  {t === "fiets" ? "🚲 Fiets" : "📦 Extra"}
+                                </button>
+                              ))}
+                            </div>
+                            <button type="button" onClick={() => removeProduct(product.id)}
+                              className="rounded-lg border border-stone-200 p-1 text-stone-400 hover:border-red-200 hover:bg-red-50 hover:text-red-600"
+                            >
+                              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                  d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Naam */}
+                      <div className="mb-3">
+                        <label className="mb-1 block text-sm font-medium text-koopje-black">
+                          {product.type === "fiets" ? "Fietsnaam" : "Productnaam"}
+                          <span className="ml-1 text-koopje-orange">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={product.naam}
+                          onChange={(e) => updateProduct(product.id, { naam: e.target.value })}
+                          placeholder={product.type === "fiets" ? "bijv. V20 PRO Fatbike 2026" : "bijv. telefoonhouder"}
+                          className="w-full rounded-xl border border-koopje-black/20 px-3 py-2.5 text-sm text-koopje-black placeholder:text-koopje-black/30 focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
+                        />
+                      </div>
+
+                      {/* Levering — alleen voor fietsen */}
+                      {product.type === "fiets" && (
+                        <div className="mb-3">
+                          <label className="mb-2 block text-sm font-medium text-koopje-black">Levering</label>
+                          <LeveringKeuze
+                            value={product.levering}
+                            onChange={(v) => updateProduct(product.id, { levering: v })}
+                          />
+                        </div>
+                      )}
+
+                      {/* Montage opmerking — fiets + bezorging */}
+                      {product.type === "fiets" && soort === "bezorging" && (
+                        <div>
+                          <label className="mb-1 block text-sm font-medium text-koopje-black">
+                            Extra montage opmerkingen
+                          </label>
+                          <input
+                            type="text"
+                            value={product.montageOpmerking}
+                            onChange={(e) => updateProduct(product.id, { montageOpmerking: e.target.value })}
+                            placeholder="bijv. spatborden monteren, verlichting instellen"
+                            className="w-full rounded-xl border border-koopje-black/20 px-3 py-2.5 text-sm text-koopje-black placeholder:text-koopje-black/30 focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* + product toevoegen */}
+                <button
+                  type="button"
+                  onClick={addProduct}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-stone-200 py-2.5 text-sm font-medium text-stone-500 transition hover:border-koopje-orange/50 hover:text-koopje-orange"
+                >
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                  </svg>
+                  Product toevoegen
+                </button>
+
+                {/* Totaal prijs */}
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-koopje-black">
+                    Totaal prijs (€)<span className="ml-1 text-koopje-orange">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    value={form.totaal_prijs}
+                    onChange={(e) => setField("totaal_prijs", e.target.value)}
+                    placeholder="850"
+                    className="w-full rounded-xl border border-koopje-black/20 px-3 py-2.5 text-sm text-koopje-black placeholder:text-koopje-black/30 focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
                   />
-                )}
-                {soort === "bezorging" && (
-                  <Field
-                    label="Montage"
-                    id="montage"
-                    value={form.montage}
-                    onChange={setField}
-                    placeholder="bijv. zadel monteren, verlichting monteren"
-                    hint="Vul 'x' in als er geen montage nodig is"
-                  />
-                )}
-                <div className="grid grid-cols-2 gap-3">
-                  <Field label="Totaal prijs (€)" id="totaal_prijs" type="number" value={form.totaal_prijs} onChange={setField} placeholder="850" required />
-                  <Field label="Aantal fietsen" id="aantal_fietsen" type="number" value={form.aantal_fietsen} onChange={setField} placeholder="1" required />
                 </div>
               </div>
 
               {error && (
                 <div className="rounded-xl border-2 border-red-400 bg-red-50 px-5 py-4 text-sm text-red-800">
-                  <p className="font-bold text-base mb-1">⚠ Opslaan mislukt</p>
+                  <p className="mb-1 text-base font-bold">⚠ Opslaan mislukt</p>
                   <p>{error}</p>
                 </div>
               )}
 
-              <button
-                type="submit"
-                disabled={loading}
+              <button type="submit" disabled={loading}
                 className="w-full rounded-xl bg-koopje-orange py-3 text-sm font-semibold text-white transition hover:bg-koopje-orange-dark disabled:opacity-50"
               >
                 {loading ? "Opslaan…" : "Order opslaan"}
