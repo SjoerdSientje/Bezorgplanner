@@ -98,14 +98,36 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Order bijwerken mislukt." }, { status: 500 });
     }
 
-    // Verwijder uit planning zodat hij niet meer zichtbaar is
-    const { error: delErr } = await supabase
+    // Verwijder/markeer uit planning zodat hij niet meer zichtbaar is.
+    // We doen dit 2-staps voor robuustheid:
+    // 1) markeer als 'afgerond' (Planning API filtert hierop)
+    // 2) probeer hard delete (zodat het ook echt weg is)
+    const { data: slots, error: slotsErr } = await supabase
       .from("planning_slots")
-      .delete()
+      .select("id")
       .eq("order_id", orderId);
-    if (delErr) {
-      console.error("[api/afronden] delete planning_slots", delErr);
-      // Niet hard failen: order is wel afgerond
+
+    if (slotsErr) {
+      console.error("[api/afronden] select planning_slots", slotsErr);
+    } else if (slots?.length) {
+      const slotIds = slots.map((s) => s.id).filter(Boolean);
+
+      // 1) UI-hide
+      await supabase.from("planning_slots").update({ status: "afgerond" }).in("id", slotIds);
+
+      // 2) hard delete
+      const { error: delErr } = await supabase.from("planning_slots").delete().in("id", slotIds);
+      if (delErr) {
+        console.error("[api/afronden] delete planning_slots", delErr);
+        // Niet hard failen: order is wel afgerond en status 'afgerond' verbergt het al.
+      }
+    } else {
+      // fallback: nogmaals probeer direct op order_id
+      const { error: delErr } = await supabase
+        .from("planning_slots")
+        .delete()
+        .eq("order_id", orderId);
+      if (delErr) console.error("[api/afronden] delete planning_slots fallback", delErr);
     }
 
     return NextResponse.json(
