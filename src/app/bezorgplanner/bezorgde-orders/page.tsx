@@ -28,7 +28,7 @@ export default function BezorgdeOrdersPage() {
         <div className="mx-auto max-w-[1600px] px-4 py-8 sm:px-6 sm:py-12">
           <div className="mb-6 flex items-center gap-4">
             <Link
-              href="/bezorgplanner"
+              href="/afgeronde-orders"
               className="text-koopje-black/60 transition hover:text-koopje-black"
               aria-label="Terug"
             >
