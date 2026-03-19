@@ -34,7 +34,9 @@ export default function StuurAppjesButton() {
     setLoadingOrders(true);
     setOpen(true);
     try {
-      const res = await fetch("/api/planning-orders-appjes");
+      const res = await fetch(`/api/planning-orders-appjes?t=${Date.now()}`, {
+        cache: "no-store",
+      });
       const data = await res.json();
       setOrders(data.orders ?? []);
     } catch {
@@ -66,7 +68,18 @@ export default function StuurAppjesButton() {
     setSending(true);
     setResult(null);
     try {
+      // Herlaad net vóór verzending zodat we altijd het laatste tijdslot sturen
+      const latestRes = await fetch(
+        `/api/planning-orders-appjes?t=${Date.now()}`,
+        { cache: "no-store" }
+      );
+      const latestData = await latestRes.json().catch(() => ({}));
+      const latestOrders: AppjesOrder[] = latestData.orders ?? orders;
+
       const payload = orders
+        .filter((o) => selected.has(o.order_id))
+        .map((o) => o); // keep reference
+      const payloadLatest = latestOrders
         .filter((o) => selected.has(o.order_id))
         .map((o) => ({
           order_id: o.order_id,
@@ -81,7 +94,7 @@ export default function StuurAppjesButton() {
       const res = await fetch("/api/stuur-appjes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ orders: payload }),
+        body: JSON.stringify({ orders: payloadLatest }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+export const dynamic = "force-dynamic";
+
 /**
  * GET /api/planning-orders-appjes
  * Returns all orders that are currently in the active planning (today's planning_slots),
@@ -74,7 +76,10 @@ export async function GET() {
       };
     });
 
-    return NextResponse.json({ orders: result, datum: todayStr });
+    return NextResponse.json(
+      { orders: result, datum: todayStr },
+      { headers: { "Cache-Control": "no-store" } }
+    );
   } catch (e) {
     console.error("[api/planning-orders-appjes]", e);
     return NextResponse.json(
