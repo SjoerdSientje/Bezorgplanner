@@ -106,8 +106,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const orderIds = sorted.map((o) => o.id);
-    await supabase.from("orders").update({ status: "gepland" }).in("id", orderIds);
+    // Belangrijk: we veranderen orders.status niet hier.
+    // "Ritjes voor vandaag" toont alleen orders met status 'ritjes_vandaag';
+    // ze moeten pas verdwijnen zodra ze via 'afronden' naar 'bezorgd'/'mp_orders' gaan.
 
     return NextResponse.json({
       ok: true,
