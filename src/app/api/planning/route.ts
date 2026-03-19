@@ -58,30 +58,39 @@ export async function GET() {
       (ordersData ?? []).map((o: Record<string, unknown>) => [o.id, o])
     );
 
-    const rows = slotList.map((slot: Record<string, unknown>) => {
-      const o = ordersById.get(slot.order_id) as Record<string, unknown> | undefined ?? {};
-      return {
-        slot_id: slot.id,
-        order_id: slot.order_id,
-        datum: slot.datum,
-        volgorde: slot.volgorde,
-        aankomsttijd: slot.aankomsttijd ?? "",
-        tijd_opmerking: slot.tijd_opmerking ?? "",
-        order_nummer: o.order_nummer ?? "",
-        naam: o.naam ?? "",
-        adres_url: o.adres_url ?? "",
-        bel_link: o.bel_link ?? "",
-        bestelling_totaal_prijs: o.bestelling_totaal_prijs ?? "",
-        betaald: o.betaald ?? "",
-        aantal_fietsen: o.aantal_fietsen ?? "",
-        producten: o.producten ?? "",
-        opmerking_klant: o.opmerkingen_klant ?? "",
-        volledig_adres: o.volledig_adres ?? "",
-        telefoon_nummer: o.telefoon_nummer ?? "",
-        email: o.email ?? "",
-        link_aankoopbewijs: "", // Leeg voor nu, later voor MP
-      };
-    });
+    const rows = slotList
+      .map((slot: Record<string, unknown>) => {
+        const o = (ordersById.get(slot.order_id) as Record<string, unknown> | undefined) ?? {};
+        const oStatus = String(o.status ?? "");
+
+        // We tonen alleen orders die nog actief in de planning zitten.
+        // Zodra je een order afrondt, zet je `orders.status` naar `bezorgd`/`mp_orders`.
+        // Ook als `planning_slots` nog even blijven bestaan, mogen ze dan niet meer in de Planning sheet verschijnen.
+        if (oStatus !== "ritjes_vandaag" && oStatus !== "gepland") return null;
+
+        return {
+          slot_id: slot.id,
+          order_id: slot.order_id,
+          datum: slot.datum,
+          volgorde: slot.volgorde,
+          aankomsttijd: slot.aankomsttijd ?? "",
+          tijd_opmerking: slot.tijd_opmerking ?? "",
+          order_nummer: o.order_nummer ?? "",
+          naam: o.naam ?? "",
+          adres_url: o.adres_url ?? "",
+          bel_link: o.bel_link ?? "",
+          bestelling_totaal_prijs: o.bestelling_totaal_prijs ?? "",
+          betaald: o.betaald ?? "",
+          aantal_fietsen: o.aantal_fietsen ?? "",
+          producten: o.producten ?? "",
+          opmerking_klant: o.opmerkingen_klant ?? "",
+          volledig_adres: o.volledig_adres ?? "",
+          telefoon_nummer: o.telefoon_nummer ?? "",
+          email: o.email ?? "",
+          link_aankoopbewijs: "", // Leeg voor nu, later voor MP
+        };
+      })
+      .filter((r) => r != null);
 
     return NextResponse.json(
       { rows },
