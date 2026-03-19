@@ -1,3 +1,7 @@
+/* eslint-disable react-hooks/exhaustive-deps */
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import Header from "@/components/Header";
 import EditableSheetTable from "@/components/EditableSheetTable";
@@ -21,6 +25,76 @@ const BEZORGDE_ORDERS_HEADERS = [
 ];
 
 export default function BezorgdeOrdersPage() {
+  type BezorgdeOrder = {
+    id: string;
+    order_nummer: string | null;
+    naam: string | null;
+    bezorger_naam: string | null;
+    betaalmethode: string | null;
+    betaald_bedrag: number | null;
+    afgerond_at: string | null;
+    producten: string | null;
+    bestelling_totaal_prijs: number | null;
+    volledig_adres: string | null;
+    telefoon_nummer: string | null;
+    order_id: string | null;
+    aantal_fietsen: number | null;
+    email: string | null;
+    telefoon_e164: string | null;
+  };
+
+  const [orders, setOrders] = useState<BezorgdeOrder[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchOrders = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/bezorgde-orders?t=${Date.now()}`, {
+        cache: "no-store",
+      });
+      const data = await res.json().catch(() => ({}));
+      setOrders(Array.isArray(data.orders) ? (data.orders as BezorgdeOrder[]) : []);
+    } catch {
+      setOrders([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchOrders();
+  }, [fetchOrders]);
+
+  const tableRows = useMemo(() => {
+    const toDDMMYYYY = (isoOrDate: string | null) => {
+      if (!isoOrDate) return "";
+      const d = new Date(isoOrDate + "T00:00:00");
+      if (isNaN(d.getTime())) return "";
+      const dd = String(d.getDate()).padStart(2, "0");
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const yyyy = d.getFullYear();
+      return `${dd}-${mm}-${yyyy}`;
+    };
+
+    return orders.map((o) => [
+      o.order_nummer ?? "",
+      o.naam ?? "",
+      o.bezorger_naam ?? "",
+      o.betaalmethode ?? "",
+      o.betaald_bedrag != null ? String(o.betaald_bedrag) : "",
+      toDDMMYYYY(o.afgerond_at),
+      o.producten ?? "",
+      o.bestelling_totaal_prijs != null ? String(o.bestelling_totaal_prijs) : "",
+      o.volledig_adres ?? "",
+      o.telefoon_nummer ?? "",
+      o.order_id ?? "",
+      o.aantal_fietsen != null ? String(o.aantal_fietsen) : "",
+      o.email ?? "",
+      o.betaalmethode ?? "",
+      o.telefoon_e164 ?? "",
+    ]);
+  }, [orders]);
+
   return (
     <>
       <Header />
@@ -45,7 +119,15 @@ export default function BezorgdeOrdersPage() {
             Onderstaande tabel toont alle kolommen. Je kunt in elk vakje typen. Scroll horizontaal als niet alles past.
           </p>
 
-          <EditableSheetTable headers={BEZORGDE_ORDERS_HEADERS} />
+          {loading ? (
+            <p className="text-sm text-koopje-black/60">Laden…</p>
+          ) : (
+            <EditableSheetTable
+              headers={BEZORGDE_ORDERS_HEADERS}
+              initialData={tableRows}
+              dataRowCount={orders.length}
+            />
+          )}
         </div>
       </main>
     </>
