@@ -112,7 +112,10 @@ export function parseNote(note: string | null | undefined): {
 
   {
     // Alleen als er echt een regel begint met "Tijd"
-    const match = text.match(/^\s*tijd\s*[:\-]?\s*([^\n]+)/im);
+    // Maar sommige Shopify notes gebruiken "Bezorgtijd voorkeur" of "Bezorgtijd".
+    const match = text.match(
+      /^\s*(?:bezorgtijd\s*voorkeur|bezorgtijd|tijd)\s*[:\-]?\s*([^\n]+)/im
+    );
     const raw = match ? match[1].trim() : "";
     if (raw) {
       out.bezorgtijdVoorkeur = raw;
