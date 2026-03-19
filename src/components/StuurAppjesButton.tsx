@@ -34,11 +34,21 @@ export default function StuurAppjesButton() {
     setLoadingOrders(true);
     setOpen(true);
     try {
-      const res = await fetch(`/api/planning-orders-appjes?t=${Date.now()}`, {
-        cache: "no-store",
-      });
-      const data = await res.json();
-      setOrders(data.orders ?? []);
+      const fetchFresh = async () => {
+        const res = await fetch(`/api/planning-orders-appjes?t=${Date.now()}`, {
+          cache: "no-store",
+        });
+        return res.json().catch(() => ({}));
+      };
+
+      // Eerst fetchen (mogelijk terwijl PATCH nog in-flight is),
+      // daarna 1 korte retry om zeker te zijn dat het nieuwste tijdslot zichtbaar is.
+      const data1: any = await fetchFresh();
+      setOrders(data1.orders ?? []);
+
+      await new Promise((r) => setTimeout(r, 500));
+      const data2: any = await fetchFresh();
+      setOrders(data2.orders ?? []);
     } catch {
       setOrders([]);
     } finally {
