@@ -40,14 +40,25 @@ export async function POST(request: NextRequest) {
 
     const supabase = createClient(supabaseUrl, serviceKey);
 
-    // Sync het handmatig aangepaste tijdslot terug naar planning_slots
+    // Sync handmatig aangepaste tijdslot terug naar planning_slots.
+    // We updaten op `order_id` (en niet alleen `slot_id`) zodat het altijd klopt
+    // als iemand een order in planning heeft die niet exact via deze slot-id matcht.
     for (const o of selected) {
-      if (o.slot_id && o.aankomsttijd_slot) {
+      if (!o.aankomsttijd_slot) continue;
+
+      // 1) Primary: update via slot_id (als aanwezig)
+      if (o.slot_id) {
         await supabase
           .from("planning_slots")
           .update({ aankomsttijd: o.aankomsttijd_slot })
           .eq("id", o.slot_id);
       }
+
+      // 2) Fallback/extra: update via order_id (covers date/slot mismatches)
+      await supabase
+        .from("planning_slots")
+        .update({ aankomsttijd: o.aankomsttijd_slot })
+        .eq("order_id", o.order_id);
     }
 
     // TODO: WhatsApp berichten sturen via Make.com webhook of WhatsApp Business API
