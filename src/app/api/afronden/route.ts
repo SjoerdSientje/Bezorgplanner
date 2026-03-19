@@ -33,6 +33,11 @@ export async function POST(request: NextRequest) {
     const bezorgerNaam = String(body.bezorger_naam ?? "").trim();
     const betaalOptie = String(body.betaal_optie ?? "").trim();
     const betaalAnders = String(body.betaal_anders ?? "").trim();
+    const betaalBedragRaw = body.betaal_bedrag;
+    const betaalBedragNum =
+      betaalBedragRaw === undefined || betaalBedragRaw === null || String(betaalBedragRaw).trim() === ""
+        ? null
+        : Number(betaalBedragRaw);
 
     if (!orderId) {
       return NextResponse.json({ error: "Order-id ontbreekt." }, { status: 400 });
@@ -45,6 +50,13 @@ export async function POST(request: NextRequest) {
     }
     const betaalmethode =
       betaalOptie === "Anders" ? (betaalAnders || "Anders") : betaalOptie;
+    const needsBedrag =
+      betaalOptie === "Factuur betaling aan deur" || betaalOptie === "Contant aan deur";
+    if (needsBedrag) {
+      if (betaalBedragNum == null || Number.isNaN(betaalBedragNum) || betaalBedragNum < 0) {
+        return NextResponse.json({ error: "Bedrag ontbreekt of ongeldig." }, { status: 400 });
+      }
+    }
 
     const supabase = createClient(supabaseUrl, serviceKey);
 
@@ -66,14 +78,19 @@ export async function POST(request: NextRequest) {
     const nextStatus = toMpOrders ? "mp_orders" : "bezorgd";
 
     // Update order afrond-info + status
+    const updatePayload: Record<string, unknown> = {
+      bezorger_naam: bezorgerNaam,
+      betaalmethode,
+      afgerond_at: new Date().toISOString(),
+      status: nextStatus,
+    };
+    if (needsBedrag && betaalBedragNum != null) {
+      updatePayload.betaald_bedrag = betaalBedragNum;
+    }
+
     const { error: updErr } = await supabase
       .from("orders")
-      .update({
-        bezorger_naam: bezorgerNaam,
-        betaalmethode,
-        afgerond_at: new Date().toISOString(),
-        status: nextStatus,
-      })
+      .update(updatePayload)
       .eq("id", orderId);
 
     if (updErr) {

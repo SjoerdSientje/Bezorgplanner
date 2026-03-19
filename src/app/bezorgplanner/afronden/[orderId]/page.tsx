@@ -84,6 +84,7 @@ export default function AfrondenVragenlijstPage({
   const [bezorgerNaam, setBezorgerNaam] = useState("");
   const [betaalOptie, setBetaalOptie] = useState<PaymentOption | "">("");
   const [betaalAnders, setBetaalAnders] = useState("");
+  const [betaalBedrag, setBetaalBedrag] = useState<string>("");
   const [checked, setChecked] = useState<Record<string, boolean>>({});
 
   const fetchOrder = useCallback(async () => {
@@ -121,7 +122,10 @@ export default function AfrondenVragenlijstPage({
   }, [checklist]);
 
   const allChecked = checklist.every((i) => checked[i.label]);
-  const paymentOk = Boolean(betaalOptie) && (betaalOptie !== "Anders" || betaalAnders.trim().length > 0);
+  const needsBedrag = betaalOptie === "Factuur betaling aan deur" || betaalOptie === "Contant aan deur";
+  const bedragOk = !needsBedrag || (betaalBedrag.trim().length > 0 && !Number.isNaN(Number(betaalBedrag)));
+  const paymentOk =
+    Boolean(betaalOptie) && (betaalOptie !== "Anders" || betaalAnders.trim().length > 0) && bedragOk;
   const canSubmit = bezorgerNaam.trim().length > 0 && paymentOk && allChecked && !saving;
 
   const submit = useCallback(async () => {
@@ -137,6 +141,7 @@ export default function AfrondenVragenlijstPage({
           bezorger_naam: bezorgerNaam,
           betaal_optie: betaalOptie,
           betaal_anders: betaalAnders,
+          betaal_bedrag: needsBedrag ? Number(betaalBedrag) : undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -150,7 +155,7 @@ export default function AfrondenVragenlijstPage({
     } finally {
       setSaving(false);
     }
-  }, [order, bezorgerNaam, betaalOptie, betaalAnders, router]);
+  }, [order, bezorgerNaam, betaalOptie, betaalAnders, betaalBedrag, router]);
 
   return (
     <>
@@ -247,6 +252,24 @@ export default function AfrondenVragenlijstPage({
                       onChange={(e) => setBetaalAnders(e.target.value)}
                       className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm text-koopje-black outline-none focus:border-koopje-orange focus:ring-2 focus:ring-koopje-orange/20"
                       placeholder="Typ hier…"
+                    />
+                  </div>
+                )}
+
+                {needsBedrag && (
+                  <div className="mt-3">
+                    <label className="mb-2 block text-sm font-semibold text-koopje-black">
+                      Bedrag
+                    </label>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      value={betaalBedrag}
+                      onChange={(e) => setBetaalBedrag(e.target.value)}
+                      className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm text-koopje-black outline-none focus:border-koopje-orange focus:ring-2 focus:ring-koopje-orange/20"
+                      placeholder="Bijv. 850"
+                      min={0}
+                      step={0.01}
                     />
                   </div>
                 )}
