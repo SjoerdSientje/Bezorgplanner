@@ -143,25 +143,9 @@ export async function POST(request: NextRequest) {
       }
 
       if (slotsToInsert.length > 0) {
-        await supabase.from("planning_slots").delete().eq("datum", planningDate);
-        const { error: insertErr } = await supabase.from("planning_slots").insert(
-          slotsToInsert.map((s) => ({
-            datum: planningDate,
-            order_id: s.order_id,
-            volgorde: s.volgorde,
-            aankomsttijd: s.aankomsttijd,
-            tijd_opmerking: s.tijd_opmerking,
-          }))
-        );
-        if (insertErr) {
-          console.error("[api/routific/route] planning_slots insert:", insertErr);
-          return NextResponse.json(
-            { error: "Tijdsloten opslaan mislukt.", detail: insertErr.message },
-            { status: 500 }
-          );
-        }
-        // Schrijf aankomsttijd_slot terug op elke order zodat die zichtbaar is in de tabel.
-        // Status blijft 'ritjes_vandaag' — pas bij 'Planning goedkeuren' wijzigt die.
+        // Schrijf alleen aankomsttijd_slot terug op elke order zodat die zichtbaar
+        // is in de "Ritjes voor vandaag" tabel. planning_slots worden pas aangemaakt
+        // bij "Planning goedkeuren" — zo verschijnen ze niet vroegtijdig in Planning.
         for (const s of slotsToInsert) {
           await supabase
             .from("orders")

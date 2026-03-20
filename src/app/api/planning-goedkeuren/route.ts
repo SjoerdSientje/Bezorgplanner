@@ -66,28 +66,10 @@ export async function POST(request: NextRequest) {
       return startA.localeCompare(startB);
     });
 
-    if (mode === "replace") {
-      // Verwijder bestaande slots voor dezelfde datum zodat planning volledig vervangen wordt
-      await supabase.from("planning_slots").delete().eq("datum", planningDate);
-    } else {
-      // "morgen": verwijder alleen eventuele eerder aangemaakte morgen-slots voor dezelfde datum
-      // (zodat een dubbele morgen-goedkeuring de vorige morgen-planning correct bijwerkt)
-      const orderIdsInNewPlanning = sorted.map((o) => o.id);
-      const { data: existingSlots } = await supabase
-        .from("planning_slots")
-        .select("id, order_id")
-        .eq("datum", planningDate);
-
-      const toDelete = (existingSlots ?? [])
-        .filter((s: { id: string; order_id: string }) =>
-          orderIdsInNewPlanning.includes(s.order_id)
-        )
-        .map((s: { id: string }) => s.id);
-
-      if (toDelete.length > 0) {
-        await supabase.from("planning_slots").delete().in("id", toDelete);
-      }
-    }
+    // Verwijder altijd de bestaande slots voor deze datum.
+    // - "replace": vervangt de huidige dag-planning volledig.
+    // - "morgen": vervangt de morgen-planning volledig (zelfde gedrag, andere datum).
+    await supabase.from("planning_slots").delete().eq("datum", planningDate);
 
     const slotsToInsert = sorted.map((o, i) => ({
       datum: planningDate,
