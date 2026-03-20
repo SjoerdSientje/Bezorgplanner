@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 type AppjesOrder = {
   slot_id: string;
@@ -20,7 +20,22 @@ type SendResult = {
   error?: string;
 };
 
-export default function StuurAppjesButton() {
+type CurrentRitjesOrder = {
+  id?: string;
+  aankomsttijd_slot?: string | null;
+  order_nummer?: string | null;
+  naam?: string | null;
+  telefoon_e164?: string | null;
+  telefoon_nummer?: string | null;
+  bezorgtijd_voorkeur?: string | null;
+};
+
+type Props = {
+  huidigeRitjesOrders?: CurrentRitjesOrder[];
+  onBeforeOpen?: () => Promise<void>;
+};
+
+export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }: Props) {
   const [open, setOpen] = useState(false);
   const [orders, setOrders] = useState<AppjesOrder[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -28,12 +43,49 @@ export default function StuurAppjesButton() {
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<SendResult | null>(null);
 
+  const currentByOrderId = useMemo(() => {
+    const m = new Map<string, CurrentRitjesOrder>();
+    for (const o of huidigeRitjesOrders ?? []) {
+      const id = o?.id;
+      if (!id) continue;
+      m.set(id, o);
+    }
+    return m;
+  }, [huidigeRitjesOrders]);
+
+  function mergeLatestWithCurrent(apiOrders: AppjesOrder[]): AppjesOrder[] {
+    if (!huidigeRitjesOrders?.length) return apiOrders;
+    return apiOrders.map((o) => {
+      const cur = currentByOrderId.get(o.order_id);
+      if (!cur) return o;
+      return {
+        ...o,
+        aankomsttijd_slot:
+          cur.aankomsttijd_slot != null && String(cur.aankomsttijd_slot).trim() !== ""
+            ? String(cur.aankomsttijd_slot)
+            : o.aankomsttijd_slot,
+        order_nummer: cur.order_nummer != null ? String(cur.order_nummer) : o.order_nummer,
+        naam: cur.naam != null ? String(cur.naam) : o.naam,
+        telefoon_e164: cur.telefoon_e164 != null ? String(cur.telefoon_e164) : o.telefoon_e164,
+        telefoon_nummer: cur.telefoon_nummer != null ? String(cur.telefoon_nummer) : o.telefoon_nummer,
+        bezorgtijd_voorkeur:
+          cur.bezorgtijd_voorkeur != null ? String(cur.bezorgtijd_voorkeur) : o.bezorgtijd_voorkeur,
+      };
+    });
+  }
+
   const openDialog = useCallback(async () => {
     setResult(null);
     setSelected(new Set());
     setLoadingOrders(true);
     setOpen(true);
     try {
+      // Eerst wachten tot de "Ritjes voor vandaag" state + DB weer up-to-date is
+      // (belangrijk als jij net een tijdslot hebt aangepast).
+      if (onBeforeOpen) await onBeforeOpen();
+      // Kleine extra marge zodat eventuele in-flight PATCH ook klaar kan zijn.
+      await new Promise((r) => setTimeout(r, 250));
+
       const fetchFresh = async () => {
         const res = await fetch(`/api/planning-orders-appjes?t=${Date.now()}`, {
           cache: "no-store",
@@ -44,17 +96,17 @@ export default function StuurAppjesButton() {
       // Eerst fetchen (mogelijk terwijl PATCH nog in-flight is),
       // daarna 1 korte retry om zeker te zijn dat het nieuwste tijdslot zichtbaar is.
       const data1: any = await fetchFresh();
-      setOrders(data1.orders ?? []);
+      setOrders(mergeLatestWithCurrent(data1.orders ?? []));
 
       await new Promise((r) => setTimeout(r, 500));
       const data2: any = await fetchFresh();
-      setOrders(data2.orders ?? []);
+      setOrders(mergeLatestWithCurrent(data2.orders ?? []));
     } catch {
       setOrders([]);
     } finally {
       setLoadingOrders(false);
     }
-  }, []);
+  }, [onBeforeOpen, huidigeRitjesOrders, currentByOrderId]);
 
   function toggleOrder(orderId: string) {
     setSelected((prev) => {
@@ -84,7 +136,7 @@ export default function StuurAppjesButton() {
         { cache: "no-store" }
       );
       const latestData = await latestRes.json().catch(() => ({}));
-      const latestOrders: AppjesOrder[] = latestData.orders ?? orders;
+      const latestOrders: AppjesOrder[] = mergeLatestWithCurrent(latestData.orders ?? orders);
 
       const payload = orders
         .filter((o) => selected.has(o.order_id))

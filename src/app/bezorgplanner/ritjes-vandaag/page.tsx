@@ -197,7 +197,10 @@ export default function RitjesVandaagPage() {
               ritjesOrders={orders}
               onSlotsUpdated={fetchRitjes}
             />
-            <StuurAppjesButton />
+            <StuurAppjesButton
+              huidigeRitjesOrders={orders as any}
+              onBeforeOpen={fetchRitjes}
+            />
             <button
               type="button"
               onClick={fetchRitjes}
