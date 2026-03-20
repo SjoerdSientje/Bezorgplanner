@@ -98,20 +98,42 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Order bijwerken mislukt." }, { status: 500 });
     }
 
+    // Controleer hoeveel slots er zijn vóór delete (voor debuggen).
+    const { data: slotsVoor, error: checkErr } = await supabase
+      .from("planning_slots")
+      .select("id, order_id, datum, aankomsttijd")
+      .eq("order_id", orderId);
+    console.log("[api/afronden] slots VOOR delete:", JSON.stringify(slotsVoor), "orderId:", orderId, "checkErr:", checkErr?.message);
+
     // Verwijder alle planning_slots voor deze order.
     const { error: delErr } = await supabase
       .from("planning_slots")
       .delete()
       .eq("order_id", orderId);
+    console.log("[api/afronden] delete result - error:", delErr?.message ?? "geen");
+
+    // Verifieer dat ze echt weg zijn.
+    const { data: slotsNa } = await supabase
+      .from("planning_slots")
+      .select("id")
+      .eq("order_id", orderId);
+    console.log("[api/afronden] slots NA delete:", slotsNa?.length ?? 0, "rijen voor orderId:", orderId);
+
     if (delErr) {
-      console.error("[api/afronden] delete planning_slots", delErr);
-      // Niet hard failen: order is al afgerond.
-    } else {
-      console.log("[api/afronden] planning_slots verwijderd voor order_id:", orderId);
+      console.error("[api/afronden] delete planning_slots fout:", delErr);
     }
 
     return NextResponse.json(
-      { ok: true, nextStatus },
+      {
+        ok: true,
+        nextStatus,
+        debug: {
+          orderId,
+          slotsVoorDelete: slotsVoor?.length ?? 0,
+          slotsNaDelete: slotsNa?.length ?? 0,
+          deleteError: delErr?.message ?? null,
+        },
+      },
       { headers: { "Cache-Control": "no-store" } }
     );
   } catch (e) {

@@ -147,6 +147,7 @@ export default function AfrondenVragenlijstPage({
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error ?? "Afronden mislukt");
 
+      console.log("[afronden] API response debug:", data?.debug);
       // Hard redirect naar planning zodat de pagina volledig opnieuw laadt
       // en de afgeronde order zeker niet meer zichtbaar is.
       window.location.href = "/bezorgplanner/planning";
