@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createServerSupabaseClient } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
@@ -18,16 +18,6 @@ function isMpTagged(mpTags: unknown): boolean {
 
 export async function POST(request: NextRequest) {
   try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const serviceKey =
-      process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    if (!supabaseUrl || !serviceKey) {
-      return NextResponse.json(
-        { error: "Supabase niet geconfigureerd." },
-        { status: 500 }
-      );
-    }
-
     const body = await request.json().catch(() => ({}));
     const orderId = String(body.orderId ?? "").trim();
     const bezorgerNaam = String(body.bezorger_naam ?? "").trim();
@@ -58,7 +48,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const supabase = createClient(supabaseUrl, serviceKey);
+    const supabase = createServerSupabaseClient();
 
     // Haal order op om MP-tag te bepalen
     const { data: order, error: orderErr } = await supabase

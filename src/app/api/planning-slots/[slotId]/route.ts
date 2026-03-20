@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createServerSupabaseClient } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
@@ -13,14 +13,7 @@ export async function DELETE(
       return NextResponse.json({ error: "Slot-id ontbreekt." }, { status: 400 });
     }
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const serviceKey =
-      process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    if (!supabaseUrl || !serviceKey) {
-      return NextResponse.json({ error: "Supabase niet geconfigureerd." }, { status: 500 });
-    }
-
-    const supabase = createClient(supabaseUrl, serviceKey);
+    const supabase = createServerSupabaseClient();
     const { error } = await supabase.from("planning_slots").delete().eq("id", slotId);
     if (error) {
       console.error("[api/planning-slots DELETE]", error);

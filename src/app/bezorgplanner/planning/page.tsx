@@ -218,11 +218,16 @@ export default function PlanningPage() {
         `Order verwijderen uit planning?\n\n${orderNummer || slotId}\n\nDe order blijft gewoon staan in Ritjes voor vandaag.`
       );
       if (!ok) return;
+      // Optimistische UI: rij direct verbergen
+      setRows((prev) => prev.filter((r) => r.slot_id !== slotId));
       try {
         const res = await fetch(`/api/planning-slots/${slotId}`, { method: "DELETE" });
-        if (res.ok) await fetchPlanning();
+        if (!res.ok) {
+          // Rollback bij fout
+          await fetchPlanning();
+        }
       } catch {
-        // stil falen
+        await fetchPlanning();
       }
     },
     [fetchPlanning]
