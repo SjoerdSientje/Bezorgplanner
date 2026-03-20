@@ -80,7 +80,17 @@ function extractPhoneFromBelLink(value: string): string | null {
   return normalizeToE164(v);
 }
 
-function PlanningTabel({ rows, label, labelColor }: { rows: PlanningRow[]; label: string; labelColor: string }) {
+function PlanningTabel({
+  rows,
+  label,
+  labelColor,
+  onDeleteSlot,
+}: {
+  rows: PlanningRow[];
+  label: string;
+  labelColor: string;
+  onDeleteSlot: (slotId: string, orderNummer: string) => void;
+}) {
   return (
     <div className="mb-8">
       <h2 className={`mb-3 text-base font-semibold ${labelColor}`}>{label}</h2>
@@ -88,6 +98,8 @@ function PlanningTabel({ rows, label, labelColor }: { rows: PlanningRow[]; label
         <table className="w-full min-w-max border-collapse text-left text-sm">
           <thead>
             <tr className="bg-stone-100">
+              {/* lege header voor verwijder-kolom */}
+              <th className="border border-stone-300 px-1 py-2" />
               {PLANNING_HEADERS.map((h) => (
                 <th key={h} className="whitespace-nowrap border border-stone-300 px-2 py-2 font-medium text-stone-800">
                   {h}
@@ -98,13 +110,26 @@ function PlanningTabel({ rows, label, labelColor }: { rows: PlanningRow[]; label
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={PLANNING_HEADERS.length} className="border border-stone-300 px-2 py-4 text-center text-koopje-black/60">
+                <td colSpan={PLANNING_HEADERS.length + 1} className="border border-stone-300 px-2 py-4 text-center text-koopje-black/60">
                   Geen ritjes.
                 </td>
               </tr>
             ) : (
               rows.map((row) => (
                 <tr key={row.slot_id}>
+                  {/* verwijder-knop */}
+                  <td className="border border-stone-300 px-1 py-1 text-center align-middle">
+                    <button
+                      type="button"
+                      onClick={() => onDeleteSlot(row.slot_id, String(row.order_nummer))}
+                      className="rounded p-1 text-stone-400 transition hover:bg-red-50 hover:text-red-500"
+                      title="Verwijder uit planning"
+                    >
+                      <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  </td>
                   <td className="min-w-[4rem] border border-stone-300 p-0 align-top">
                     <Link
                       href={`/bezorgplanner/afronden/${row.order_id}`}
@@ -187,6 +212,22 @@ export default function PlanningPage() {
     }
   }, []);
 
+  const deleteSlot = useCallback(
+    async (slotId: string, orderNummer: string) => {
+      const ok = window.confirm(
+        `Order verwijderen uit planning?\n\n${orderNummer || slotId}\n\nDe order blijft gewoon staan in Ritjes voor vandaag.`
+      );
+      if (!ok) return;
+      try {
+        const res = await fetch(`/api/planning-slots/${slotId}`, { method: "DELETE" });
+        if (res.ok) await fetchPlanning();
+      } catch {
+        // stil falen
+      }
+    },
+    [fetchPlanning]
+  );
+
   useEffect(() => {
     fetchPlanning();
   }, [fetchPlanning]);
@@ -249,6 +290,7 @@ export default function PlanningPage() {
                 labelColor={
                   idx === 0 ? "text-koopje-black" : "text-koopje-orange"
                 }
+                onDeleteSlot={deleteSlot}
               />
             ))
           )}
