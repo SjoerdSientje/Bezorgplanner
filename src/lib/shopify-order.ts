@@ -184,6 +184,14 @@ function buildBelLink(phone: string, firstName: string): string {
   return `https://call.ctrlq.org/${e164};${label}`;
 }
 
+/**
+ * Splits een producttitel op '&' om meerdere fietsen te herkennen.
+ * "V20 PRO & V8 PRO + kettingslot" → ["V20 PRO", "V8 PRO + kettingslot"]
+ */
+function splitBikesOnAmpersand(title: string): string[] {
+  return title.split("&").map((s) => s.trim()).filter(Boolean);
+}
+
 function getAantalFietsen(order: ShopifyOrder): number {
   const tags = (order.tags ?? "").toLowerCase();
   const lineItems = order.line_items ?? [];
@@ -195,15 +203,32 @@ function getAantalFietsen(order: ShopifyOrder): number {
 
   if (isReparatieType) return lineItems.length;
   const priceLimit = 500;
-  return lineItems.filter((item) => {
-    const p = typeof item.price === "string" ? parseFloat(item.price) : Number(item.price ?? 0);
-    return p > priceLimit;
-  }).length;
+  return lineItems
+    .filter((item) => {
+      const p = typeof item.price === "string" ? parseFloat(item.price) : Number(item.price ?? 0);
+      return p > priceLimit;
+    })
+    .reduce((sum, item) => {
+      // Elke '&' in de titel is een extra fiets
+      const bikeCount = splitBikesOnAmpersand(item.name ?? "").length || 1;
+      return sum + bikeCount;
+    }, 0);
 }
 
 function getProducten(order: ShopifyOrder): string {
   const items = order.line_items ?? [];
-  return items.map((i) => i.name ?? "").filter(Boolean).join("\n");
+  const names: string[] = [];
+  for (const item of items) {
+    const name = (item.name ?? "").trim();
+    if (!name) continue;
+    if (name.includes("&")) {
+      // Elke fiets na '&' als aparte regel tonen
+      names.push(...splitBikesOnAmpersand(name));
+    } else {
+      names.push(name);
+    }
+  }
+  return names.join("\n");
 }
 
 const PRICE_LIMIT_FIETS = 500;
@@ -408,22 +433,50 @@ export function buildLineItemsJson(order: ShopifyOrder): string | null {
         ? parseFloat(item.price)
         : Number(item.price ?? 0);
     const isFiets = price > PRICE_LIMIT_FIETS;
-
+    const rawName = (item.name ?? "").trim();
     const rawProps = item.properties ?? [];
     const hasProps = rawProps.length > 0;
 
-    if (isFiets && !hasProps) {
-      // Handmatige Shopify titel parsing
-      const parsed = parseExtrasFromManualBikeTitle(item.name ?? "");
+    // ── '&' in de titel → meerdere fietsen in één line item ──────────────
+    if (isFiets && rawName.includes("&")) {
+      const bikeTitles = splitBikesOnAmpersand(rawName);
+      const pricePerBike = price / Math.max(1, bikeTitles.length);
 
-      const properties = parsed.montageProperties;
+      for (const bikeTitle of bikeTitles) {
+        const parsed = parseExtrasFromManualBikeTitle(bikeTitle);
+        const defaultItems = getDefaultItemsVoorFiets(parsed.baseName, []);
+
+        structured.push({
+          name: parsed.baseName,
+          price: pricePerBike,
+          isFiets: true,
+          properties: parsed.montageProperties,
+          defaultItems,
+        });
+
+        for (const extra of parsed.extraItems) {
+          structured.push({
+            name: extra,
+            price: 0,
+            isFiets: false,
+            properties: [],
+            defaultItems: [],
+          });
+        }
+      }
+      continue;
+    }
+
+    // ── Handmatige order zonder properties ('+' in titel) ─────────────────
+    if (isFiets && !hasProps) {
+      const parsed = parseExtrasFromManualBikeTitle(rawName);
       const defaultItems = getDefaultItemsVoorFiets(parsed.baseName, rawProps);
 
       structured.push({
         name: parsed.baseName,
         price,
         isFiets: true,
-        properties,
+        properties: parsed.montageProperties,
         defaultItems,
       });
 
@@ -440,6 +493,7 @@ export function buildLineItemsJson(order: ShopifyOrder): string | null {
       continue;
     }
 
+    // ── Reguliere Shopify order met properties ────────────────────────────
     const properties = isFiets
       ? rawProps
           .filter(
@@ -453,11 +507,11 @@ export function buildLineItemsJson(order: ShopifyOrder): string | null {
       : [];
 
     const defaultItems = isFiets
-      ? getDefaultItemsVoorFiets(item.name ?? "", rawProps)
+      ? getDefaultItemsVoorFiets(rawName, rawProps)
       : [];
 
     structured.push({
-      name: item.name ?? "",
+      name: rawName,
       price,
       isFiets,
       properties,
