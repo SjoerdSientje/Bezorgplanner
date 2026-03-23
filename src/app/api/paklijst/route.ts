@@ -11,17 +11,24 @@ interface LineItemFromJson {
   defaultItems?: string[];
 }
 
+interface OrderDetail {
+  id: string;
+  order_nummer: string | number | null;
+  naam: string | null;
+  volledig_adres: string | null;
+  aankomsttijd_slot: string | null;
+  products: LineItemFromJson[];
+}
+
 function shouldIgnorePaklijstItemName(name: string): boolean {
   const n = name.trim().toLowerCase();
   if (!n) return true;
-  // Levering/montage labels horen niet in paklijst
   if (n === "volledig rijklaar") return true;
   if (n === "rijklaar") return true;
   if (n === "in doos") return true;
   return false;
 }
 
-/** Vandaag in DD-MM-YYYY formaat */
 function todayDDMMYYYY(): string {
   const d = new Date();
   const dd = String(d.getDate()).padStart(2, "0");
@@ -29,10 +36,6 @@ function todayDDMMYYYY(): string {
   return `${dd}-${mm}-${d.getFullYear()}`;
 }
 
-/**
- * True als datum_opmerking overeenkomt met vandaag.
- * Matcht op: "vandaag", DD-MM-YYYY van vandaag.
- */
 function isDatumVandaag(datum: unknown): boolean {
   if (!datum) return false;
   const d = String(datum).toLowerCase().trim();
@@ -44,7 +47,6 @@ export async function GET() {
   try {
     const allOrders = await fetchAllOrders();
 
-    // Filter: ritjes vandaag + meenemen in planning + datum vandaag
     const orders = allOrders.filter((o) => {
       if (o.status !== "ritjes_vandaag") return false;
       if (!o.meenemen_in_planning) return false;
@@ -52,9 +54,34 @@ export async function GET() {
       return true;
     });
 
-    // Tel alle accessoire-producten op
-    const counts: Record<string, number> = {};
+    // ── Per-order detail blokken ──────────────────────────────────────────
+    const ordersDetail: OrderDetail[] = orders.map((order) => {
+      let products: LineItemFromJson[] = [];
+      try {
+        if (order.line_items_json) {
+          products = JSON.parse(order.line_items_json as string) as LineItemFromJson[];
+        }
+      } catch { /* ignore */ }
 
+      return {
+        id: String(order.id),
+        order_nummer: order.order_nummer as string | number | null ?? null,
+        naam: order.naam as string | null ?? null,
+        volledig_adres: order.volledig_adres as string | null ?? null,
+        aankomsttijd_slot: order.aankomsttijd_slot as string | null ?? null,
+        products,
+      };
+    });
+
+    // Sorteer op aankomsttijd_slot (vroegst eerst)
+    ordersDetail.sort((a, b) => {
+      const ta = a.aankomsttijd_slot ?? "";
+      const tb = b.aankomsttijd_slot ?? "";
+      return ta.localeCompare(tb);
+    });
+
+    // ── Samenvattende paklijst ────────────────────────────────────────────
+    const counts: Record<string, number> = {};
     const add = (naam: string) => {
       const n = naam.trim();
       if (!n) return;
@@ -65,20 +92,13 @@ export async function GET() {
     for (const order of orders) {
       const raw = order.line_items_json as string | null | undefined;
       if (!raw) continue;
-
       let items: LineItemFromJson[] = [];
-      try {
-        items = JSON.parse(raw) as LineItemFromJson[];
-      } catch {
-        continue;
-      }
+      try { items = JSON.parse(raw) as LineItemFromJson[]; } catch { continue; }
 
       for (const item of items) {
         if (!item.isFiets) {
-          // Gewone accessoire in de bestelling (prijs < €500)
           add(item.name);
         } else {
-          // Fiets: voeg standaard inbegrepen producten toe
           for (const d of item.defaultItems ?? []) {
             add(d);
           }
@@ -86,14 +106,14 @@ export async function GET() {
       }
     }
 
-    // Sorteer: hoogste count eerst, dan alfabetisch
-    const items = Object.entries(counts)
+    const summaryItems = Object.entries(counts)
       .sort(([nameA, cntA], [nameB, cntB]) => cntB - cntA || nameA.localeCompare(nameB, "nl"))
       .map(([name, count]) => ({ name, count }));
 
     return NextResponse.json(
       {
-        items,
+        orders: ordersDetail,
+        items: summaryItems,
         orderCount: orders.length,
         generatedAt: new Date().toISOString(),
       },
