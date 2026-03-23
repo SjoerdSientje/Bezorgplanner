@@ -12,6 +12,7 @@ import {
   RITJES_HEADERS,
   ordersToTableRows,
   ritjesCellToPayload,
+  sortRitjesOrdersNewestFirst,
   type RitjesOrderFromApi,
 } from "@/lib/ritjes-mapping";
 import StuurAppjesButton from "@/components/StuurAppjesButton";
@@ -63,7 +64,7 @@ export default function RitjesVandaagPage() {
     try {
       const res = await fetch(`/api/ritjes-vandaag?t=${Date.now()}`, { cache: "no-store" });
       const data = await res.json();
-      setOrders(data.orders ?? []);
+      setOrders(sortRitjesOrdersNewestFirst(data.orders ?? []));
       setTableResetKey((k) => k + 1); // tabel resetten na echte fetch
     } catch {
       setOrders([]);

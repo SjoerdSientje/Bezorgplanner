@@ -56,6 +56,18 @@ export const RITJES_HEADER_TO_FIELD: Record<string, string> = {
 
 export type RitjesOrderFromApi = Record<string, unknown>;
 
+/**
+ * Ritjes voor vandaag: nieuwste order bovenaan (created_at aflopend).
+ * Gebruik na elke fetch (incl. Verversen) zodat de volgorde altijd klopt.
+ */
+export function sortRitjesOrdersNewestFirst<T extends RitjesOrderFromApi>(orders: T[]): T[] {
+  return [...orders].sort((a, b) => {
+    const ta = a.created_at ? new Date(String(a.created_at)).getTime() : 0;
+    const tb = b.created_at ? new Date(String(b.created_at)).getTime() : 0;
+    return tb - ta;
+  });
+}
+
 /** Boolean-kolommen in de ritjes-tabel */
 const RITJES_BOOLEAN_FIELDS = new Set([
   "meenemen_in_planning",
