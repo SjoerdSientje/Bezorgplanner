@@ -135,11 +135,28 @@ export default function RitjesVandaagPage() {
           <span className="block px-2 py-1.5 text-sm text-stone-300">—</span>
         );
       },
-      "Product(en)": (rowIndex: number, value: string, onSave: (v: string) => void) => {
+      "Product(en)": (rowIndex: number, value: string, _onSave: (v: string) => void) => {
         const order = orders[rowIndex];
+        const id = order?.id as string | undefined;
         const lineItemsJson =
           order != null ? (order.line_items_json as string | null | undefined) ?? null : null;
-        return <ProductenCell value={value} lineItemsJson={lineItemsJson} onSave={onSave} />;
+        const handleSaveMulti = id
+          ? async (fields: Record<string, unknown>) => {
+              await fetch(`/api/orders/${id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(fields),
+              });
+              await fetchRitjes();
+            }
+          : undefined;
+        return (
+          <ProductenCell
+            value={value}
+            lineItemsJson={lineItemsJson}
+            onSaveMulti={handleSaveMulti}
+          />
+        );
       },
     }),
     [orders, deleteOrder]
