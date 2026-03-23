@@ -13,6 +13,11 @@ interface EditableSheetTableProps {
   /** Optionele actie per data-rij (bijv. prullenbak). */
   rowAction?: (rowIndex: number) => void;
   cellRenderers?: Record<string, (rowIndex: number, value: string, onSave: (v: string) => void) => React.ReactNode>;
+  /**
+   * Verhoog deze waarde wanneer je de tabel geforceerd wilt resetten vanuit initialData
+   * (bijv. na een echte server-fetch). Celwijzigingen mogen deze NIET verhogen.
+   */
+  resetKey?: number;
 }
 
 function createEmptyGrid(headers: readonly string[]): string[][] {
@@ -40,17 +45,21 @@ export default function EditableSheetTable({
   dataRowCount,
   rowAction,
   cellRenderers,
+  resetKey = 0,
 }: EditableSheetTableProps) {
   const colCount = (headers as string[]).length;
   const [values, setValues] = useState<string[][]>(() =>
     initialData ? padToRows(initialData, colCount) : createEmptyGrid(headers)
   );
 
+  // Alleen resetten als resetKey verandert (= na een echte server-fetch),
+  // NIET op elke initialData-wijziging. Zo verdwijnt de flash bij cel-opslaan.
   useEffect(() => {
     if (initialData) {
       setValues(padToRows(initialData, colCount));
     }
-  }, [initialData, colCount]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resetKey, colCount]);
 
   const handleChange = useCallback(
     (row: number, col: number, value: string) => {

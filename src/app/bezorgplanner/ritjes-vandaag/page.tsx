@@ -53,6 +53,9 @@ function extractPhoneFromBelLink(value: string): string | null {
 export default function RitjesVandaagPage() {
   const [orders, setOrders] = useState<RitjesOrderFromApi[]>([]);
   const [loading, setLoading] = useState(true);
+  // Verhoog dit ALLEEN na een echte server-fetch zodat EditableSheetTable zijn waarden reset.
+  // Cel-edits mogen dit NIET verhogen (dat veroorzaakt de page-flash).
+  const [tableResetKey, setTableResetKey] = useState(0);
 
   const fetchRitjes = useCallback(async () => {
     setLoading(true);
@@ -60,12 +63,23 @@ export default function RitjesVandaagPage() {
       const res = await fetch(`/api/ritjes-vandaag?t=${Date.now()}`, { cache: "no-store" });
       const data = await res.json();
       setOrders(data.orders ?? []);
+      setTableResetKey((k) => k + 1); // tabel resetten na echte fetch
     } catch {
       setOrders([]);
     } finally {
       setLoading(false);
     }
   }, []);
+
+  /** Pas één order in de lokale state aan zonder een server-fetch te triggeren. */
+  const patchOrderInState = useCallback(
+    (rowIndex: number, fields: Record<string, unknown>) => {
+      setOrders((prev) =>
+        prev.map((o, i) => (i === rowIndex ? { ...o, ...fields } : o))
+      );
+    },
+    []
+  );
 
   useEffect(() => {
     fetchRitjes();
@@ -86,13 +100,14 @@ export default function RitjesVandaagPage() {
       );
       if (!ok) return;
 
+      // Optimistisch: verwijder direct uit state
+      setOrders((prev) => prev.filter((_, i) => i !== rowIndex));
+      setTableResetKey((k) => k + 1);
       try {
-        const res = await fetch(`/api/orders/${id}`, { method: "DELETE" });
-        if (res.ok) {
-          await fetchRitjes();
-        }
+        await fetch(`/api/orders/${id}`, { method: "DELETE" });
       } catch {
-        // stil falen of later toast
+        // Rollback bij fout
+        await fetchRitjes();
       }
     },
     [orders, fetchRitjes]
@@ -142,12 +157,13 @@ export default function RitjesVandaagPage() {
           order != null ? (order.line_items_json as string | null | undefined) ?? null : null;
         const handleSaveMulti = id
           ? async (fields: Record<string, unknown>) => {
+              // Optimistisch bijwerken — geen fetchRitjes, geen flash
+              patchOrderInState(rowIndex, fields);
               await fetch(`/api/orders/${id}`, {
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(fields),
               });
-              await fetchRitjes();
             }
           : undefined;
         return (
@@ -159,7 +175,7 @@ export default function RitjesVandaagPage() {
         );
       },
     }),
-    [orders, deleteOrder]
+    [orders, deleteOrder, patchOrderInState]
   );
 
   const handleCellBlur = useCallback(
@@ -170,20 +186,19 @@ export default function RitjesVandaagPage() {
       if (!id) return;
       const payload = ritjesCellToPayload(header, value);
       if (!payload || Object.keys(payload).length === 0) return;
-      try {
-        const res = await fetch(`/api/orders/${id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        if (res.ok) {
-          await fetchRitjes();
-        }
-      } catch {
-        // stil falen of later toast
-      }
+      // Optimistisch: update direct de lokale order-state, GEEN fetchRitjes → geen page-flash
+      patchOrderInState(rowIndex, payload);
+      // Fire-and-forget PATCH (de server-side update loopt op de achtergrond)
+      fetch(`/api/orders/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }).catch(() => {
+        // Bij netwerk-fout: herlaad data
+        fetchRitjes();
+      });
     },
-    [orders, fetchRitjes]
+    [orders, patchOrderInState, fetchRitjes]
   );
 
   return (
@@ -232,13 +247,13 @@ export default function RitjesVandaagPage() {
             <p className="text-sm text-koopje-black/60">Laden…</p>
           ) : (
             <EditableSheetTable
-              key={orders.length}
               headers={RITJES_HEADERS}
               initialData={tableRows}
               onCellBlur={handleCellBlur}
               dataRowCount={orders.length}
               rowAction={deleteOrder}
               cellRenderers={cellRenderers}
+              resetKey={tableResetKey}
             />
           )}
         </div>
