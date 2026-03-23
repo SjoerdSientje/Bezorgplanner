@@ -157,8 +157,10 @@ export default function RitjesVandaagPage() {
           order != null ? (order.line_items_json as string | null | undefined) ?? null : null;
         const handleSaveMulti = id
           ? async (fields: Record<string, unknown>) => {
-              // Optimistisch bijwerken — geen fetchRitjes, geen flash
+              // Update orders state + reset tabel zodat producten-tekst en prijs direct zichtbaar zijn.
+              // tableResetKey hier wél verhogen is OK: het is een expliciete "Opslaan" actie.
               patchOrderInState(rowIndex, fields);
+              setTableResetKey((k) => k + 1);
               await fetch(`/api/orders/${id}`, {
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
