@@ -26,6 +26,8 @@ export type WhatsAppOrderInput = {
   telefoon_e164?: string | null;
   telefoon_nummer?: string | null;
   type?: string | null;
+  betaald?: boolean | null;
+  mp_tags?: string | null;
   opmerkingen_klant?: string | null;
   bezorgtijd_voorkeur?: string | null;
 };
@@ -73,6 +75,50 @@ export function getOrderKind(order: WhatsAppOrderInput): OrderKind {
     return "verkoop";
   }
   return "default";
+}
+
+function isMpOrder(order: WhatsAppOrderInput): boolean {
+  const t = String(order.type ?? "").toLowerCase();
+  if (t === "mp_winkel") return true;
+  return /\bmp\b/.test(String(order.mp_tags ?? "").toLowerCase());
+}
+
+function resolveFixedBusinessTemplate(
+  event: WhatsAppEvent,
+  order: WhatsAppOrderInput
+): TemplateConfig | null {
+  const kind = getOrderKind(order);
+  const paid = order.betaald === true;
+  const mp = isMpOrder(order);
+
+  if (event === "planning_goedgekeurd" || event === "stuur_appjes") {
+    if (kind === "terugbrengen") return { name: "fatbike_terugbrengen", language: "nl" };
+    if (kind === "ophalen") return { name: "fatbike_ophalen", language: "nl" };
+    if (kind === "reparatie_aan_huis" || kind === "proefrit") {
+      return { name: "bezorgtijd_proefrit_aan_huis", language: "nl" };
+    }
+    if (mp) return { name: "bezorgtijd_bij_mp_bestellingen", language: "nl_BE" };
+    if (paid) return { name: "bezorgtijd_bij_betaalde_bestellingen", language: "nl_BE" };
+    return { name: "bezorgtijd_bij_niet_betaalde_bestellingen", language: "nl_BE" };
+  }
+
+  if (event === "afronden") {
+    if (kind === "terugbrengen") return { name: "bevestiging_terugbrengen", language: "nl" };
+    if (kind === "ophalen") return { name: "bevestiging_na_ophalen", language: "nl" };
+    if (kind === "reparatie_aan_huis" || kind === "proefrit") {
+      // AANNAME: proefrit gebruikt dezelfde template als reparatie aan huis.
+      return { name: "bezorgtijd_proefrit_aan_huis", language: "nl" };
+    }
+    return { name: "review_vragen_na_bezorging", language: "nl_BE" };
+  }
+  return null;
+}
+
+export function resolveConfiguredTemplateForOrder(
+  event: WhatsAppEvent,
+  order: WhatsAppOrderInput
+): TemplateConfig | null {
+  return resolveFixedBusinessTemplate(event, order) ?? resolveTemplateForOrder(event, order);
 }
 
 function parseTemplateMap(): TemplateMap {
@@ -271,6 +317,18 @@ export async function sendWhatsAppByEvent(
   order: WhatsAppOrderInput
 ): Promise<SendWhatsAppResult> {
   const to = String(order.telefoon_e164 ?? order.telefoon_nummer ?? "");
+
+  // 0) Vaste businessregels (harde mapping)
+  const fixed = resolveFixedBusinessTemplate(event, order);
+  if (fixed?.name) {
+    return sendWhatsAppTemplate({
+      to,
+      templateName: fixed.name,
+      languageCode: fixed.language || "nl",
+      bodyVariables: [],
+      headerVariables: [],
+    });
+  }
 
   // 1) Voorkeur: expliciete mapping uit env
   const mapped = resolveTemplateForOrder(event, order);

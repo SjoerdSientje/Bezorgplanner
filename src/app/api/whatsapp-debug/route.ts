@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import {
   getOrderKind,
-  resolveTemplateForOrder,
+  resolveConfiguredTemplateForOrder,
   type WhatsAppOrderInput,
   type WhatsAppEvent,
 } from "@/lib/whatsapp";
@@ -15,7 +15,7 @@ export async function GET() {
     const { data, error } = await supabase
       .from("orders")
       .select(
-        "id, order_nummer, naam, type, status, opmerkingen_klant, bezorgtijd_voorkeur, aankomsttijd_slot, telefoon_e164, telefoon_nummer, created_at"
+        "id, order_nummer, naam, type, betaald, mp_tags, status, opmerkingen_klant, bezorgtijd_voorkeur, aankomsttijd_slot, telefoon_e164, telefoon_nummer, created_at"
       )
       .eq("status", "ritjes_vandaag")
       .order("created_at", { ascending: false })
@@ -34,13 +34,15 @@ export async function GET() {
         telefoon_e164: o.telefoon_e164,
         telefoon_nummer: o.telefoon_nummer,
         type: o.type,
+        betaald: o.betaald,
+        mp_tags: o.mp_tags,
         opmerkingen_klant: o.opmerkingen_klant,
         bezorgtijd_voorkeur: o.bezorgtijd_voorkeur,
       };
       const kind = getOrderKind(order);
       const templates = Object.fromEntries(
         events.map((evt) => {
-          const t = resolveTemplateForOrder(evt, order);
+          const t = resolveConfiguredTemplateForOrder(evt, order);
           return [
             evt,
             t

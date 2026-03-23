@@ -68,7 +68,7 @@ export async function POST(request: NextRequest) {
 
     const { data: ordersMeta } = await supabase
       .from("orders")
-      .select("id, type, opmerkingen_klant, bezorgtijd_voorkeur")
+      .select("id, type, betaald, mp_tags, opmerkingen_klant, bezorgtijd_voorkeur")
       .in("id", selected.map((o) => o.order_id));
     const metaById = new Map((ordersMeta ?? []).map((o: any) => [String(o.id), o]));
 
@@ -81,6 +81,8 @@ export async function POST(request: NextRequest) {
         telefoon_e164: o.telefoon_e164,
         telefoon_nummer: o.telefoon_nummer,
         type: String((meta as any).type ?? ""),
+        betaald: (meta as any).betaald ?? null,
+        mp_tags: String((meta as any).mp_tags ?? ""),
         opmerkingen_klant: String((meta as any).opmerkingen_klant ?? ""),
         bezorgtijd_voorkeur: String((meta as any).bezorgtijd_voorkeur ?? ""),
       });
