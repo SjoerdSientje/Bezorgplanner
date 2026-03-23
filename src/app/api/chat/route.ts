@@ -31,6 +31,24 @@ type RitjesOrder = {
   mp_tags: string | null;
 };
 
+function todayDDMMYYYY(): string {
+  const d = new Date();
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${dd}-${mm}-${d.getFullYear()}`;
+}
+
+/**
+ * Alleen orders met datum_opmerking = "vandaag" (of de datum van vandaag)
+ * én meenemen_in_planning = true mogen gezien/bewerkt worden door Sientje.
+ */
+function isEligibleOrder(o: RitjesOrder): boolean {
+  if (!o.meenemen_in_planning) return false;
+  const datum = String(o.datum_opmerking ?? "").toLowerCase().trim();
+  if (!datum) return false;
+  return datum === "vandaag" || datum === todayDDMMYYYY();
+}
+
 function formatOrderForContext(o: RitjesOrder): string {
   const slot = o.aankomsttijd_slot?.trim() ?? "";
   const slotStr = slot ? slot : "(nog geen slot)";
@@ -38,23 +56,26 @@ function formatOrderForContext(o: RitjesOrder): string {
 }
 
 function buildContextBlock(ritjesOrders: RitjesOrder[]): string {
-  if (ritjesOrders.length === 0) {
-    return "\n\nEr staan momenteel geen orders in Ritjes voor vandaag.";
+  // Sientje ziet alleen orders die voor vandaag én op "ja" staan
+  const eligible = ritjesOrders.filter(isEligibleOrder);
+
+  if (eligible.length === 0) {
+    return "\n\nEr zijn momenteel geen orders die aan de criteria voldoen (datum = vandaag én meenemen in planning = ja).";
   }
-  const withSlot = ritjesOrders.filter((o) => (o.aankomsttijd_slot ?? "").trim().length > 0);
-  const withoutSlot = ritjesOrders.filter((o) => !(o.aankomsttijd_slot ?? "").trim().length);
+  const withSlot = eligible.filter((o) => (o.aankomsttijd_slot ?? "").trim().length > 0);
+  const withoutSlot = eligible.filter((o) => !(o.aankomsttijd_slot ?? "").trim().length);
   let block =
-    "\n\nHuidige staat van Ritjes voor vandaag:\n" +
-    ritjesOrders.map(formatOrderForContext).join("\n");
+    "\n\nOrders die jij mag bekijken en bewerken (datum = vandaag, meenemen in planning = ja):\n" +
+    eligible.map(formatOrderForContext).join("\n");
   if (withSlot.length > 0) {
     block +=
-      "\n\n**Belangrijk:** De rijen die al een tijdslot (Aankomsttijd) hebben, vormen samen de huidige geplande route. Orders zonder tijdslot staan wel in Ritjes voor vandaag maar zitten nog niet in de route.";
+      "\n\n**Belangrijk:** De rijen die al een tijdslot (Aankomsttijd) hebben, vormen samen de huidige geplande route. Orders zonder tijdslot staan wel in de lijst maar zitten nog niet in de route.";
   }
   if (withoutSlot.length > 0 && withSlot.length > 0) {
     block += ` Momenteel hebben ${withSlot.length} order(s) een slot (de route) en ${withoutSlot.length} order(s) nog geen slot.`;
   }
   block +=
-    '\n\nGebruik de functie set_aankomsttijd_slots wanneer de gebruiker vraagt om tijdsloten door te voeren (bijv. "zet deze tijdsloten in aankomsttijd"). Match op order_nummer.';
+    '\n\nGebruik de functie set_aankomsttijd_slots wanneer de gebruiker vraagt om tijdsloten door te voeren (bijv. "zet deze tijdsloten in aankomsttijd"). Match op order_nummer. Je mag ALLEEN tijdsloten zetten voor orders die aan de criteria voldoen.';
   return block;
 }
 
@@ -85,7 +106,15 @@ export async function POST(request: NextRequest) {
     const ritjesOrders = (body.ritjesContext?.orders ?? []) as RitjesOrder[];
     const contextBlock = buildContextBlock(ritjesOrders);
 
-    const systemPrompt = `Je bent Sientje, de vriendelijke planning-assistent van Koopjefatbike. Je helpt met sparren over bezorgplanning, routes en logistiek. Je kunt de huidige Ritjes voor vandaag zien en tijdsloten (Aankomsttijd HH:MM - HH:MM) bij de juiste orders zetten. Wees bondig, helder en behulpzaam. Antwoord in het Nederlands.${contextBlock}`;
+    const systemPrompt = `Je bent Sientje, de vriendelijke planning-assistent van Koopjefatbike. Je helpt met sparren over bezorgplanning, routes en logistiek.
+
+BELANGRIJK: Je mag ALLEEN tijdsloten bekijken, toevoegen of bewerken voor orders die aan BEIDE voorwaarden voldoen:
+1. Datum opmerking = "vandaag" (of de datum van vandaag)
+2. Meenemen in planning = ja
+
+Orders die hier niet aan voldoen mag je NIET bespreken of aanpassen. Als iemand vraagt om een order buiten deze criteria aan te passen, leg dan uit dat je dat niet kunt doen.
+
+Wees bondig, helder en behulpzaam. Antwoord in het Nederlands.${contextBlock}`;
 
     const openai = new OpenAI({ apiKey });
 
@@ -193,17 +222,23 @@ export async function POST(request: NextRequest) {
 
         const updates = args.updates ?? [];
         const results: string[] = [];
+        const today = todayDDMMYYYY();
 
         for (const u of updates) {
           const onr = String(u.order_nummer ?? "").trim();
           const slot = String(u.aankomsttijd_slot ?? "").trim();
           if (!onr || !slot) continue;
 
+          // Zoek de order op — met dubbele beveiliging: status + meenemen_in_planning + datum
           let orderId: string | null = null;
-          const { data: byExact } = await supabase
+          const baseQuery = supabase
             .from("orders")
             .select("id")
             .eq("status", "ritjes_vandaag")
+            .eq("meenemen_in_planning", true)
+            .or(`datum_opmerking.eq.vandaag,datum_opmerking.eq.${today}`);
+
+          const { data: byExact } = await baseQuery
             .eq("order_nummer", onr)
             .limit(1)
             .maybeSingle();
@@ -214,13 +249,15 @@ export async function POST(request: NextRequest) {
               .from("orders")
               .select("id")
               .eq("status", "ritjes_vandaag")
+              .eq("meenemen_in_planning", true)
+              .or(`datum_opmerking.eq.vandaag,datum_opmerking.eq.${today}`)
               .eq("order_nummer", alt)
               .limit(1)
               .maybeSingle();
             if (byAlt?.id) orderId = byAlt.id;
           }
           if (!orderId) {
-            results.push(`Order ${onr}: niet gevonden in Ritjes voor vandaag`);
+            results.push(`Order ${onr}: niet gevonden (of voldoet niet aan de criteria: datum vandaag + meenemen in planning = ja)`);
             continue;
           }
 
