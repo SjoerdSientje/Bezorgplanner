@@ -8,6 +8,7 @@ import Header from "@/components/Header";
 type Soort = "bezorging" | "afhaal";
 type ProductType = "fiets" | "extra";
 type Levering = "Volledig rijklaar" | "In doos";
+type JaNee = "ja" | "nee" | null;
 
 interface ProductRegel {
   id: number;
@@ -15,6 +16,10 @@ interface ProductRegel {
   naam: string;
   levering: Levering;
   montageOpmerking: string;
+  achterzitje: JaNee;
+  achterzitjeGemonteerd: JaNee;
+  voorrekje: JaNee;
+  voorrekjeGemonteerd: JaNee;
 }
 
 interface FormData {
@@ -51,7 +56,42 @@ let nextId = 1;
 function mkId() { return nextId++; }
 
 function defaultProduct(): ProductRegel {
-  return { id: mkId(), type: "fiets", naam: "", levering: "Volledig rijklaar", montageOpmerking: "" };
+  return {
+    id: mkId(), type: "fiets", naam: "", levering: "Volledig rijklaar", montageOpmerking: "",
+    achterzitje: null, achterzitjeGemonteerd: null,
+    voorrekje: null, voorrekjeGemonteerd: null,
+  };
+}
+
+function JaNeeKeuze({
+  label, value, onChange,
+}: {
+  label: string;
+  value: JaNee;
+  onChange: (v: JaNee) => void;
+}) {
+  return (
+    <div>
+      <p className="mb-1.5 text-sm font-medium text-koopje-black">{label}</p>
+      <div className="flex gap-2">
+        {(["ja", "nee"] as JaNee[]).map((opt) => (
+          <button
+            key={opt} type="button"
+            onClick={() => onChange(value === opt ? null : opt)}
+            className={`flex-1 rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
+              value === opt
+                ? opt === "ja"
+                  ? "border-green-500 bg-green-50 text-green-700"
+                  : "border-stone-400 bg-stone-100 text-stone-600"
+                : "border-stone-200 bg-white text-stone-500 hover:border-stone-300"
+            }`}
+          >
+            {opt === "ja" ? "✓ Ja" : "✗ Nee"}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function Field({
@@ -324,6 +364,63 @@ export default function NieuweMarktplaatsOrderPage() {
                             value={product.levering}
                             onChange={(v) => updateProduct(product.id, { levering: v })}
                           />
+                        </div>
+                      )}
+
+                      {/* Achterzitje + Voorrekje — fiets + bezorging */}
+                      {product.type === "fiets" && soort === "bezorging" && (
+                        <div className="mb-3 space-y-3 rounded-lg border border-stone-200 bg-white/70 p-3">
+                          {/* Achterzitje */}
+                          <JaNeeKeuze
+                            label="Achterzitje?"
+                            value={product.achterzitje}
+                            onChange={(v) => updateProduct(product.id, {
+                              achterzitje: v,
+                              achterzitjeGemonteerd: v === "nee" ? null : product.achterzitjeGemonteerd,
+                            })}
+                          />
+                          {product.achterzitje === "ja" && (
+                            <div className="ml-4 border-l-2 border-green-200 pl-3">
+                              <JaNeeKeuze
+                                label="Achterzitje gemonteerd?"
+                                value={product.achterzitjeGemonteerd}
+                                onChange={(v) => updateProduct(product.id, { achterzitjeGemonteerd: v })}
+                              />
+                              {product.achterzitjeGemonteerd && (
+                                <p className="mt-1.5 text-xs text-koopje-black/50">
+                                  {product.achterzitjeGemonteerd === "ja"
+                                    ? "→ Wordt als montage-opmerking onder de fiets vermeld"
+                                    : "→ Wordt als los product meegenomen in paklijst & afronden"}
+                                </p>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Voorrekje */}
+                          <JaNeeKeuze
+                            label="Voorrekje?"
+                            value={product.voorrekje}
+                            onChange={(v) => updateProduct(product.id, {
+                              voorrekje: v,
+                              voorrekjeGemonteerd: v === "nee" ? null : product.voorrekjeGemonteerd,
+                            })}
+                          />
+                          {product.voorrekje === "ja" && (
+                            <div className="ml-4 border-l-2 border-green-200 pl-3">
+                              <JaNeeKeuze
+                                label="Voorrekje gemonteerd?"
+                                value={product.voorrekjeGemonteerd}
+                                onChange={(v) => updateProduct(product.id, { voorrekjeGemonteerd: v })}
+                              />
+                              {product.voorrekjeGemonteerd && (
+                                <p className="mt-1.5 text-xs text-koopje-black/50">
+                                  {product.voorrekjeGemonteerd === "ja"
+                                    ? "→ Wordt als montage-opmerking onder de fiets vermeld"
+                                    : "→ Wordt als los product meegenomen in paklijst & afronden"}
+                                </p>
+                              )}
+                            </div>
+                          )}
                         </div>
                       )}
 

@@ -20,30 +20,67 @@ interface ProductRegel {
   naam: string;
   levering: "Volledig rijklaar" | "In doos";
   montageOpmerking: string;
+  achterzitje?: "ja" | "nee" | null;
+  achterzitjeGemonteerd?: "ja" | "nee" | null;
+  voorrekje?: "ja" | "nee" | null;
+  voorrekjeGemonteerd?: "ja" | "nee" | null;
 }
 
 /**
  * Bouw line_items_json vanuit de MP producten-lijst.
  * Fietsen krijgen een hoge dummy-prijs (999) zodat isFiets=true en
  * de bestaande getDefaultItemsVoorFiets() correct werkt.
+ *
+ * Achterzitje/Voorrekje logica:
+ * - gemonteerd=ja → extra property op de fiets (verschijnt alleen in producten-dropdown)
+ * - gemonteerd=nee → los extra product (paklijst + afronden checklist)
  */
 function buildMpLineItemsJson(productenLijst: ProductRegel[]): string | null {
   if (!productenLijst?.length) return null;
 
-  const lineItems: ShopifyLineItem[] = productenLijst.map((p) => {
+  const lineItems: ShopifyLineItem[] = [];
+
+  for (const p of productenLijst) {
     if (p.type === "fiets") {
+      const montageProps: { name: string; value: string }[] = [];
+      const losseExtras: string[] = [];
+
+      // Achterzitje
+      if (p.achterzitje === "ja") {
+        if (p.achterzitjeGemonteerd === "ja") {
+          montageProps.push({ name: "Montage", value: "achterzitje gemonteerd" });
+        } else if (p.achterzitjeGemonteerd === "nee") {
+          losseExtras.push("achterzitje");
+        }
+      }
+
+      // Voorrekje
+      if (p.voorrekje === "ja") {
+        if (p.voorrekjeGemonteerd === "ja") {
+          montageProps.push({ name: "Montage", value: "voorrekje gemonteerd" });
+        } else if (p.voorrekjeGemonteerd === "nee") {
+          losseExtras.push("voorrekje");
+        }
+      }
+
       const props = [
         { name: "Levering", value: p.levering },
+        ...montageProps,
         ...(p.montageOpmerking?.trim()
           ? [{ name: "Montage opmerking", value: p.montageOpmerking.trim() }]
           : []),
       ];
-      return { name: p.naam, price: 999, properties: props };
-    }
-    return { name: p.naam, price: 0, properties: [] };
-  });
+      lineItems.push({ name: p.naam, price: 999, properties: props });
 
-  // Hergebruik buildLineItemsJson via een nep-order object
+      // Losse extra's als aparte line items na de fiets
+      for (const extra of losseExtras) {
+        lineItems.push({ name: extra, price: 0, properties: [] });
+      }
+    } else {
+      lineItems.push({ name: p.naam, price: 0, properties: [] });
+    }
+  }
+
   return buildLineItemsJson({ line_items: lineItems });
 }
 
