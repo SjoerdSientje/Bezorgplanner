@@ -277,7 +277,7 @@ export default function PaklijstPage() {
                 {data.orders.length === 0 ? (
                   <p className="text-sm text-stone-400">Geen orders gevonden.</p>
                 ) : (
-                  <div className="space-y-4">
+                  <div className="space-y-6">
                     {data.orders.map((order, i) => (
                       <OrderBlok key={order.id} order={order} index={i} />
                     ))}
