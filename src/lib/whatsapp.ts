@@ -37,6 +37,21 @@ export type SendWhatsAppResult = {
   messageId?: string;
 };
 
+type WaTemplateComponent = {
+  type?: string;
+  text?: string;
+  format?: string;
+};
+
+type WaTemplate = {
+  id?: string;
+  name?: string;
+  language?: string;
+  status?: string;
+  category?: string;
+  components?: WaTemplateComponent[];
+};
+
 function env(name: string): string {
   return String(process.env[name] ?? "").trim();
 }
@@ -70,6 +85,30 @@ function parseTemplateMap(): TemplateMap {
   }
 }
 
+function slug(s: string): string {
+  return String(s ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function eventKeywords(event: WhatsAppEvent): string[] {
+  if (event === "planning_goedgekeurd") return ["planning", "goedgekeurd", "tijdslot"];
+  if (event === "stuur_appjes") return ["stuur", "appjes", "tijdslot", "update"];
+  return ["afronden", "afgerond", "geleverd", "bezorgd"];
+}
+
+function kindKeywords(kind: OrderKind): string[] {
+  if (kind === "ophalen") return ["ophalen", "reparatie_ophalen"];
+  if (kind === "terugbrengen") return ["terugbrengen", "reparatie_terugbrengen"];
+  if (kind === "reparatie_aan_huis") return ["reparatie_aan_huis", "aan_huis", "reparatie_deur"];
+  if (kind === "proefrit") return ["proefrit"];
+  if (kind === "verkoop") return ["verkoop", "normaal", "default"];
+  return ["default"];
+}
+
 function fillVars(template: string, order: WhatsAppOrderInput): string {
   return String(template ?? "")
     .replaceAll("{naam}", String(order.naam ?? ""))
@@ -86,6 +125,75 @@ export function resolveTemplateForOrder(
   if (!eventMap) return null;
   const kind = getOrderKind(order);
   return eventMap[kind] ?? eventMap.default ?? null;
+}
+
+function countTemplateParamsInText(text: string | undefined): number {
+  const matches = String(text ?? "").match(/\{\{\d+\}\}/g);
+  return matches ? matches.length : 0;
+}
+
+function extractParamCount(tpl: WaTemplate, componentType: "BODY" | "HEADER"): number {
+  const comp = (tpl.components ?? []).find(
+    (c) => String(c.type ?? "").toUpperCase() === componentType
+  );
+  return countTemplateParamsInText(comp?.text);
+}
+
+function buildAutoVariables(
+  event: WhatsAppEvent,
+  order: WhatsAppOrderInput,
+  count: number
+): string[] {
+  const common = [
+    String(order.naam ?? ""),
+    String(order.aankomsttijd_slot ?? ""),
+    String(order.order_nummer ?? ""),
+  ];
+  const eventSpecific =
+    event === "afronden"
+      ? [String(order.order_nummer ?? ""), String(order.naam ?? "")]
+      : [String(order.naam ?? ""), String(order.aankomsttijd_slot ?? ""), String(order.order_nummer ?? "")];
+  const source = [...eventSpecific, ...common];
+  return Array.from({ length: Math.max(0, count) }, (_, i) => source[i] ?? "");
+}
+
+let templatesCache: { expiresAt: number; templates: WaTemplate[] } | null = null;
+
+async function getCachedTemplates(): Promise<WaTemplate[]> {
+  const now = Date.now();
+  if (templatesCache && templatesCache.expiresAt > now) return templatesCache.templates;
+  const fetched = await fetchWhatsAppTemplates();
+  if (!fetched.ok) return [];
+  const templates = (fetched.templates as WaTemplate[]) ?? [];
+  templatesCache = { templates, expiresAt: now + 2 * 60 * 1000 }; // 2 min cache
+  return templates;
+}
+
+async function resolveAutoTemplate(
+  event: WhatsAppEvent,
+  order: WhatsAppOrderInput
+): Promise<WaTemplate | null> {
+  const kind = getOrderKind(order);
+  const tpls = await getCachedTemplates();
+  const active = tpls.filter(
+    (t) => String(t.status ?? "").toUpperCase() === "APPROVED" && t.name
+  );
+  if (active.length === 0) return null;
+
+  const eKeys = eventKeywords(event).map(slug);
+  const kKeys = kindKeywords(kind).map(slug);
+
+  let best: { tpl: WaTemplate; score: number } | null = null;
+  for (const tpl of active) {
+    const name = slug(String(tpl.name ?? ""));
+    let score = 0;
+    for (const k of eKeys) if (name.includes(k)) score += 3;
+    for (const k of kKeys) if (name.includes(k)) score += 4;
+    if (name.includes("default")) score += 1;
+    if (!best || score > best.score) best = { tpl, score };
+  }
+  if (!best || best.score <= 0) return null;
+  return best.tpl;
 }
 
 export async function sendWhatsAppTemplate(params: {
@@ -162,23 +270,41 @@ export async function sendWhatsAppByEvent(
   event: WhatsAppEvent,
   order: WhatsAppOrderInput
 ): Promise<SendWhatsAppResult> {
-  const template = resolveTemplateForOrder(event, order);
-  if (!template?.name) {
+  const to = String(order.telefoon_e164 ?? order.telefoon_nummer ?? "");
+
+  // 1) Voorkeur: expliciete mapping uit env
+  const mapped = resolveTemplateForOrder(event, order);
+  if (mapped?.name) {
+    const bodyVariables = (mapped.bodyVariables ?? []).map((v) => fillVars(v, order));
+    const headerVariables = (mapped.headerVariables ?? []).map((v) => fillVars(v, order));
+    return sendWhatsAppTemplate({
+      to,
+      templateName: mapped.name,
+      languageCode: mapped.language || "nl",
+      bodyVariables,
+      headerVariables,
+    });
+  }
+
+  // 2) Fallback: automatisch template kiezen op basis van event + ordertype
+  const autoTemplate = await resolveAutoTemplate(event, order);
+  if (!autoTemplate?.name) {
     return {
       ok: false,
       skipped: true,
-      error: `Geen template-config voor event '${event}' en type '${getOrderKind(order)}'.`,
+      error: `Geen template gevonden voor event '${event}' en type '${getOrderKind(order)}'.`,
     };
   }
 
-  const to = String(order.telefoon_e164 ?? order.telefoon_nummer ?? "");
-  const bodyVariables = (template.bodyVariables ?? []).map((v) => fillVars(v, order));
-  const headerVariables = (template.headerVariables ?? []).map((v) => fillVars(v, order));
+  const bodyCount = extractParamCount(autoTemplate, "BODY");
+  const headerCount = extractParamCount(autoTemplate, "HEADER");
+  const bodyVariables = buildAutoVariables(event, order, bodyCount);
+  const headerVariables = buildAutoVariables(event, order, headerCount);
 
   return sendWhatsAppTemplate({
     to,
-    templateName: template.name,
-    languageCode: template.language || "nl",
+    templateName: String(autoTemplate.name),
+    languageCode: String(autoTemplate.language ?? "nl"),
     bodyVariables,
     headerVariables,
   });
@@ -193,7 +319,7 @@ export async function fetchWhatsAppTemplates() {
 
   const url =
     `https://graph.facebook.com/v22.0/${wabaId}/message_templates` +
-    `?fields=name,language,status,category,id&limit=200`;
+    `?fields=name,language,status,category,id,components&limit=200`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
   });
