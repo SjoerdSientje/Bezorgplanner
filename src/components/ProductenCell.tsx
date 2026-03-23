@@ -72,6 +72,15 @@ export default function ProductenCell({ value, lineItemsJson, onSave, onSaveMult
   const [saving, setSaving] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
+  // Lokale display-state — wordt direct na opslaan bijgewerkt zodat de cel
+  // meteen de nieuwe producten en prijs toont, onafhankelijk van parent-state.
+  const [localValue, setLocalValue] = useState(value);
+  const [localLineItemsJson, setLocalLineItemsJson] = useState(lineItemsJson);
+
+  // Sync van props bij externe update (bijv. initieel laden of verversen)
+  useEffect(() => { setLocalValue(value); }, [value]);
+  useEffect(() => { setLocalLineItemsJson(lineItemsJson); }, [lineItemsJson]);
+
   // Sluit paneel als buiten geklikt
   useEffect(() => {
     function handler(e: MouseEvent) {
@@ -86,13 +95,13 @@ export default function ProductenCell({ value, lineItemsJson, onSave, onSaveMult
 
   // Lees producten uit JSON/tekst bij openen
   function openPanel() {
-    setRows(parseToEditRows(lineItemsJson, value));
+    setRows(parseToEditRows(localLineItemsJson, localValue));
     setEditing(false);
     setPanelOpen(true);
   }
 
   function startEditing() {
-    setRows(parseToEditRows(lineItemsJson, value));
+    setRows(parseToEditRows(localLineItemsJson, localValue));
     setNewName("");
     setNewPrice("0");
     setEditing(true);
@@ -100,7 +109,7 @@ export default function ProductenCell({ value, lineItemsJson, onSave, onSaveMult
 
   function cancelEditing() {
     setEditing(false);
-    setRows(parseToEditRows(lineItemsJson, value));
+    setRows(parseToEditRows(localLineItemsJson, localValue));
   }
 
   function updateRow(id: string, patch: Partial<EditRow>) {
@@ -130,6 +139,10 @@ export default function ProductenCell({ value, lineItemsJson, onSave, onSaveMult
       const newLineItemsJson = buildLineItemsJsonFromRows(rows);
       const newProductenText = rows.map((r) => r.name).filter(Boolean).join("\n");
 
+      // Meteen de lokale display bijwerken — cel toont nieuwe producten direct.
+      setLocalValue(newProductenText);
+      setLocalLineItemsJson(newLineItemsJson);
+
       if (onSaveMulti) {
         await onSaveMulti({
           producten: newProductenText || null,
@@ -146,13 +159,13 @@ export default function ProductenCell({ value, lineItemsJson, onSave, onSaveMult
     }
   }, [rows, totalPrice, onSaveMulti, onSave]);
 
-  // Platte weergavetekst
+  // Platte weergavetekst — gebruikt lokale state zodat wijzigingen direct zichtbaar zijn
   let displayItems: LineItem[] = [];
-  if (lineItemsJson) {
-    try { displayItems = JSON.parse(lineItemsJson) as LineItem[]; } catch { /* ignore */ }
+  if (localLineItemsJson) {
+    try { displayItems = JSON.parse(localLineItemsJson) as LineItem[]; } catch { /* ignore */ }
   }
   const hasStructured = displayItems.length > 0;
-  const displayText = value || "—";
+  const displayText = localValue || "—";
 
   return (
     <div ref={ref} className="relative">
