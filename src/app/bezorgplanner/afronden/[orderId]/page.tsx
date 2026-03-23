@@ -81,7 +81,11 @@ export default function AfrondenVragenlijstPage({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [bezorgerNaam, setBezorgerNaam] = useState("");
+  const BEZORGER_OPTIES = ["Tristan", "Eef", "Silas"] as const;
+  const [bezorgerKeuze, setBezorgerKeuze] = useState<string>("");
+  const [bezorgerAnders, setBezorgerAnders] = useState("");
+  const bezorgerNaam =
+    bezorgerKeuze === "Anders" ? bezorgerAnders.trim() : bezorgerKeuze;
   const [betaalOptie, setBetaalOptie] = useState<PaymentOption | "">("");
   const [betaalAnders, setBetaalAnders] = useState("");
   const [betaalBedrag, setBetaalBedrag] = useState<string>("");
@@ -200,15 +204,37 @@ export default function AfrondenVragenlijstPage({
               )}
 
               <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
-                <label className="mb-2 block text-sm font-semibold text-koopje-black">
-                  Naam bezorger
-                </label>
-                <input
-                  value={bezorgerNaam}
-                  onChange={(e) => setBezorgerNaam(e.target.value)}
-                  className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm text-koopje-black outline-none focus:border-koopje-orange focus:ring-2 focus:ring-koopje-orange/20"
-                  placeholder="Bijv. Sjoerd"
-                />
+                <p className="mb-3 text-sm font-semibold text-koopje-black">Naam bezorger</p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {([...BEZORGER_OPTIES, "Anders"] as string[]).map((opt) => (
+                    <label
+                      key={opt}
+                      className={`flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-sm ${
+                        bezorgerKeuze === opt
+                          ? "border-koopje-orange bg-koopje-orange-light/60 text-koopje-black"
+                          : "border-stone-200 bg-white text-koopje-black/80 hover:bg-stone-50"
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="bezorger"
+                        className="accent-koopje-orange"
+                        checked={bezorgerKeuze === opt}
+                        onChange={() => setBezorgerKeuze(opt)}
+                      />
+                      {opt}
+                    </label>
+                  ))}
+                </div>
+                {bezorgerKeuze === "Anders" && (
+                  <input
+                    value={bezorgerAnders}
+                    onChange={(e) => setBezorgerAnders(e.target.value)}
+                    className="mt-3 w-full rounded-xl border border-stone-200 px-3 py-2 text-sm text-koopje-black outline-none focus:border-koopje-orange focus:ring-2 focus:ring-koopje-orange/20"
+                    placeholder="Naam bezorger"
+                    autoFocus
+                  />
+                )}
               </div>
 
               <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
