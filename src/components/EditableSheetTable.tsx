@@ -12,7 +12,7 @@ interface EditableSheetTableProps {
   dataRowCount?: number;
   /** Optionele actie per data-rij (bijv. prullenbak). */
   rowAction?: (rowIndex: number) => void;
-  cellRenderers?: Record<string, (rowIndex: number, value: string) => React.ReactNode>;
+  cellRenderers?: Record<string, (rowIndex: number, value: string, onSave: (v: string) => void) => React.ReactNode>;
 }
 
 function createEmptyGrid(headers: readonly string[]): string[][] {
@@ -119,10 +119,14 @@ export default function EditableSheetTable({
                 {row.map((cellValue, j) => {
                   const header = headers[j];
                   const customRenderer = cellRenderers?.[header];
+                  const onSave = (newValue: string) => {
+                    handleChange(i, j, newValue);
+                    onCellBlur?.(i, header, newValue);
+                  };
                   return (
                     <td key={j} className="min-w-[4rem] border border-stone-300 p-0 align-top">
                       {customRenderer ? (
-                        customRenderer(i, cellValue)
+                        customRenderer(i, cellValue, onSave)
                       ) : (
                         <input
                           type="text"

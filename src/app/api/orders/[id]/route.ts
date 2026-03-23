@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { createServerSupabaseClient } from "@/lib/supabase";
 
 /** Velden die via PATCH mogen worden geüpdatet (whitelist). */
 const ALLOWED_KEYS = new Set([
@@ -147,7 +148,7 @@ export async function PATCH(
       return NextResponse.json({ error: "Geen toegestane velden om te updaten." }, { status: 400 });
     }
 
-    const supabase = createClient(supabaseUrl, serviceKey);
+    const supabase = createServerSupabaseClient();
     const { error } = await supabase.from("orders").update(updates).eq("id", id);
 
     if (error) {
@@ -157,6 +158,17 @@ export async function PATCH(
         { status: 500 }
       );
     }
+
+    // Als aankomsttijd_slot is aangepast, sync ook planning_slots.aankomsttijd
+    // zodat de Planning-pagina direct het nieuwe tijdslot toont.
+    if ("aankomsttijd_slot" in updates) {
+      const nieuweAankomsttijd = (updates.aankomsttijd_slot as string) ?? null;
+      await supabase
+        .from("planning_slots")
+        .update({ aankomsttijd: nieuweAankomsttijd })
+        .eq("order_id", id);
+    }
+
     return NextResponse.json({ ok: true });
   } catch (e) {
     console.error("[api/orders PATCH]", e);

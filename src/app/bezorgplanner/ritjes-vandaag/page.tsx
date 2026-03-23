@@ -135,11 +135,11 @@ export default function RitjesVandaagPage() {
           <span className="block px-2 py-1.5 text-sm text-stone-300">—</span>
         );
       },
-      "Product(en)": (rowIndex: number, value: string) => {
+      "Product(en)": (rowIndex: number, value: string, onSave: (v: string) => void) => {
         const order = orders[rowIndex];
         const lineItemsJson =
           order != null ? (order.line_items_json as string | null | undefined) ?? null : null;
-        return <ProductenCell value={value} lineItemsJson={lineItemsJson} />;
+        return <ProductenCell value={value} lineItemsJson={lineItemsJson} onSave={onSave} />;
       },
     }),
     [orders, deleteOrder]
