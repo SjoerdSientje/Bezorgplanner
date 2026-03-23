@@ -28,6 +28,7 @@ export type WhatsAppOrderInput = {
   type?: string | null;
   betaald?: boolean | null;
   mp_tags?: string | null;
+  datum?: string | null;
   opmerkingen_klant?: string | null;
   bezorgtijd_voorkeur?: string | null;
 };
@@ -105,10 +106,8 @@ function resolveFixedBusinessTemplate(
   if (event === "afronden") {
     if (kind === "terugbrengen") return { name: "bevestiging_terugbrengen", language: "nl" };
     if (kind === "ophalen") return { name: "bevestiging_na_ophalen", language: "nl" };
-    if (kind === "reparatie_aan_huis" || kind === "proefrit") {
-      // AANNAME: proefrit gebruikt dezelfde template als reparatie aan huis.
-      return { name: "bezorgtijd_proefrit_aan_huis", language: "nl" };
-    }
+    if (kind === "reparatie_aan_huis") return { name: "bevestiging_reparatie_aan_huis", language: "nl" };
+    if (kind === "proefrit") return { name: "bevestiging_na_proefrit_aan_huis", language: "nl" };
     return { name: "review_vragen_na_bezorging", language: "nl_BE" };
   }
   return null;
@@ -162,6 +161,13 @@ function fillVars(template: string, order: WhatsAppOrderInput): string {
     .replaceAll("{tijdslot}", String(order.aankomsttijd_slot ?? ""));
 }
 
+function formatDDMM(input: string | null | undefined): string {
+  const raw = String(input ?? "").trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return `${raw.slice(8, 10)}-${raw.slice(5, 7)}`;
+  const d = new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Amsterdam" }));
+  return `${String(d.getDate()).padStart(2, "0")}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
 export function resolveTemplateForOrder(
   event: WhatsAppEvent,
   order: WhatsAppOrderInput
@@ -201,6 +207,15 @@ function buildAutoVariables(
       : [String(order.naam ?? ""), String(order.aankomsttijd_slot ?? ""), String(order.order_nummer ?? "")];
   const source = [...eventSpecific, ...common];
   return Array.from({ length: Math.max(0, count) }, (_, i) => source[i] ?? "");
+}
+
+function buildBusinessVariables(order: WhatsAppOrderInput, count: number): string[] {
+  const vars = [
+    String(order.naam ?? ""),
+    formatDDMM(order.datum),
+    String(order.aankomsttijd_slot ?? ""),
+  ];
+  return Array.from({ length: Math.max(0, count) }, (_, i) => vars[i] ?? "");
 }
 
 let templatesCache: { expiresAt: number; templates: WaTemplate[] } | null = null;
@@ -321,12 +336,16 @@ export async function sendWhatsAppByEvent(
   // 0) Vaste businessregels (harde mapping)
   const fixed = resolveFixedBusinessTemplate(event, order);
   if (fixed?.name) {
+    const templates = await getCachedTemplates();
+    const tpl = templates.find((t) => String(t.name) === fixed.name);
+    const bodyCount = tpl ? extractParamCount(tpl, "BODY") : 0;
+    const headerCount = tpl ? extractParamCount(tpl, "HEADER") : 0;
     return sendWhatsAppTemplate({
       to,
       templateName: fixed.name,
       languageCode: fixed.language || "nl",
-      bodyVariables: [],
-      headerVariables: [],
+      bodyVariables: buildBusinessVariables(order, bodyCount),
+      headerVariables: buildBusinessVariables(order, headerCount),
     });
   }
 
@@ -356,8 +375,8 @@ export async function sendWhatsAppByEvent(
 
   const bodyCount = extractParamCount(autoTemplate, "BODY");
   const headerCount = extractParamCount(autoTemplate, "HEADER");
-  const bodyVariables = buildAutoVariables(event, order, bodyCount);
-  const headerVariables = buildAutoVariables(event, order, headerCount);
+  const bodyVariables = buildBusinessVariables(order, bodyCount);
+  const headerVariables = buildBusinessVariables(order, headerCount);
 
   return sendWhatsAppTemplate({
     to,
