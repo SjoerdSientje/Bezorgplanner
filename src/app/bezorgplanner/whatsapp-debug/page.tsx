@@ -12,6 +12,11 @@ type DebugOrder = {
   inferred_kind: string;
   aankomsttijd_slot: string | null;
   telefoon: string | null;
+  meenemen_in_planning: boolean | null;
+  nieuw_appje_sturen: boolean | null;
+  datum_opmerking: string | null;
+  datum: string | null;
+  planning_goedgekeurd_recipient: boolean;
   templates: Record<
     "planning_goedgekeurd" | "stuur_appjes" | "afronden",
     { name: string | null; language: string | null }
@@ -94,6 +99,11 @@ export default function WhatsAppDebugPage() {
                   <th className="border border-stone-200 px-3 py-2">Kind</th>
                   <th className="border border-stone-200 px-3 py-2">Tijdslot</th>
                   <th className="border border-stone-200 px-3 py-2">Telefoon</th>
+                  <th className="border border-stone-200 px-3 py-2">In planning?</th>
+                  <th className="border border-stone-200 px-3 py-2">Nieuw appje?</th>
+                  <th className="border border-stone-200 px-3 py-2">Datum opmerking</th>
+                  <th className="border border-stone-200 px-3 py-2">Datum</th>
+                  <th className="border border-stone-200 px-3 py-2">Wordt gestuurd bij goedkeuren</th>
                   <th className="border border-stone-200 px-3 py-2">Planning goedgekeurd</th>
                   <th className="border border-stone-200 px-3 py-2">Stuur appjes</th>
                   <th className="border border-stone-200 px-3 py-2">Afronden</th>
@@ -108,6 +118,17 @@ export default function WhatsAppDebugPage() {
                     <td className="border border-stone-200 px-3 py-2">{o.inferred_kind}</td>
                     <td className="border border-stone-200 px-3 py-2">{o.aankomsttijd_slot ?? "-"}</td>
                     <td className="border border-stone-200 px-3 py-2">{o.telefoon ?? "-"}</td>
+                    <td className="border border-stone-200 px-3 py-2">{o.meenemen_in_planning === true ? "ja" : "nee"}</td>
+                    <td className="border border-stone-200 px-3 py-2">{o.nieuw_appje_sturen === true ? "ja" : "nee"}</td>
+                    <td className="border border-stone-200 px-3 py-2">{o.datum_opmerking ?? "-"}</td>
+                    <td className="border border-stone-200 px-3 py-2">{o.datum ?? "-"}</td>
+                    <td className="border border-stone-200 px-3 py-2">
+                      {o.planning_goedgekeurd_recipient ? (
+                        <span className="text-green-700">ja</span>
+                      ) : (
+                        <span className="text-red-600">nee</span>
+                      )}
+                    </td>
                     <td className="border border-stone-200 px-3 py-2">
                       {o.templates.planning_goedgekeurd.name ? (
                         <span>
@@ -139,7 +160,7 @@ export default function WhatsAppDebugPage() {
                 ))}
                 {!loading && orders.length === 0 && (
                   <tr>
-                    <td colSpan={9} className="border border-stone-200 px-3 py-8 text-center text-stone-500">
+                    <td colSpan={14} className="border border-stone-200 px-3 py-8 text-center text-stone-500">
                       Geen orders gevonden.
                     </td>
                   </tr>

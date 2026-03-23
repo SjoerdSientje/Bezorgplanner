@@ -3,6 +3,26 @@ import { createServerSupabaseClient } from "@/lib/supabase";
 import { getPlanningDateForGoedkeuren } from "@/lib/planning-date";
 import { sendWhatsAppByEvent } from "@/lib/whatsapp";
 
+function shouldSendPlanningGoedkeurenWhatsApp(
+  order: {
+    meenemen_in_planning?: boolean | null;
+    nieuw_appje_sturen?: boolean | null;
+    datum_opmerking?: string | null;
+    datum?: string | null;
+  },
+  planningDate: string
+): boolean {
+  if (order.meenemen_in_planning !== true) return false;
+  if (order.nieuw_appje_sturen !== true) return false;
+
+  const datumOpmerking = String(order.datum_opmerking ?? "").trim().toLowerCase();
+  const hasVandaagInOpmerking = datumOpmerking.includes("vandaag");
+  const datumFromOrder = String(order.datum ?? "").trim();
+  const datumIsPlanningDate = datumFromOrder === planningDate;
+
+  return hasVandaagInOpmerking || datumIsPlanningDate;
+}
+
 /**
  * POST /api/planning-goedkeuren
  * Body: { mode: "replace" | "morgen" }
@@ -24,7 +44,7 @@ export async function POST(request: NextRequest) {
     // Orders ophalen die in aanmerking komen
     const { data: orders, error: queryError } = await supabase
       .from("orders")
-      .select("id, order_nummer, aankomsttijd_slot, naam, telefoon_e164, telefoon_nummer, type, betaald, mp_tags, datum, opmerkingen_klant, bezorgtijd_voorkeur")
+      .select("id, order_nummer, aankomsttijd_slot, naam, telefoon_e164, telefoon_nummer, type, betaald, mp_tags, datum, datum_opmerking, meenemen_in_planning, nieuw_appje_sturen, opmerkingen_klant, bezorgtijd_voorkeur")
       .eq("status", "ritjes_vandaag")
       .eq("meenemen_in_planning", true)
       .not("aankomsttijd_slot", "is", null)
@@ -84,10 +104,22 @@ export async function POST(request: NextRequest) {
     // ze moeten pas verdwijnen zodra ze via 'afronden' naar 'bezorgd'/'mp_orders' gaan.
 
     // Na goedkeuren: WhatsApp tijdslot-bericht per ordertype
+    const whatsappCandidates = sorted.filter((o) =>
+      shouldSendPlanningGoedkeurenWhatsApp(
+        {
+          meenemen_in_planning: o.meenemen_in_planning as boolean | null | undefined,
+          nieuw_appje_sturen: o.nieuw_appje_sturen as boolean | null | undefined,
+          datum_opmerking: o.datum_opmerking as string | null | undefined,
+          datum: o.datum as string | null | undefined,
+        },
+        planningDate
+      )
+    );
+
     const whatsappDetails: string[] = [];
     let whatsappSent = 0;
     let whatsappFailed = 0;
-    for (const o of sorted as any[]) {
+    for (const o of whatsappCandidates as any[]) {
       const sendRes = await sendWhatsAppByEvent("planning_goedgekeurd", {
         order_nummer: o.order_nummer,
         naam: o.naam,
@@ -120,6 +152,7 @@ export async function POST(request: NextRequest) {
       planningDate,
       mode,
       whatsapp: {
+        candidates: whatsappCandidates.length,
         sent: whatsappSent,
         failed: whatsappFailed,
         details: whatsappDetails,

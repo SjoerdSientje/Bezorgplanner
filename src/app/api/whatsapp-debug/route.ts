@@ -6,8 +6,24 @@ import {
   type WhatsAppOrderInput,
   type WhatsAppEvent,
 } from "@/lib/whatsapp";
+import { getPlanningDateForGoedkeuren } from "@/lib/planning-date";
 
 export const dynamic = "force-dynamic";
+
+function isPlanningGoedkeurenRecipient(o: {
+  meenemen_in_planning?: boolean | null;
+  nieuw_appje_sturen?: boolean | null;
+  datum_opmerking?: string | null;
+  datum?: string | null;
+}): boolean {
+  const { date: planningDate } = getPlanningDateForGoedkeuren();
+  if (o.meenemen_in_planning !== true) return false;
+  if (o.nieuw_appje_sturen !== true) return false;
+  const datumOpmerking = String(o.datum_opmerking ?? "").trim().toLowerCase();
+  const hasVandaagInOpmerking = datumOpmerking.includes("vandaag");
+  const datumIsPlanningDate = String(o.datum ?? "").trim() === planningDate;
+  return hasVandaagInOpmerking || datumIsPlanningDate;
+}
 
 export async function GET() {
   try {
@@ -15,7 +31,7 @@ export async function GET() {
     const { data, error } = await supabase
       .from("orders")
       .select(
-        "id, order_nummer, naam, type, betaald, mp_tags, status, opmerkingen_klant, bezorgtijd_voorkeur, aankomsttijd_slot, telefoon_e164, telefoon_nummer, created_at"
+        "id, order_nummer, naam, type, betaald, mp_tags, status, opmerkingen_klant, bezorgtijd_voorkeur, aankomsttijd_slot, telefoon_e164, telefoon_nummer, meenemen_in_planning, nieuw_appje_sturen, datum_opmerking, datum, created_at"
       )
       .eq("status", "ritjes_vandaag")
       .order("created_at", { ascending: false })
@@ -60,6 +76,11 @@ export async function GET() {
         inferred_kind: kind,
         aankomsttijd_slot: o.aankomsttijd_slot,
         telefoon: o.telefoon_e164 || o.telefoon_nummer || null,
+        meenemen_in_planning: o.meenemen_in_planning,
+        nieuw_appje_sturen: o.nieuw_appje_sturen,
+        datum_opmerking: o.datum_opmerking,
+        datum: o.datum,
+        planning_goedgekeurd_recipient: isPlanningGoedkeurenRecipient(o),
         templates,
       };
     });
