@@ -30,10 +30,32 @@ export async function POST(request: NextRequest) {
       naam: string;
       order_nummer: string;
     }>;
+    const templateName = String(body.template_name ?? "").trim();
+    const languageCode = String(body.language_code ?? "nl").trim() || "nl";
+    const bodyVariables = Array.isArray(body.body_variables)
+      ? body.body_variables.map((v: unknown) => String(v ?? ""))
+      : [];
+    const headerVariables = Array.isArray(body.header_variables)
+      ? body.header_variables.map((v: unknown) => String(v ?? ""))
+      : [];
+    const fillTemplateVar = (
+      input: string,
+      order: { naam: string; order_nummer: string; aankomsttijd_slot: string }
+    ) =>
+      input
+        .replaceAll("{naam}", order.naam ?? "")
+        .replaceAll("{order_nummer}", order.order_nummer ?? "")
+        .replaceAll("{tijdslot}", order.aankomsttijd_slot ?? "");
 
     if (selected.length === 0) {
       return NextResponse.json(
         { error: "Geen orders geselecteerd." },
+        { status: 400 }
+      );
+    }
+    if (!templateName) {
+      return NextResponse.json(
+        { error: "template_name is verplicht." },
         { status: 400 }
       );
     }
@@ -61,39 +83,95 @@ export async function POST(request: NextRequest) {
         .eq("order_id", o.order_id);
     }
 
-    // TODO: WhatsApp berichten sturen via Make.com webhook of WhatsApp Business API
-    // Template volgt. Payload per order: { naam, aankomsttijd_slot, telefoon_e164 }
-    const makeWebhookUrl = process.env.MAKE_WEBHOOK_URL_PLANNING_APPROVED;
-    let webhookResults: string[] = [];
-    if (makeWebhookUrl) {
-      try {
-        const webhookRes = await fetch(makeWebhookUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            type: "tijdslot_update",
-            orders: selected.map((o) => ({
-              order_nummer: o.order_nummer,
-              naam: o.naam,
-              nieuw_tijdslot: o.aankomsttijd_slot,
-              telefoon_e164: o.telefoon_e164,
-            })),
-          }),
-        });
-        webhookResults = webhookRes.ok
-          ? ["Make.com webhook verstuurd."]
-          : [`Make.com webhook fout: ${webhookRes.status}`];
-      } catch (err) {
-        webhookResults = [`Make.com webhook fout: ${err instanceof Error ? err.message : String(err)}`];
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+    const waToken = process.env.WHATSAPP_ACCESS_TOKEN;
+    if (!phoneNumberId || !waToken) {
+      return NextResponse.json(
+        {
+          error:
+            "WhatsApp niet geconfigureerd. Zet WHATSAPP_PHONE_NUMBER_ID en WHATSAPP_ACCESS_TOKEN in je environment.",
+        },
+        { status: 500 }
+      );
+    }
+
+    const toDigits = (raw: string) =>
+      String(raw ?? "")
+        .replace(/[^\d+]/g, "")
+        .replace(/^\+/, "");
+
+    const details: string[] = [];
+    let sentCount = 0;
+    let failCount = 0;
+
+    for (const o of selected) {
+      const to = toDigits(o.telefoon_e164 || o.telefoon_nummer || "");
+      if (!to) {
+        failCount += 1;
+        details.push(`Order ${o.order_nummer}: geen geldig telefoonnummer`);
+        continue;
       }
-    } else {
-      webhookResults = ["MAKE_WEBHOOK_URL_PLANNING_APPROVED niet ingesteld — appje template volgt."];
+
+      const templateComponents: Array<Record<string, unknown>> = [];
+      if (headerVariables.length > 0) {
+        templateComponents.push({
+          type: "header",
+          parameters: headerVariables.map((text) => ({
+            type: "text",
+            text: fillTemplateVar(text, o),
+          })),
+        });
+      }
+      if (bodyVariables.length > 0) {
+        templateComponents.push({
+          type: "body",
+          parameters: bodyVariables.map((text) => ({
+            type: "text",
+            text: fillTemplateVar(text, o),
+          })),
+        });
+      }
+
+      const payload: Record<string, unknown> = {
+        messaging_product: "whatsapp",
+        to,
+        type: "template",
+        template: {
+          name: templateName,
+          language: { code: languageCode },
+          ...(templateComponents.length > 0 ? { components: templateComponents } : {}),
+        },
+      };
+
+      const waRes = await fetch(
+        `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${waToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        }
+      );
+
+      const waJson = await waRes.json().catch(() => ({}));
+      if (!waRes.ok) {
+        failCount += 1;
+        const errMsg =
+          (waJson?.error?.message as string | undefined) ??
+          `WhatsApp fout (${waRes.status})`;
+        details.push(`Order ${o.order_nummer}: ${errMsg}`);
+      } else {
+        sentCount += 1;
+        details.push(`Order ${o.order_nummer}: verzonden`);
+      }
     }
 
     return NextResponse.json({
       ok: true,
-      message: `${selected.length} appje(s) verzonden.`,
-      details: webhookResults,
+      message: `${sentCount} verzonden, ${failCount} mislukt.`,
+      details,
       orders: selected.map((o) => ({
         order_nummer: o.order_nummer,
         naam: o.naam,
