@@ -1,7 +1,25 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import type { RitjesOrderFromApi } from "@/lib/ritjes-mapping";
+
+// Browser SpeechRecognition type (niet in standaard TS lib)
+type SpeechRecognitionInstance = {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  onresult: (e: { results: { [key: number]: { [key: number]: { transcript: string } } } }) => void;
+  onerror: () => void;
+  onend: () => void;
+  start: () => void;
+  stop: () => void;
+};
+declare global {
+  interface Window {
+    SpeechRecognition?: new () => SpeechRecognitionInstance;
+    webkitSpeechRecognition?: new () => SpeechRecognitionInstance;
+  }
+}
 
 type Message = { role: "user" | "assistant"; content: string };
 
@@ -45,11 +63,41 @@ export default function SparrenMetSientje({
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [slotsUpdatedFeedback, setSlotsUpdatedFeedback] = useState(false);
+  const [listening, setListening] = useState(false);
   const listEndRef = useRef<HTMLDivElement>(null);
+  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
 
   useEffect(() => {
     listEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  const toggleVoice = useCallback(() => {
+    const SpeechRecognition =
+      window.SpeechRecognition ?? window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+
+    if (listening) {
+      recognitionRef.current?.stop();
+      setListening(false);
+      return;
+    }
+
+    const rec = new SpeechRecognition();
+    rec.lang = "nl-NL";
+    rec.continuous = false;
+    rec.interimResults = false;
+
+    rec.onresult = (e) => {
+      const transcript = e.results[0][0].transcript;
+      setInput((prev) => (prev ? prev + " " + transcript : transcript));
+    };
+    rec.onerror = () => setListening(false);
+    rec.onend = () => setListening(false);
+
+    recognitionRef.current = rec;
+    rec.start();
+    setListening(true);
+  }, [listening]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -201,14 +249,45 @@ export default function SparrenMetSientje({
             )}
             <form onSubmit={handleSubmit} className="border-t border-koopje-black/10 p-3">
               <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  placeholder="Typ je bericht…"
-                  disabled={loading}
-                  className="min-w-0 flex-1 rounded-xl border border-koopje-black/20 bg-white px-4 py-2.5 text-sm text-koopje-black placeholder:text-koopje-black/40 focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange disabled:opacity-60"
-                />
+                <div className="relative min-w-0 flex-1">
+                  <input
+                    type="text"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    placeholder={listening ? "Luisteren…" : "Typ je bericht…"}
+                    disabled={loading}
+                    className={`w-full rounded-xl border bg-white py-2.5 pl-4 pr-10 text-sm text-koopje-black placeholder:text-koopje-black/40 focus:outline-none focus:ring-1 disabled:opacity-60 ${
+                      listening
+                        ? "border-red-400 focus:border-red-400 focus:ring-red-300"
+                        : "border-koopje-black/20 focus:border-koopje-orange focus:ring-koopje-orange"
+                    }`}
+                  />
+                  <button
+                    type="button"
+                    onClick={toggleVoice}
+                    disabled={loading}
+                    title={listening ? "Stop opname" : "Inspreken"}
+                    className={`absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1 transition disabled:opacity-40 ${
+                      listening
+                        ? "text-red-500 hover:bg-red-50"
+                        : "text-koopje-black/40 hover:bg-koopje-black/5 hover:text-koopje-black"
+                    }`}
+                  >
+                    {listening ? (
+                      // Pulserende opname-indicator
+                      <span className="relative flex h-5 w-5 items-center justify-center">
+                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-60" />
+                        <svg className="relative h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+                          <path d="M12 1a4 4 0 0 1 4 4v6a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm0 2a2 2 0 0 0-2 2v6a2 2 0 0 0 4 0V5a2 2 0 0 0-2-2zm6.364 5.636a.75.75 0 0 1 .736.912A7.002 7.002 0 0 1 12.75 15.93V18h2.25a.75.75 0 0 1 0 1.5h-6a.75.75 0 0 1 0-1.5H11.25v-2.07A7.002 7.002 0 0 1 4.9 9.548a.75.75 0 1 1 1.471-.297A5.502 5.502 0 0 0 17.5 11a5.502 5.502 0 0 0-.864-2.952.75.75 0 0 1 .728-.412z" />
+                        </svg>
+                      </span>
+                    ) : (
+                      <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 1a4 4 0 0 1 4 4v6a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm0 2a2 2 0 0 0-2 2v6a2 2 0 0 0 4 0V5a2 2 0 0 0-2-2zm6.364 5.636a.75.75 0 0 1 .736.912A7.002 7.002 0 0 1 12.75 15.93V18h2.25a.75.75 0 0 1 0 1.5h-6a.75.75 0 0 1 0-1.5H11.25v-2.07A7.002 7.002 0 0 1 4.9 9.548a.75.75 0 1 1 1.471-.297A5.502 5.502 0 0 0 17.5 11a5.502 5.502 0 0 0-.864-2.952.75.75 0 0 1 .728-.412z" />
+                      </svg>
+                    )}
+                  </button>
+                </div>
                 <button
                   type="submit"
                   disabled={loading || !input.trim()}
