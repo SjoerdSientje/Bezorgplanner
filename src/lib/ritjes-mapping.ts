@@ -57,11 +57,27 @@ export const RITJES_HEADER_TO_FIELD: Record<string, string> = {
 export type RitjesOrderFromApi = Record<string, unknown>;
 
 /**
- * Ritjes voor vandaag: nieuwste order bovenaan (created_at aflopend).
+ * Ritjes voor vandaag: nieuwste order bovenaan.
+ * Primair op order_nummer (numeriek, aflopend), fallback op created_at aflopend.
  * Gebruik na elke fetch (incl. Verversen) zodat de volgorde altijd klopt.
  */
 export function sortRitjesOrdersNewestFirst<T extends RitjesOrderFromApi>(orders: T[]): T[] {
   return [...orders].sort((a, b) => {
+    const parseOrderNum = (v: unknown): number | null => {
+      const s = String(v ?? "").trim();
+      if (!s) return null;
+      const m = s.match(/\d+/);
+      if (!m) return null;
+      const n = Number(m[0]);
+      return Number.isFinite(n) ? n : null;
+    };
+
+    const na = parseOrderNum(a.order_nummer);
+    const nb = parseOrderNum(b.order_nummer);
+    if (na != null && nb != null && na !== nb) return nb - na;
+    if (na != null && nb == null) return -1;
+    if (na == null && nb != null) return 1;
+
     const ta = a.created_at ? new Date(String(a.created_at)).getTime() : 0;
     const tb = b.created_at ? new Date(String(b.created_at)).getTime() : 0;
     return tb - ta;
