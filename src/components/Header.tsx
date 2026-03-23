@@ -1,5 +1,6 @@
 import Link from "next/link";
 import Image from "next/image";
+import LogoutButton from "@/components/LogoutButton";
 
 export default function Header() {
   return (
@@ -18,14 +19,7 @@ export default function Header() {
             Bezorgplanner
           </span>
         </Link>
-        <form action="/api/auth/logout" method="post">
-          <button
-            type="submit"
-            className="rounded-lg border border-koopje-black/20 px-3 py-1.5 text-xs font-medium text-koopje-black/70 hover:bg-koopje-black/5"
-          >
-            Uitloggen
-          </button>
-        </form>
+        <LogoutButton />
       </div>
     </header>
   );

@@ -1,8 +1,9 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { AUTH_COOKIE } from "@/lib/auth";
 
-export async function POST() {
-  const res = NextResponse.json({ ok: true });
+export async function POST(request: NextRequest) {
+  const redirectUrl = new URL("/login", request.url);
+  const res = NextResponse.redirect(redirectUrl, { status: 303 });
   res.cookies.set(AUTH_COOKIE, "", {
     httpOnly: true,
     sameSite: "lax",

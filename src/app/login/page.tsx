@@ -24,7 +24,8 @@ export default function LoginPage() {
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error ?? "Inloggen mislukt.");
-      window.location.href = "/";
+      const next = new URLSearchParams(window.location.search).get("next");
+      window.location.href = next && next.startsWith("/") ? next : "/";
     } catch (e) {
       setError(e instanceof Error ? e.message : "Inloggen mislukt.");
     } finally {
