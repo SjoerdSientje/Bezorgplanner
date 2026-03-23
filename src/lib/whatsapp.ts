@@ -1,6 +1,6 @@
-type WhatsAppEvent = "planning_goedgekeurd" | "stuur_appjes" | "afronden";
+export type WhatsAppEvent = "planning_goedgekeurd" | "stuur_appjes" | "afronden";
 
-type OrderKind =
+export type OrderKind =
   | "verkoop"
   | "ophalen"
   | "terugbrengen"
@@ -8,7 +8,7 @@ type OrderKind =
   | "proefrit"
   | "default";
 
-type TemplateConfig = {
+export type TemplateConfig = {
   name: string;
   language?: string;
   bodyVariables?: string[];
@@ -47,7 +47,7 @@ function normalizePhone(raw: string | null | undefined): string {
     .replace(/^\+/, "");
 }
 
-function getOrderKind(order: WhatsAppOrderInput): OrderKind {
+export function getOrderKind(order: WhatsAppOrderInput): OrderKind {
   const t = String(order.type ?? "").toLowerCase();
   if (t === "reparatie_ophalen") return "ophalen";
   if (t === "reparatie_terugbrengen") return "terugbrengen";
@@ -77,7 +77,10 @@ function fillVars(template: string, order: WhatsAppOrderInput): string {
     .replaceAll("{tijdslot}", String(order.aankomsttijd_slot ?? ""));
 }
 
-function resolveTemplate(event: WhatsAppEvent, order: WhatsAppOrderInput): TemplateConfig | null {
+export function resolveTemplateForOrder(
+  event: WhatsAppEvent,
+  order: WhatsAppOrderInput
+): TemplateConfig | null {
   const map = parseTemplateMap();
   const eventMap = map[event];
   if (!eventMap) return null;
@@ -159,7 +162,7 @@ export async function sendWhatsAppByEvent(
   event: WhatsAppEvent,
   order: WhatsAppOrderInput
 ): Promise<SendWhatsAppResult> {
-  const template = resolveTemplate(event, order);
+  const template = resolveTemplateForOrder(event, order);
   if (!template?.name) {
     return {
       ok: false,

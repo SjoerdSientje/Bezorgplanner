@@ -43,6 +43,15 @@ export default function BezorgplannerPage() {
                 <span className="mt-1 block text-sm text-koopje-black/60">Route en tijdsloten voor de dag</span>
               </Link>
             </li>
+            <li>
+              <Link
+                href="/bezorgplanner/whatsapp-debug"
+                className="block rounded-xl border border-koopje-black/10 bg-white p-5 shadow-sm transition hover:border-koopje-orange hover:shadow"
+              >
+                <span className="font-medium text-koopje-black">WhatsApp template debug</span>
+                <span className="mt-1 block text-sm text-koopje-black/60">Controleer template-keuze per flow en ordertype</span>
+              </Link>
+            </li>
           </ul>
         </div>
       </main>
