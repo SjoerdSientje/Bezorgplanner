@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { getPlanningDateForGoedkeuren } from "@/lib/planning-date";
+import { sendWhatsAppByEvent } from "@/lib/whatsapp";
 
 /**
  * POST /api/planning-goedkeuren
@@ -23,7 +24,7 @@ export async function POST(request: NextRequest) {
     // Orders ophalen die in aanmerking komen
     const { data: orders, error: queryError } = await supabase
       .from("orders")
-      .select("id, order_nummer, aankomsttijd_slot")
+      .select("id, order_nummer, aankomsttijd_slot, naam, telefoon_e164, telefoon_nummer, type, opmerkingen_klant, bezorgtijd_voorkeur")
       .eq("status", "ritjes_vandaag")
       .eq("meenemen_in_planning", true)
       .not("aankomsttijd_slot", "is", null)
@@ -82,6 +83,30 @@ export async function POST(request: NextRequest) {
     // "Ritjes voor vandaag" toont alleen orders met status 'ritjes_vandaag';
     // ze moeten pas verdwijnen zodra ze via 'afronden' naar 'bezorgd'/'mp_orders' gaan.
 
+    // Na goedkeuren: WhatsApp tijdslot-bericht per ordertype
+    const whatsappDetails: string[] = [];
+    let whatsappSent = 0;
+    let whatsappFailed = 0;
+    for (const o of sorted as any[]) {
+      const sendRes = await sendWhatsAppByEvent("planning_goedgekeurd", {
+        order_nummer: o.order_nummer,
+        naam: o.naam,
+        aankomsttijd_slot: o.aankomsttijd_slot,
+        telefoon_e164: o.telefoon_e164,
+        telefoon_nummer: o.telefoon_nummer,
+        type: o.type,
+        opmerkingen_klant: o.opmerkingen_klant,
+        bezorgtijd_voorkeur: o.bezorgtijd_voorkeur,
+      });
+      if (sendRes.ok) {
+        whatsappSent += 1;
+        whatsappDetails.push(`Order ${o.order_nummer}: verzonden`);
+      } else {
+        whatsappFailed += 1;
+        whatsappDetails.push(`Order ${o.order_nummer}: ${sendRes.error ?? "mislukt"}`);
+      }
+    }
+
     return NextResponse.json({
       ok: true,
       message:
@@ -91,6 +116,11 @@ export async function POST(request: NextRequest) {
       count: sorted.length,
       planningDate,
       mode,
+      whatsapp: {
+        sent: whatsappSent,
+        failed: whatsappFailed,
+        details: whatsappDetails,
+      },
     });
   } catch (e) {
     console.error("[api/planning-goedkeuren]", e);

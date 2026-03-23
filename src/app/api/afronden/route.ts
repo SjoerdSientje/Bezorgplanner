@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
+import { sendWhatsAppByEvent } from "@/lib/whatsapp";
 
 export const dynamic = "force-dynamic";
 
@@ -53,7 +54,7 @@ export async function POST(request: NextRequest) {
     // Haal order op om MP-tag te bepalen
     const { data: order, error: orderErr } = await supabase
       .from("orders")
-      .select("id, source, mp_tags")
+      .select("id, source, mp_tags, order_nummer, naam, aankomsttijd_slot, telefoon_e164, telefoon_nummer, type, opmerkingen_klant, bezorgtijd_voorkeur")
       .eq("id", orderId)
       .maybeSingle();
     if (orderErr) {
@@ -113,6 +114,17 @@ export async function POST(request: NextRequest) {
       console.error("[api/afronden] delete planning_slots fout:", delErr);
     }
 
+    const waRes = await sendWhatsAppByEvent("afronden", {
+      order_nummer: (order as any).order_nummer,
+      naam: (order as any).naam,
+      aankomsttijd_slot: (order as any).aankomsttijd_slot,
+      telefoon_e164: (order as any).telefoon_e164,
+      telefoon_nummer: (order as any).telefoon_nummer,
+      type: (order as any).type,
+      opmerkingen_klant: (order as any).opmerkingen_klant,
+      bezorgtijd_voorkeur: (order as any).bezorgtijd_voorkeur,
+    });
+
     return NextResponse.json(
       {
         ok: true,
@@ -123,6 +135,7 @@ export async function POST(request: NextRequest) {
           slotsNaDelete: slotsNa?.length ?? 0,
           deleteError: delErr?.message ?? null,
         },
+        whatsapp: waRes,
       },
       { headers: { "Cache-Control": "no-store" } }
     );

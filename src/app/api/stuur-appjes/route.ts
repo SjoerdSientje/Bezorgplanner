@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { sendWhatsAppByEvent } from "@/lib/whatsapp";
 
 /**
  * POST /api/stuur-appjes
@@ -27,25 +28,10 @@ export async function POST(request: NextRequest) {
       slot_id: string;
       aankomsttijd_slot: string;
       telefoon_e164: string;
+      telefoon_nummer: string;
       naam: string;
       order_nummer: string;
     }>;
-    const templateName = String(body.template_name ?? "").trim();
-    const languageCode = String(body.language_code ?? "nl").trim() || "nl";
-    const bodyVariables = Array.isArray(body.body_variables)
-      ? body.body_variables.map((v: unknown) => String(v ?? ""))
-      : [];
-    const headerVariables = Array.isArray(body.header_variables)
-      ? body.header_variables.map((v: unknown) => String(v ?? ""))
-      : [];
-    const fillTemplateVar = (
-      input: string,
-      order: { naam: string; order_nummer: string; aankomsttijd_slot: string }
-    ) =>
-      input
-        .replaceAll("{naam}", order.naam ?? "")
-        .replaceAll("{order_nummer}", order.order_nummer ?? "")
-        .replaceAll("{tijdslot}", order.aankomsttijd_slot ?? "");
 
     if (selected.length === 0) {
       return NextResponse.json(
@@ -53,13 +39,6 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-    if (!templateName) {
-      return NextResponse.json(
-        { error: "template_name is verplicht." },
-        { status: 400 }
-      );
-    }
-
     const supabase = createClient(supabaseUrl, serviceKey);
 
     // Sync handmatig aangepaste tijdslot terug naar planning_slots.
@@ -83,88 +62,34 @@ export async function POST(request: NextRequest) {
         .eq("order_id", o.order_id);
     }
 
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-    const waToken = process.env.WHATSAPP_ACCESS_TOKEN;
-    if (!phoneNumberId || !waToken) {
-      return NextResponse.json(
-        {
-          error:
-            "WhatsApp niet geconfigureerd. Zet WHATSAPP_PHONE_NUMBER_ID en WHATSAPP_ACCESS_TOKEN in je environment.",
-        },
-        { status: 500 }
-      );
-    }
-
-    const toDigits = (raw: string) =>
-      String(raw ?? "")
-        .replace(/[^\d+]/g, "")
-        .replace(/^\+/, "");
-
     const details: string[] = [];
     let sentCount = 0;
     let failCount = 0;
 
+    const { data: ordersMeta } = await supabase
+      .from("orders")
+      .select("id, type, opmerkingen_klant, bezorgtijd_voorkeur")
+      .in("id", selected.map((o) => o.order_id));
+    const metaById = new Map((ordersMeta ?? []).map((o: any) => [String(o.id), o]));
+
     for (const o of selected) {
-      const to = toDigits(o.telefoon_e164 || o.telefoon_nummer || "");
-      if (!to) {
-        failCount += 1;
-        details.push(`Order ${o.order_nummer}: geen geldig telefoonnummer`);
-        continue;
-      }
-
-      const templateComponents: Array<Record<string, unknown>> = [];
-      if (headerVariables.length > 0) {
-        templateComponents.push({
-          type: "header",
-          parameters: headerVariables.map((text) => ({
-            type: "text",
-            text: fillTemplateVar(text, o),
-          })),
-        });
-      }
-      if (bodyVariables.length > 0) {
-        templateComponents.push({
-          type: "body",
-          parameters: bodyVariables.map((text) => ({
-            type: "text",
-            text: fillTemplateVar(text, o),
-          })),
-        });
-      }
-
-      const payload: Record<string, unknown> = {
-        messaging_product: "whatsapp",
-        to,
-        type: "template",
-        template: {
-          name: templateName,
-          language: { code: languageCode },
-          ...(templateComponents.length > 0 ? { components: templateComponents } : {}),
-        },
-      };
-
-      const waRes = await fetch(
-        `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${waToken}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(payload),
-        }
-      );
-
-      const waJson = await waRes.json().catch(() => ({}));
-      if (!waRes.ok) {
-        failCount += 1;
-        const errMsg =
-          (waJson?.error?.message as string | undefined) ??
-          `WhatsApp fout (${waRes.status})`;
-        details.push(`Order ${o.order_nummer}: ${errMsg}`);
-      } else {
+      const meta = metaById.get(o.order_id) ?? {};
+      const sendRes = await sendWhatsAppByEvent("stuur_appjes", {
+        order_nummer: o.order_nummer,
+        naam: o.naam,
+        aankomsttijd_slot: o.aankomsttijd_slot,
+        telefoon_e164: o.telefoon_e164,
+        telefoon_nummer: o.telefoon_nummer,
+        type: String((meta as any).type ?? ""),
+        opmerkingen_klant: String((meta as any).opmerkingen_klant ?? ""),
+        bezorgtijd_voorkeur: String((meta as any).bezorgtijd_voorkeur ?? ""),
+      });
+      if (sendRes.ok) {
         sentCount += 1;
         details.push(`Order ${o.order_nummer}: verzonden`);
+      } else {
+        failCount += 1;
+        details.push(`Order ${o.order_nummer}: ${sendRes.error ?? "mislukt"}`);
       }
     }
 

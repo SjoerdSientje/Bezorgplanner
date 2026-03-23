@@ -42,10 +42,8 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<SendResult | null>(null);
-  const [templateName, setTemplateName] = useState("hello_world");
-  const [languageCode, setLanguageCode] = useState("en_US");
-  const [bodyVariablesText, setBodyVariablesText] = useState("");
-  const [headerVariablesText, setHeaderVariablesText] = useState("");
+  const [templates, setTemplates] = useState<Array<{ name?: string; language?: string }>>([]);
+  const [templatesError, setTemplatesError] = useState<string | null>(null);
 
   const currentByOrderId = useMemo(() => {
     const m = new Map<string, CurrentRitjesOrder>();
@@ -80,6 +78,7 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
 
   const openDialog = useCallback(async () => {
     setResult(null);
+    setTemplatesError(null);
     setSelected(new Set());
     setLoadingOrders(true);
     setOpen(true);
@@ -101,6 +100,16 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
       // daarna 1 korte retry om zeker te zijn dat het nieuwste tijdslot zichtbaar is.
       const data1: any = await fetchFresh();
       setOrders(mergeLatestWithCurrent(data1.orders ?? []));
+
+      const tplRes = await fetch(`/api/whatsapp-templates?t=${Date.now()}`, {
+        cache: "no-store",
+      });
+      const tplJson = await tplRes.json().catch(() => ({}));
+      if (tplRes.ok) {
+        setTemplates((tplJson.templates ?? []) as Array<{ name?: string; language?: string }>);
+      } else {
+        setTemplatesError(String(tplJson.error ?? "Templates ophalen mislukt."));
+      }
 
       await new Promise((r) => setTimeout(r, 500));
       const data2: any = await fetchFresh();
@@ -131,10 +140,6 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
 
   async function handleVerstuur() {
     if (selected.size === 0) return;
-    if (!templateName.trim()) {
-      setResult({ ok: false, error: "Vul een template naam in." });
-      return;
-    }
     setSending(true);
     setResult(null);
     try {
@@ -164,19 +169,7 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
       const res = await fetch("/api/stuur-appjes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          orders: payloadLatest,
-          template_name: templateName.trim(),
-          language_code: languageCode.trim() || "nl",
-          body_variables: bodyVariablesText
-            .split("\n")
-            .map((s) => s.trim())
-            .filter(Boolean),
-          header_variables: headerVariablesText
-            .split("\n")
-            .map((s) => s.trim())
-            .filter(Boolean),
-        }),
+        body: JSON.stringify({ orders: payloadLatest }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -236,40 +229,17 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
 
               {/* Body */}
               <div className="flex-1 overflow-y-auto px-5 py-4">
-                <div className="mb-4 space-y-2 rounded-xl border border-koopje-black/10 bg-koopje-black/5 p-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-koopje-black/70">
-                    WhatsApp template
+                <div className="mb-4 rounded-xl border border-koopje-black/10 bg-koopje-black/5 p-3">
+                  <p className="text-xs text-koopje-black/70">
+                    Verzending gebruikt automatisch templates per ordertype + flow.
                   </p>
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    <input
-                      type="text"
-                      value={templateName}
-                      onChange={(e) => setTemplateName(e.target.value)}
-                      placeholder="Template naam (bijv. hello_world)"
-                      className="w-full rounded-lg border border-koopje-black/15 bg-white px-3 py-2 text-sm text-koopje-black outline-none focus:border-koopje-orange focus:ring-2 focus:ring-koopje-orange/20"
-                    />
-                    <input
-                      type="text"
-                      value={languageCode}
-                      onChange={(e) => setLanguageCode(e.target.value)}
-                      placeholder="Taalcode (bijv. nl / en_US)"
-                      className="w-full rounded-lg border border-koopje-black/15 bg-white px-3 py-2 text-sm text-koopje-black outline-none focus:border-koopje-orange focus:ring-2 focus:ring-koopje-orange/20"
-                    />
-                  </div>
-                  <textarea
-                    value={bodyVariablesText}
-                    onChange={(e) => setBodyVariablesText(e.target.value)}
-                    rows={3}
-                    placeholder={"Body variabelen, 1 per regel\nGebruik evt.: {naam}, {order_nummer}, {tijdslot}"}
-                    className="w-full rounded-lg border border-koopje-black/15 bg-white px-3 py-2 text-xs text-koopje-black outline-none focus:border-koopje-orange focus:ring-2 focus:ring-koopje-orange/20"
-                  />
-                  <textarea
-                    value={headerVariablesText}
-                    onChange={(e) => setHeaderVariablesText(e.target.value)}
-                    rows={2}
-                    placeholder={"Header variabelen (optioneel), 1 per regel\nOok placeholders mogelijk"}
-                    className="w-full rounded-lg border border-koopje-black/15 bg-white px-3 py-2 text-xs text-koopje-black outline-none focus:border-koopje-orange focus:ring-2 focus:ring-koopje-orange/20"
-                  />
+                  {templatesError ? (
+                    <p className="mt-1 text-xs text-red-600">{templatesError}</p>
+                  ) : (
+                    <p className="mt-1 text-xs text-koopje-black/60">
+                      Templates gevonden in WhatsApp Business: {templates.length}
+                    </p>
+                  )}
                 </div>
 
                 {loadingOrders ? (
