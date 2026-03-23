@@ -7,6 +7,7 @@ import EditableSheetTable from "@/components/EditableSheetTable";
 import RitjesRouteControls from "@/components/RitjesRouteControls";
 import SparrenMetSientje from "@/components/SparrenMetSientje";
 import ProductenCell from "@/components/ProductenCell";
+import JaNeeCell from "@/components/JaNeeCell";
 import {
   RITJES_HEADERS,
   ordersToTableRows,
@@ -115,6 +116,15 @@ export default function RitjesVandaagPage() {
 
   const cellRenderers = useMemo(
     () => ({
+      "Meenemen in planning (anders veranderen naar nee)": (rowIndex: number, value: string, onSave: (v: string) => void) => (
+        <JaNeeCell value={value} onSave={onSave} isDataRow={rowIndex < orders.length} />
+      ),
+      "Nieuw appje sturen?": (rowIndex: number, value: string, onSave: (v: string) => void) => (
+        <JaNeeCell value={value} onSave={onSave} isDataRow={rowIndex < orders.length} />
+      ),
+      "Betaald?": (rowIndex: number, value: string, onSave: (v: string) => void) => (
+        <JaNeeCell value={value} onSave={onSave} isDataRow={rowIndex < orders.length} />
+      ),
       "Adress URL": (_rowIndex: number, value: string) =>
         value ? (
           <a
