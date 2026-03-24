@@ -7,18 +7,10 @@ export const dynamic = "force-dynamic";
 function shouldIncludeForStuurAppjes(order: {
   meenemen_in_planning?: boolean | null;
   nieuw_appje_sturen?: boolean | null;
-  datum_opmerking?: string | null;
-  datum?: string | null;
-}, slotDate: string): boolean {
+}): boolean {
   if (order.meenemen_in_planning !== true) return false;
   if (order.nieuw_appje_sturen !== true) return false;
-
-  const opmerking = String(order.datum_opmerking ?? "").trim().toLowerCase();
-  const hasVandaag = opmerking.includes("vandaag");
-  const orderDate = String(order.datum ?? "").trim();
-  const dateMatchesSlot = orderDate !== "" && slotDate !== "" && orderDate === slotDate;
-
-  return hasVandaag || dateMatchesSlot;
+  return true;
 }
 
 /**
@@ -91,7 +83,7 @@ export async function GET(request: NextRequest) {
     const activeOrderIds = Array.from(activeSlotMap.keys());
     const { data: ritjesOrders, error: ordersErr } = await supabase
       .from("orders")
-      .select("id, order_nummer, naam, aankomsttijd_slot, telefoon_e164, telefoon_nummer, bezorgtijd_voorkeur, meenemen_in_planning, nieuw_appje_sturen, datum_opmerking, datum")
+      .select("id, order_nummer, naam, aankomsttijd_slot, telefoon_e164, telefoon_nummer, bezorgtijd_voorkeur, meenemen_in_planning, nieuw_appje_sturen")
       .eq("owner_email", ownerEmail)
       .eq("status", "ritjes_vandaag")
       .in("id", activeOrderIds);
@@ -118,10 +110,7 @@ export async function GET(request: NextRequest) {
             {
               meenemen_in_planning: (o as Record<string, unknown>).meenemen_in_planning as boolean | null | undefined,
               nieuw_appje_sturen: (o as Record<string, unknown>).nieuw_appje_sturen as boolean | null | undefined,
-              datum_opmerking: (o as Record<string, unknown>).datum_opmerking as string | null | undefined,
-              datum: (o as Record<string, unknown>).datum as string | null | undefined,
-            },
-            String(slot?.slot_date ?? "")
+            }
           )
         ) {
           return null;
