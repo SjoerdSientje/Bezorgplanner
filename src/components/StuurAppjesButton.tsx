@@ -175,7 +175,19 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
       if (!res.ok) {
         setResult({ ok: false, error: data.error ?? "Versturen mislukt." });
       } else {
-        setResult({ ok: true, message: data.message ?? "Appjes verstuurd." });
+        const details = Array.isArray(data.details) ? data.details : [];
+        const failedDetails = details.filter((d: string) => String(d).toLowerCase().includes("mislukt") || String(d).toLowerCase().includes("fout"));
+        setResult({
+          ok: failedDetails.length === 0,
+          message:
+            failedDetails.length === 0
+              ? (data.message ?? "Appjes verstuurd.")
+              : `${data.message ?? "Deels verzonden."} ${failedDetails.slice(0, 2).join(" | ")}`,
+          error:
+            failedDetails.length > 0
+              ? `${data.message ?? "Deels verzonden."} ${failedDetails.slice(0, 2).join(" | ")}`
+              : undefined,
+        });
         setSelected(new Set());
       }
     } catch {

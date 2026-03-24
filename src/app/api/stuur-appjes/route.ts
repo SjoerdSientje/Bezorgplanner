@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { sendWhatsAppByEvent } from "@/lib/whatsapp";
+import { requireAccountEmail } from "@/lib/account";
 
 /**
  * POST /api/stuur-appjes
@@ -12,6 +13,7 @@ import { sendWhatsAppByEvent } from "@/lib/whatsapp";
  */
 export async function POST(request: NextRequest) {
   try {
+    const ownerEmail = requireAccountEmail(request);
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const serviceKey =
       process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -52,6 +54,7 @@ export async function POST(request: NextRequest) {
         await supabase
           .from("planning_slots")
           .update({ aankomsttijd: o.aankomsttijd_slot })
+          .eq("owner_email", ownerEmail)
           .eq("id", o.slot_id);
       }
 
@@ -59,6 +62,7 @@ export async function POST(request: NextRequest) {
       await supabase
         .from("planning_slots")
         .update({ aankomsttijd: o.aankomsttijd_slot })
+        .eq("owner_email", ownerEmail)
         .eq("order_id", o.order_id);
     }
 
@@ -69,6 +73,7 @@ export async function POST(request: NextRequest) {
     const { data: ordersMeta } = await supabase
       .from("orders")
       .select("id, type, betaald, mp_tags, datum, opmerkingen_klant, bezorgtijd_voorkeur")
+      .eq("owner_email", ownerEmail)
       .in("id", selected.map((o) => o.order_id));
     const metaById = new Map((ordersMeta ?? []).map((o: any) => [String(o.id), o]));
 

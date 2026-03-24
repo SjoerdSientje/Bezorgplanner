@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
+import { requireAccountEmail } from "@/lib/account";
 
 export const maxDuration = 60;
 
@@ -86,6 +87,7 @@ function buildContextBlock(ritjesOrders: RitjesOrder[]): string {
  */
 export async function POST(request: NextRequest) {
   try {
+    const ownerEmail = requireAccountEmail(request);
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
       return NextResponse.json(
@@ -234,6 +236,7 @@ Wees bondig, helder en behulpzaam. Antwoord in het Nederlands.${contextBlock}`;
           const baseQuery = supabase
             .from("orders")
             .select("id")
+            .eq("owner_email", ownerEmail)
             .eq("status", "ritjes_vandaag")
             .eq("meenemen_in_planning", true)
             .or(`datum_opmerking.eq.vandaag,datum_opmerking.eq.${today}`);
@@ -248,6 +251,7 @@ Wees bondig, helder en behulpzaam. Antwoord in het Nederlands.${contextBlock}`;
             const { data: byAlt } = await supabase
               .from("orders")
               .select("id")
+              .eq("owner_email", ownerEmail)
               .eq("status", "ritjes_vandaag")
               .eq("meenemen_in_planning", true)
               .or(`datum_opmerking.eq.vandaag,datum_opmerking.eq.${today}`)
@@ -264,6 +268,7 @@ Wees bondig, helder en behulpzaam. Antwoord in het Nederlands.${contextBlock}`;
           const { error } = await supabase
             .from("orders")
             .update({ aankomsttijd_slot: slot })
+            .eq("owner_email", ownerEmail)
             .eq("id", orderId);
 
           if (error) {

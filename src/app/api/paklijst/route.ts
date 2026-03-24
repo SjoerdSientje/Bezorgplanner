@@ -1,5 +1,6 @@
-import { NextResponse } from "next/server";
-import { fetchAllOrders } from "@/lib/supabase";
+import { NextRequest, NextResponse } from "next/server";
+import { createServerSupabaseClient } from "@/lib/supabase";
+import { requireAccountEmail } from "@/lib/account";
 
 export const dynamic = "force-dynamic";
 
@@ -43,11 +44,20 @@ function isDatumVandaag(datum: unknown): boolean {
   return d === todayDDMMYYYY();
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const allOrders = await fetchAllOrders();
+    const ownerEmail = requireAccountEmail(request);
+    const supabase = createServerSupabaseClient();
+    const { data: allOrders, error } = await supabase
+      .from("orders")
+      .select("*")
+      .eq("owner_email", ownerEmail);
+    if (error) {
+      console.error("[api/paklijst]", error);
+      return NextResponse.json({ error: "Genereren mislukt." }, { status: 500 });
+    }
 
-    const orders = allOrders.filter((o) => {
+    const orders = (allOrders ?? []).filter((o) => {
       if (o.status !== "ritjes_vandaag") return false;
       if (!o.meenemen_in_planning) return false;
       if (!isDatumVandaag(o.datum_opmerking)) return false;

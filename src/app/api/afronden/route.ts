@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { sendWhatsAppByEvent } from "@/lib/whatsapp";
+import { requireAccountEmail } from "@/lib/account";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +20,7 @@ function isMpTagged(mpTags: unknown): boolean {
 
 export async function POST(request: NextRequest) {
   try {
+    const ownerEmail = requireAccountEmail(request);
     const body = await request.json().catch(() => ({}));
     const orderId = String(body.orderId ?? "").trim();
     const bezorgerNaam = String(body.bezorger_naam ?? "").trim();
@@ -55,6 +57,7 @@ export async function POST(request: NextRequest) {
     const { data: order, error: orderErr } = await supabase
       .from("orders")
       .select("id, source, mp_tags, order_nummer, naam, aankomsttijd_slot, telefoon_e164, telefoon_nummer, type, betaald, datum, opmerkingen_klant, bezorgtijd_voorkeur")
+      .eq("owner_email", ownerEmail)
       .eq("id", orderId)
       .maybeSingle();
     if (orderErr) {
@@ -82,6 +85,7 @@ export async function POST(request: NextRequest) {
     const { error: updErr } = await supabase
       .from("orders")
       .update(updatePayload)
+      .eq("owner_email", ownerEmail)
       .eq("id", orderId);
 
     if (updErr) {
@@ -93,6 +97,7 @@ export async function POST(request: NextRequest) {
     const { data: slotsVoor, error: checkErr } = await supabase
       .from("planning_slots")
       .select("id, order_id, datum, aankomsttijd")
+      .eq("owner_email", ownerEmail)
       .eq("order_id", orderId);
     console.log("[api/afronden] slots VOOR delete:", JSON.stringify(slotsVoor), "orderId:", orderId, "checkErr:", checkErr?.message);
 
@@ -100,6 +105,7 @@ export async function POST(request: NextRequest) {
     const { error: delErr } = await supabase
       .from("planning_slots")
       .delete()
+      .eq("owner_email", ownerEmail)
       .eq("order_id", orderId);
     console.log("[api/afronden] delete result - error:", delErr?.message ?? "geen");
 
@@ -107,6 +113,7 @@ export async function POST(request: NextRequest) {
     const { data: slotsNa } = await supabase
       .from("planning_slots")
       .select("id")
+      .eq("owner_email", ownerEmail)
       .eq("order_id", orderId);
     console.log("[api/afronden] slots NA delete:", slotsNa?.length ?? 0, "rijen voor orderId:", orderId);
 

@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import {
   getOrderKind,
@@ -7,6 +7,7 @@ import {
   type WhatsAppEvent,
 } from "@/lib/whatsapp";
 import { getPlanningDateForGoedkeuren } from "@/lib/planning-date";
+import { requireAccountEmail } from "@/lib/account";
 
 export const dynamic = "force-dynamic";
 
@@ -25,14 +26,16 @@ function isPlanningGoedkeurenRecipient(o: {
   return hasVandaagInOpmerking || datumIsPlanningDate;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    const ownerEmail = requireAccountEmail(request);
     const supabase = createServerSupabaseClient();
     const { data, error } = await supabase
       .from("orders")
       .select(
         "id, order_nummer, naam, type, betaald, mp_tags, status, opmerkingen_klant, bezorgtijd_voorkeur, aankomsttijd_slot, telefoon_e164, telefoon_nummer, meenemen_in_planning, nieuw_appje_sturen, datum_opmerking, datum, created_at"
       )
+      .eq("owner_email", ownerEmail)
       .eq("status", "ritjes_vandaag")
       .order("created_at", { ascending: false })
       .limit(200);

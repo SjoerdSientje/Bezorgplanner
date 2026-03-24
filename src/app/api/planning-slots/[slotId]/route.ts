@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
+import { requireAccountEmail } from "@/lib/account";
 
 export const dynamic = "force-dynamic";
 
@@ -8,13 +9,18 @@ export async function DELETE(
   { params }: { params: Promise<{ slotId: string }> }
 ) {
   try {
+    const ownerEmail = requireAccountEmail(_req);
     const slotId = (await params).slotId;
     if (!slotId) {
       return NextResponse.json({ error: "Slot-id ontbreekt." }, { status: 400 });
     }
 
     const supabase = createServerSupabaseClient();
-    const { error } = await supabase.from("planning_slots").delete().eq("id", slotId);
+    const { error } = await supabase
+      .from("planning_slots")
+      .delete()
+      .eq("owner_email", ownerEmail)
+      .eq("id", slotId);
     if (error) {
       console.error("[api/planning-slots DELETE]", error);
       return NextResponse.json({ error: error.message }, { status: 500 });

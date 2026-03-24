@@ -1,5 +1,6 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
+import { requireAccountEmail } from "@/lib/account";
 
 export const dynamic = "force-dynamic";
 
@@ -7,12 +8,14 @@ export const dynamic = "force-dynamic";
  * GET /api/planning
  * Returns planning rows (planning_slots + order data) for the Bezorgplanner sheet.
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    const ownerEmail = requireAccountEmail(request);
     const supabase = createServerSupabaseClient();
     const { data: slots, error: slotsErr } = await supabase
       .from("planning_slots")
       .select("id, datum, volgorde, aankomsttijd, tijd_opmerking, status, order_id")
+      .eq("owner_email", ownerEmail)
       .neq("status", "afgerond")
       .order("datum", { ascending: true })
       .order("volgorde", { ascending: true });
@@ -34,6 +37,7 @@ export async function GET() {
     const { data: ordersData, error: ordersErr } = await supabase
       .from("orders")
       .select("*")
+      .eq("owner_email", ownerEmail)
       .in("id", orderIds);
 
     if (ordersErr) {

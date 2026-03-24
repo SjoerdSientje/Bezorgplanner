@@ -150,6 +150,9 @@ export default function AfrondenVragenlijstPage({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error ?? "Afronden mislukt");
+      if (data?.whatsapp?.ok === false) {
+        throw new Error(`Order afgerond, maar WhatsApp mislukt: ${data?.whatsapp?.error ?? "onbekende fout"}`);
+      }
 
       console.log("[afronden] API response debug:", data?.debug);
       // Hard redirect naar planning zodat de pagina volledig opnieuw laadt

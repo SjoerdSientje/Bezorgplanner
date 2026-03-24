@@ -15,6 +15,7 @@ export type SlotStatus = 'gepland' | 'onderweg' | 'afgerond';
 /** Orders-tabel (basis voor alle sheets) */
 export interface Order {
   id: string;
+  owner_email: string;
   source: OrderSource;
   type: OrderType;
   status: OrderStatus;
@@ -56,6 +57,7 @@ export interface Order {
 /** Planning slot (één stop in de bezorgplanner) */
 export interface PlanningSlot {
   id: string;
+  owner_email: string;
   datum: string;
   order_id: string;
   volgorde: number;

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { verwerkGarantiebewijs } from "@/lib/garantiebewijs";
+import { requireAccountEmail } from "@/lib/account";
 import {
   extractModelnaamVanProduct,
   buildLineItemsJson,
@@ -105,6 +106,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const ownerEmail = requireAccountEmail(request);
     const body = await request.json().catch(() => ({}));
     console.log("[api/mp-order] soort:", body.soort, "naam:", body.naam);
     const soort = body.soort as "bezorging" | "afhaal";
@@ -143,6 +145,7 @@ export async function POST(request: NextRequest) {
     if (soort === "afhaal") {
       const { data: laatste } = await supabaseTemp
         .from("orders").select("order_nummer")
+        .eq("owner_email", ownerEmail)
         .like("order_nummer", "#MPA%")
         .order("order_nummer", { ascending: false }).limit(1).maybeSingle();
       const prev = laatste?.order_nummer ? parseInt(laatste.order_nummer.replace("#MPA", ""), 10) : 999;
@@ -150,6 +153,7 @@ export async function POST(request: NextRequest) {
     } else {
       const { data: laatste } = await supabaseTemp
         .from("orders").select("order_nummer")
+        .eq("owner_email", ownerEmail)
         .like("order_nummer", "#MPB%")
         .order("order_nummer", { ascending: false }).limit(1).maybeSingle();
       const prev = laatste?.order_nummer ? parseInt(laatste.order_nummer.replace("#MPB", ""), 10) : 1024;
@@ -188,6 +192,7 @@ export async function POST(request: NextRequest) {
       : null;
 
     const insert = {
+      owner_email: ownerEmail,
       source: "mp" as const,
       type: soort === "afhaal" ? ("mp_winkel" as const) : ("verkoop" as const),
       status: soort === "afhaal" ? ("mp_orders" as const) : ("ritjes_vandaag" as const),

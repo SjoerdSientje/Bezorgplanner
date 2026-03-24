@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { getPlanningDateForGoedkeuren } from "@/lib/planning-date";
 import { sendWhatsAppByEvent } from "@/lib/whatsapp";
+import { requireAccountEmail } from "@/lib/account";
 
 function shouldSendPlanningGoedkeurenWhatsApp(
   order: {
@@ -35,6 +36,7 @@ function shouldSendPlanningGoedkeurenWhatsApp(
  */
 export async function POST(request: NextRequest) {
   try {
+    const ownerEmail = requireAccountEmail(request);
     const body = await request.json().catch(() => ({}));
     const mode: "replace" | "morgen" = body.mode === "morgen" ? "morgen" : "replace";
 
@@ -45,6 +47,7 @@ export async function POST(request: NextRequest) {
     const { data: orders, error: queryError } = await supabase
       .from("orders")
       .select("id, order_nummer, aankomsttijd_slot, naam, telefoon_e164, telefoon_nummer, type, betaald, mp_tags, datum, datum_opmerking, meenemen_in_planning, nieuw_appje_sturen, opmerkingen_klant, bezorgtijd_voorkeur")
+      .eq("owner_email", ownerEmail)
       .eq("status", "ritjes_vandaag")
       .eq("meenemen_in_planning", true)
       .not("aankomsttijd_slot", "is", null)
@@ -80,9 +83,14 @@ export async function POST(request: NextRequest) {
     // Verwijder altijd de bestaande slots voor deze datum.
     // - "replace": vervangt de huidige dag-planning volledig.
     // - "morgen": vervangt de morgen-planning volledig (zelfde gedrag, andere datum).
-    await supabase.from("planning_slots").delete().eq("datum", planningDate);
+    await supabase
+      .from("planning_slots")
+      .delete()
+      .eq("owner_email", ownerEmail)
+      .eq("datum", planningDate);
 
     const slotsToInsert = sorted.map((o, i) => ({
+      owner_email: ownerEmail,
       datum: planningDate,
       order_id: o.id,
       volgorde: i + 1,

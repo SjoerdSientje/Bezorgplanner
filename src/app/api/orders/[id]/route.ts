@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { createServerSupabaseClient } from "@/lib/supabase";
+import { requireAccountEmail } from "@/lib/account";
 
 /** Velden die via PATCH mogen worden geüpdatet (whitelist). */
 const ALLOWED_KEYS = new Set([
@@ -39,6 +40,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const ownerEmail = requireAccountEmail(_request);
     const id = (await params).id;
     if (!id) {
       return NextResponse.json({ error: "Order-id ontbreekt." }, { status: 400 });
@@ -55,7 +57,12 @@ export async function GET(
     }
 
     const supabase = createClient(supabaseUrl, serviceKey);
-    const { data, error } = await supabase.from("orders").select("*").eq("id", id).maybeSingle();
+    const { data, error } = await supabase
+      .from("orders")
+      .select("*")
+      .eq("owner_email", ownerEmail)
+      .eq("id", id)
+      .maybeSingle();
     if (error) {
       console.error("[api/orders GET]", error);
       return NextResponse.json(
@@ -82,6 +89,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const ownerEmail = requireAccountEmail(_request);
     const id = (await params).id;
     if (!id) {
       return NextResponse.json({ error: "Order-id ontbreekt." }, { status: 400 });
@@ -98,7 +106,11 @@ export async function DELETE(
     }
 
     const supabase = createClient(supabaseUrl, serviceKey);
-    const { error } = await supabase.from("orders").delete().eq("id", id);
+    const { error } = await supabase
+      .from("orders")
+      .delete()
+      .eq("owner_email", ownerEmail)
+      .eq("id", id);
     if (error) {
       console.error("[api/orders DELETE]", error);
       return NextResponse.json(
@@ -122,6 +134,7 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const ownerEmail = requireAccountEmail(_request);
     const id = (await params).id;
     if (!id) {
       return NextResponse.json({ error: "Order-id ontbreekt." }, { status: 400 });
@@ -149,7 +162,11 @@ export async function PATCH(
     }
 
     const supabase = createServerSupabaseClient();
-    const { error } = await supabase.from("orders").update(updates).eq("id", id);
+    const { error } = await supabase
+      .from("orders")
+      .update(updates)
+      .eq("owner_email", ownerEmail)
+      .eq("id", id);
 
     if (error) {
       console.error("[api/orders PATCH]", error);
@@ -166,6 +183,7 @@ export async function PATCH(
       await supabase
         .from("planning_slots")
         .update({ aankomsttijd: nieuweAankomsttijd })
+        .eq("owner_email", ownerEmail)
         .eq("order_id", id);
     }
 

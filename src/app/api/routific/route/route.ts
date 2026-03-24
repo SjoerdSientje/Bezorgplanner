@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { fetchAllOrders } from "@/lib/supabase";
 import { getPlanningDate } from "@/lib/planning-date";
+import { requireAccountEmail } from "@/lib/account";
 import {
   buildRoutificPayload,
   type OrderForRoute,
@@ -23,6 +24,7 @@ const POLL_TIMEOUT_MS = 120000; // 2 min
  */
 export async function POST(request: NextRequest) {
   try {
+    const ownerEmail = requireAccountEmail(request);
     const body = await request.json().catch(() => ({}));
     const vertrektijd = (body.vertrektijd ?? "10:30").toString().trim();
     if (!/^\d{1,2}:\d{2}$/.test(vertrektijd)) {
@@ -56,6 +58,7 @@ export async function POST(request: NextRequest) {
     // Gebruik fetchAllOrders om row-limit bug te omzeilen, filter daarna in JS
     const allOrders = await fetchAllOrders();
     const rows = (allOrders as unknown as OrderForRoute[]).filter((o) => {
+      if (String((o as unknown as Record<string, unknown>).owner_email ?? "") !== ownerEmail) return false;
       if ((o as unknown as Record<string, unknown>).status !== "ritjes_vandaag") return false;
       if (!(o as unknown as Record<string, unknown>).meenemen_in_planning) return false;
       const opmerking = (((o as unknown as Record<string, unknown>).datum_opmerking as string) ?? "").toLowerCase();
@@ -150,6 +153,7 @@ export async function POST(request: NextRequest) {
           await supabase
             .from("orders")
             .update({ aankomsttijd_slot: s.aankomsttijd })
+            .eq("owner_email", ownerEmail)
             .eq("id", s.order_id);
         }
       }
