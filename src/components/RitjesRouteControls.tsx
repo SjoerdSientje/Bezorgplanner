@@ -116,9 +116,21 @@ export default function RitjesRouteControls({ onRouteGenerated }: Props) {
       }
       const wa = data?.whatsapp;
       if (wa && typeof wa.sent === "number" && typeof wa.failed === "number") {
+        const details = Array.isArray(wa.details) ? wa.details : [];
+        const failedDetails = details.filter(
+          (d: string) =>
+            String(d).toLowerCase().includes("mislukt") ||
+            String(d).toLowerCase().includes("fout") ||
+            String(d).toLowerCase().includes("error")
+        );
         setGoedkeurenMessage({
           type: wa.failed > 0 ? "error" : "ok",
-          text: `${data.message || "Planning goedgekeurd."} Appjes: ${wa.sent} verzonden, ${wa.failed} mislukt.`,
+          text:
+            wa.failed > 0
+              ? `${data.message || "Planning goedgekeurd."} Appjes: ${wa.sent} verzonden, ${wa.failed} mislukt. ${failedDetails
+                  .slice(0, 2)
+                  .join(" | ")}`
+              : `${data.message || "Planning goedgekeurd."} Appjes: ${wa.sent} verzonden, ${wa.failed} mislukt.`,
         });
       } else {
         setGoedkeurenMessage({ type: "ok", text: data.message || "Planning goedgekeurd." });
