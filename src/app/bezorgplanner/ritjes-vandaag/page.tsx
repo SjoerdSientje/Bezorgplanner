@@ -205,15 +205,23 @@ export default function RitjesVandaagPage() {
       if (!payload || Object.keys(payload).length === 0) return;
       // Optimistisch: update direct de lokale order-state, GEEN fetchRitjes → geen page-flash
       patchOrderInState(rowIndex, payload);
-      // Fire-and-forget PATCH (de server-side update loopt op de achtergrond)
+      // Fire-and-forget PATCH, maar herstel vanuit server als opslaan mislukt.
       fetch(`/api/orders/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
-      }).catch(() => {
-        // Bij netwerk-fout: herlaad data
-        fetchRitjes();
-      });
+      })
+        .then((res) => {
+          if (!res.ok) {
+            // UI kan anders "ja/tijdslot" tonen terwijl DB-update faalde.
+            // Dan klopt selectie voor "Stuur appjes" niet.
+            fetchRitjes();
+          }
+        })
+        .catch(() => {
+          // Bij netwerk-fout: herlaad data
+          fetchRitjes();
+        });
     },
     [orders, patchOrderInState, fetchRitjes]
   );
