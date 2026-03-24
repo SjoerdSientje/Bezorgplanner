@@ -25,68 +25,87 @@ export async function GET(request: NextRequest) {
 
     const supabase = createClient(supabaseUrl, serviceKey);
 
-    // Source = intersection of:
-    // - orders visible in current planning section
-    // - orders visible in Ritjes voor vandaag (status = ritjes_vandaag)
+    // 1) Fetch Ritjes voor vandaag orders that already have a visible timeslot.
+    const { data: ritjesOrders, error: ordersErr } = await supabase
+      .from("orders")
+      .select("id, order_nummer, naam, aankomsttijd_slot, telefoon_e164, telefoon_nummer, bezorgtijd_voorkeur")
+      .eq("owner_email", ownerEmail)
+      .eq("status", "ritjes_vandaag");
+    if (ordersErr) {
+      return NextResponse.json({ error: "Orders ophalen mislukt." }, { status: 500 });
+    }
+    const ritjesWithSlot = (ritjesOrders ?? []).filter(
+      (o: Record<string, unknown>) => String(o.aankomsttijd_slot ?? "").trim() !== ""
+    );
+    if (ritjesWithSlot.length === 0) {
+      return NextResponse.json({ orders: [] });
+    }
+
+    // 2) Read planning slots only for those ritjes-orders.
+    const ritjesOrderIds = ritjesWithSlot.map((o: Record<string, unknown>) => String(o.id ?? ""));
     const { data: slots, error: slotsErr } = await supabase
       .from("planning_slots")
       .select("id, datum, order_id, volgorde, aankomsttijd")
       .eq("owner_email", ownerEmail)
       .neq("status", "afgerond")
+      .in("order_id", ritjesOrderIds)
       .order("datum", { ascending: true })
       .order("volgorde", { ascending: true });
     if (slotsErr) {
       return NextResponse.json({ error: "Planning ophalen mislukt." }, { status: 500 });
     }
-
     const slotList = slots ?? [];
     if (slotList.length === 0) {
       return NextResponse.json({ orders: [] });
     }
 
-    const orderIds = slotList.map((s: { order_id: string }) => s.order_id);
-    const { data: ordersData, error: ordersErr } = await supabase
-      .from("orders")
-      .select("id, order_nummer, naam, aankomsttijd_slot, telefoon_e164, telefoon_nummer, bezorgtijd_voorkeur, status")
-      .eq("owner_email", ownerEmail)
-      .eq("status", "ritjes_vandaag")
-      .in("id", orderIds);
-    if (ordersErr) {
-      return NextResponse.json({ error: "Orders ophalen mislukt." }, { status: 500 });
+    // 3) Determine active planning section date from this intersected set.
+    const activeDate = String(slotList[0]?.datum ?? "");
+    const activeSlots = slotList.filter(
+      (s: { datum?: string | null }) => String(s.datum ?? "") === activeDate
+    );
+    if (activeSlots.length === 0) {
+      return NextResponse.json({ orders: [] });
     }
 
-    const ordersById = new Map(
-      (ordersData ?? []).map((o: Record<string, unknown>) => [String(o.id), o])
+    // Require non-empty planning slot timeslot too.
+    const activeSlotMap = new Map(
+      activeSlots
+        .filter((s: { aankomsttijd?: string | null }) => String(s.aankomsttijd ?? "").trim() !== "")
+        .map((s: { order_id: string; id: string; volgorde: number }) => [
+          String(s.order_id),
+          { slot_id: String(s.id), volgorde: Number(s.volgorde ?? 0) },
+        ])
+    );
+    if (activeSlotMap.size === 0) {
+      return NextResponse.json({ orders: [] });
+    }
+
+    const ritjesById = new Map(
+      ritjesWithSlot.map((o: Record<string, unknown>) => [String(o.id ?? ""), o])
     );
 
-    const allRows = slotList
-      .map((slot: Record<string, unknown>) => {
-        const o = ordersById.get(String(slot.order_id)) ?? null;
+    const rows = Array.from(activeSlotMap.entries())
+      .map(([orderId, slot]) => {
+        const o = ritjesById.get(orderId);
         if (!o) return null;
-        const slotTijd = String(slot.aankomsttijd ?? "").trim();
-        const orderTijd = String((o as Record<string, unknown>).aankomsttijd_slot ?? "").trim();
-        // Must have a timeslot in both planning and ritjes.
-        if (!slotTijd || !orderTijd) return null;
+        const ritjesTijd = String((o as Record<string, unknown>).aankomsttijd_slot ?? "").trim();
+        // Must have a timeslot in ritjes too.
+        if (!ritjesTijd) return null;
         return {
-          slot_id: String(slot.id ?? ""),
-          order_id: String(slot.order_id ?? ""),
-          datum: String((slot as Record<string, unknown>).datum ?? ""),
-          volgorde: Number(slot.volgorde ?? 0),
+          slot_id: slot?.slot_id ?? "",
+          order_id: orderId,
+          volgorde: slot?.volgorde ?? 0,
           order_nummer: String((o as Record<string, unknown>).order_nummer ?? ""),
           naam: String((o as Record<string, unknown>).naam ?? ""),
-          aankomsttijd_slot: orderTijd,
+          aankomsttijd_slot: ritjesTijd,
           telefoon_e164: String((o as Record<string, unknown>).telefoon_e164 ?? ""),
           telefoon_nummer: String((o as Record<string, unknown>).telefoon_nummer ?? ""),
           bezorgtijd_voorkeur: String((o as Record<string, unknown>).bezorgtijd_voorkeur ?? ""),
         };
       })
-      .filter((r) => r != null);
-
-    // Match Planning page behavior: first (earliest) date is the current section.
-    const activeDate = allRows.length > 0 ? String(allRows[0].datum ?? "") : "";
-    const rows = activeDate
-      ? allRows.filter((r) => String((r as Record<string, unknown>).datum ?? "") === activeDate)
-      : allRows;
+      .filter((r) => r != null)
+      .sort((a, b) => Number((a as Record<string, unknown>).volgorde ?? 0) - Number((b as Record<string, unknown>).volgorde ?? 0));
 
     return NextResponse.json(
       { orders: rows },
