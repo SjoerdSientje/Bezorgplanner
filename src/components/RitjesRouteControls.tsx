@@ -118,18 +118,19 @@ export default function RitjesRouteControls({ onRouteGenerated }: Props) {
       if (wa && typeof wa.sent === "number" && typeof wa.failed === "number") {
         const details = Array.isArray(wa.details) ? wa.details : [];
         const failedDetails = details.filter(
-          (d: string) =>
-            String(d).toLowerCase().includes("mislukt") ||
-            String(d).toLowerCase().includes("fout") ||
-            String(d).toLowerCase().includes("error")
+          (d: string) => !String(d).toLowerCase().includes(": verzonden")
         );
+        const detailSnippet =
+          failedDetails.length > 0
+            ? failedDetails.slice(0, 2).join(" | ")
+            : details.slice(0, 2).join(" | ");
         setGoedkeurenMessage({
           type: wa.failed > 0 ? "error" : "ok",
           text:
             wa.failed > 0
               ? `${data.message || "Planning goedgekeurd."} Appjes: ${wa.sent} verzonden, ${wa.failed} mislukt. ${failedDetails
                   .slice(0, 2)
-                  .join(" | ")}`
+                  .join(" | ") || detailSnippet}`
               : `${data.message || "Planning goedgekeurd."} Appjes: ${wa.sent} verzonden, ${wa.failed} mislukt.`,
         });
       } else {
