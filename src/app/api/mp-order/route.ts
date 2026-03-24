@@ -216,7 +216,8 @@ export async function POST(request: NextRequest) {
       // Bezorging defaults
       ...(soort === "bezorging" && {
         nieuw_appje_sturen: true,
-        betaalmethode: "contant aan deur",
+        betaald: false,
+        betaalmethode: null,
         mp_tags: "MP",
         bezorgtijd_voorkeur: ((body.bezorgtijd_voorkeur ?? "").trim().toLowerCase() === "x")
           ? "geen"

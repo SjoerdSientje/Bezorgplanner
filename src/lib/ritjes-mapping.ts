@@ -92,8 +92,8 @@ export function ritjesCellToPayload(
   const trimmed = value.trim();
   if (header === "Betaald?") {
     const lower = trimmed.toLowerCase();
-    if (lower === "ja") return { betaald: true };
-    if (lower === "nee") return { betaald: false };
+    if (lower === "ja") return { betaald: true, betaalmethode: null };
+    if (lower === "nee") return { betaald: false, betaalmethode: null };
     return { betaalmethode: trimmed || null };
   }
   const field = RITJES_HEADER_TO_FIELD[header];
