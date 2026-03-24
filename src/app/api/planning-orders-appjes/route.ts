@@ -42,18 +42,18 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ orders: [] });
     }
 
-    // 2) Read planning slots only for those ritjes-orders, scoped to the
-    // current operation planning date (same date logic as planning-goedkeuren).
-    // This prevents old planning cycles (older datum) from becoming active again.
+    // 2) Read planning slots only for those ritjes-orders.
+    // Prefer the operation planning date (same logic as planning-goedkeuren),
+    // but gracefully fallback to the most recent planning date that has slots.
     const { date: planningDate } = getPlanningDateForGoedkeuren();
     const ritjesOrderIds = ritjesWithSlot.map((o: Record<string, unknown>) => String(o.id ?? ""));
     const { data: slots, error: slotsErr } = await supabase
       .from("planning_slots")
       .select("id, datum, order_id, volgorde, aankomsttijd")
       .eq("owner_email", ownerEmail)
-      .eq("datum", planningDate)
       .neq("status", "afgerond")
       .in("order_id", ritjesOrderIds)
+      .order("datum", { ascending: false })
       .order("volgorde", { ascending: true });
     if (slotsErr) {
       return NextResponse.json({ error: "Planning ophalen mislukt." }, { status: 500 });
@@ -63,9 +63,14 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ orders: [] });
     }
 
-    // 3) Keep only slots on the current planning date.
-    const activeSlots = slotList.filter(
+    // 3) Use planningDate if present; otherwise use the most recent available date.
+    const preferredSlots = slotList.filter(
       (s: { datum?: string | null }) => String(s.datum ?? "") === planningDate
+    );
+    const fallbackDate = String(slotList[0]?.datum ?? "");
+    const activeDate = preferredSlots.length > 0 ? planningDate : fallbackDate;
+    const activeSlots = slotList.filter(
+      (s: { datum?: string | null }) => String(s.datum ?? "") === activeDate
     );
     if (activeSlots.length === 0) {
       return NextResponse.json({ orders: [] });
