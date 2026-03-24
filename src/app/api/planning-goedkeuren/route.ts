@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
     // Orders ophalen die in aanmerking komen
     const { data: orders, error: queryError } = await supabase
       .from("orders")
-      .select("id, order_nummer, aankomsttijd_slot, naam, telefoon_e164, telefoon_nummer, type, betaald, mp_tags, datum, datum_opmerking, meenemen_in_planning, nieuw_appje_sturen, opmerkingen_klant, bezorgtijd_voorkeur")
+      .select("id, order_nummer, aankomsttijd_slot, bestelling_totaal_prijs, naam, telefoon_e164, telefoon_nummer, type, betaald, mp_tags, datum, datum_opmerking, meenemen_in_planning, nieuw_appje_sturen, opmerkingen_klant, bezorgtijd_voorkeur")
       .eq("owner_email", ownerEmail)
       .eq("status", "ritjes_vandaag")
       .eq("meenemen_in_planning", true)
@@ -132,6 +132,7 @@ export async function POST(request: NextRequest) {
         order_nummer: o.order_nummer,
         naam: o.naam,
         aankomsttijd_slot: o.aankomsttijd_slot,
+        bestelling_totaal_prijs: o.bestelling_totaal_prijs,
         telefoon_e164: o.telefoon_e164,
         telefoon_nummer: o.telefoon_nummer,
         type: o.type,

@@ -23,6 +23,7 @@ export type WhatsAppOrderInput = {
   order_nummer?: string | null;
   naam?: string | null;
   aankomsttijd_slot?: string | null;
+  bestelling_totaal_prijs?: number | string | null;
   telefoon_e164?: string | null;
   telefoon_nummer?: string | null;
   type?: string | null;
@@ -226,6 +227,7 @@ function buildBusinessVariables(order: WhatsAppOrderInput, count: number): strin
     String(order.naam ?? ""),
     formatDDMM(order.datum),
     String(order.aankomsttijd_slot ?? ""),
+    String(order.bestelling_totaal_prijs ?? ""),
   ];
   return Array.from({ length: Math.max(0, count) }, (_, i) => vars[i] ?? "");
 }

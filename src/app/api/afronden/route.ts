@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
     // Haal order op om MP-tag te bepalen
     const { data: order, error: orderErr } = await supabase
       .from("orders")
-      .select("id, source, mp_tags, order_nummer, naam, aankomsttijd_slot, telefoon_e164, telefoon_nummer, type, betaald, datum, opmerkingen_klant, bezorgtijd_voorkeur")
+      .select("id, source, mp_tags, order_nummer, naam, aankomsttijd_slot, bestelling_totaal_prijs, telefoon_e164, telefoon_nummer, type, betaald, datum, opmerkingen_klant, bezorgtijd_voorkeur")
       .eq("owner_email", ownerEmail)
       .eq("id", orderId)
       .maybeSingle();
@@ -125,6 +125,7 @@ export async function POST(request: NextRequest) {
       order_nummer: (order as any).order_nummer,
       naam: (order as any).naam,
       aankomsttijd_slot: (order as any).aankomsttijd_slot,
+      bestelling_totaal_prijs: (order as any).bestelling_totaal_prijs,
       telefoon_e164: (order as any).telefoon_e164,
       telefoon_nummer: (order as any).telefoon_nummer,
       type: (order as any).type,
