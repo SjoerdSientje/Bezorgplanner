@@ -55,6 +55,22 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
     return m;
   }, [huidigeRitjesOrders]);
 
+  function mapRitjesApiToAppjesOrders(list: any[]): AppjesOrder[] {
+    return (list ?? [])
+      .filter((o: Record<string, unknown>) => String(o?.aankomsttijd_slot ?? "").trim() !== "")
+      .map((o: Record<string, unknown>, index: number) => ({
+        slot_id: "",
+        order_id: String(o?.id ?? ""),
+        volgorde: index + 1,
+        order_nummer: String(o?.order_nummer ?? ""),
+        naam: String(o?.naam ?? ""),
+        aankomsttijd_slot: String(o?.aankomsttijd_slot ?? ""),
+        telefoon_e164: String(o?.telefoon_e164 ?? ""),
+        telefoon_nummer: String(o?.telefoon_nummer ?? ""),
+        bezorgtijd_voorkeur: String(o?.bezorgtijd_voorkeur ?? ""),
+      }));
+  }
+
   function mergeLatestWithCurrent(apiOrders: AppjesOrder[]): AppjesOrder[] {
     if (!huidigeRitjesOrders?.length) return apiOrders;
     return apiOrders.map((o) => {
@@ -90,20 +106,20 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
       await new Promise((r) => setTimeout(r, 250));
 
       const fetchFresh = async () => {
-        const res = await fetch(`/api/planning-orders-appjes?t=${Date.now()}`, {
+        const res = await fetch(`/api/ritjes-vandaag?t=${Date.now()}`, {
           cache: "no-store",
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok) {
           throw new Error(String(json.error ?? "Orders ophalen mislukt."));
         }
-        return json;
+        return mapRitjesApiToAppjesOrders((json.orders ?? []) as any[]);
       };
 
       // Eerst fetchen (mogelijk terwijl PATCH nog in-flight is),
       // daarna 1 korte retry om zeker te zijn dat het nieuwste tijdslot zichtbaar is.
-      const data1: any = await fetchFresh();
-      setOrders(mergeLatestWithCurrent(data1.orders ?? []));
+      const data1 = await fetchFresh();
+      setOrders(mergeLatestWithCurrent(data1));
 
       const tplRes = await fetch(`/api/whatsapp-templates?t=${Date.now()}`, {
         cache: "no-store",
@@ -116,8 +132,8 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
       }
 
       await new Promise((r) => setTimeout(r, 500));
-      const data2: any = await fetchFresh();
-      setOrders(mergeLatestWithCurrent(data2.orders ?? []));
+      const data2 = await fetchFresh();
+      setOrders(mergeLatestWithCurrent(data2));
     } catch (e) {
       setOrders([]);
       setTemplatesError(e instanceof Error ? e.message : "Orders ophalen mislukt.");
@@ -150,11 +166,13 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
     try {
       // Herlaad net vóór verzending zodat we altijd het laatste tijdslot sturen
       const latestRes = await fetch(
-        `/api/planning-orders-appjes?t=${Date.now()}`,
+        `/api/ritjes-vandaag?t=${Date.now()}`,
         { cache: "no-store" }
       );
       const latestData = await latestRes.json().catch(() => ({}));
-      const latestOrders: AppjesOrder[] = mergeLatestWithCurrent(latestData.orders ?? orders);
+      const latestOrders: AppjesOrder[] = mergeLatestWithCurrent(
+        mapRitjesApiToAppjesOrders((latestData.orders ?? []) as any[])
+      );
 
       const payload = orders
         .filter((o) => selected.has(o.order_id))
