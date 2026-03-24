@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { requireAccountEmail } from "@/lib/account";
-import { getPlanningDateForGoedkeuren } from "@/lib/planning-date";
 
 export const dynamic = "force-dynamic";
 
@@ -26,14 +25,15 @@ export async function GET(request: NextRequest) {
 
     const supabase = createClient(supabaseUrl, serviceKey);
 
-    const { date: planningDate } = getPlanningDateForGoedkeuren();
-
-    // Source must match active planning exactly.
+    // Source = intersection of:
+    // - orders visible in Planning (planning_slots not afgerond)
+    // - orders visible in Ritjes voor vandaag (status = ritjes_vandaag)
     const { data: slots, error: slotsErr } = await supabase
       .from("planning_slots")
       .select("id, order_id, volgorde, aankomsttijd")
       .eq("owner_email", ownerEmail)
-      .eq("datum", planningDate)
+      .neq("status", "afgerond")
+      .order("datum", { ascending: true })
       .order("volgorde", { ascending: true });
     if (slotsErr) {
       return NextResponse.json({ error: "Planning ophalen mislukt." }, { status: 500 });
@@ -47,11 +47,9 @@ export async function GET(request: NextRequest) {
     const orderIds = slotList.map((s: { order_id: string }) => s.order_id);
     const { data: ordersData, error: ordersErr } = await supabase
       .from("orders")
-      .select("id, order_nummer, naam, aankomsttijd_slot, telefoon_e164, telefoon_nummer, bezorgtijd_voorkeur, status, meenemen_in_planning, nieuw_appje_sturen")
+      .select("id, order_nummer, naam, aankomsttijd_slot, telefoon_e164, telefoon_nummer, bezorgtijd_voorkeur, status")
       .eq("owner_email", ownerEmail)
       .eq("status", "ritjes_vandaag")
-      .eq("meenemen_in_planning", true)
-      .eq("nieuw_appje_sturen", true)
       .in("id", orderIds);
     if (ordersErr) {
       return NextResponse.json({ error: "Orders ophalen mislukt." }, { status: 500 });
@@ -84,7 +82,7 @@ export async function GET(request: NextRequest) {
       .filter((r) => r != null);
 
     return NextResponse.json(
-      { orders: rows, datum: planningDate },
+      { orders: rows },
       { headers: { "Cache-Control": "no-store" } }
     );
   } catch (e) {
