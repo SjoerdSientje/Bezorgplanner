@@ -26,11 +26,11 @@ export async function GET(request: NextRequest) {
     const supabase = createClient(supabaseUrl, serviceKey);
 
     // Source = intersection of:
-    // - orders visible in Planning (planning_slots not afgerond)
+    // - orders visible in current planning section
     // - orders visible in Ritjes voor vandaag (status = ritjes_vandaag)
     const { data: slots, error: slotsErr } = await supabase
       .from("planning_slots")
-      .select("id, order_id, volgorde, aankomsttijd")
+      .select("id, datum, order_id, volgorde, aankomsttijd")
       .eq("owner_email", ownerEmail)
       .neq("status", "afgerond")
       .order("datum", { ascending: true })
@@ -59,27 +59,34 @@ export async function GET(request: NextRequest) {
       (ordersData ?? []).map((o: Record<string, unknown>) => [String(o.id), o])
     );
 
-    const rows = slotList
+    const allRows = slotList
       .map((slot: Record<string, unknown>) => {
         const o = ordersById.get(String(slot.order_id)) ?? null;
         if (!o) return null;
         const slotTijd = String(slot.aankomsttijd ?? "").trim();
         const orderTijd = String((o as Record<string, unknown>).aankomsttijd_slot ?? "").trim();
-        const finalTijd = orderTijd || slotTijd;
-        if (!finalTijd) return null;
+        // Must have a timeslot in both planning and ritjes.
+        if (!slotTijd || !orderTijd) return null;
         return {
           slot_id: String(slot.id ?? ""),
           order_id: String(slot.order_id ?? ""),
+          datum: String((slot as Record<string, unknown>).datum ?? ""),
           volgorde: Number(slot.volgorde ?? 0),
           order_nummer: String((o as Record<string, unknown>).order_nummer ?? ""),
           naam: String((o as Record<string, unknown>).naam ?? ""),
-          aankomsttijd_slot: finalTijd,
+          aankomsttijd_slot: orderTijd,
           telefoon_e164: String((o as Record<string, unknown>).telefoon_e164 ?? ""),
           telefoon_nummer: String((o as Record<string, unknown>).telefoon_nummer ?? ""),
           bezorgtijd_voorkeur: String((o as Record<string, unknown>).bezorgtijd_voorkeur ?? ""),
         };
       })
       .filter((r) => r != null);
+
+    // Match Planning page behavior: first (earliest) date is the current section.
+    const activeDate = allRows.length > 0 ? String(allRows[0].datum ?? "") : "";
+    const rows = activeDate
+      ? allRows.filter((r) => String((r as Record<string, unknown>).datum ?? "") === activeDate)
+      : allRows;
 
     return NextResponse.json(
       { orders: rows },
