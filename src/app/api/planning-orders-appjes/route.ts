@@ -28,45 +28,60 @@ export async function GET(request: NextRequest) {
 
     const { date: planningDate } = getPlanningDateForGoedkeuren();
 
-    // Live source for "Stuur appjes":
-    // orders currently in ritjes_vandaag with a timeslot and valid send flags/date.
+    // Source must match active planning exactly.
+    const { data: slots, error: slotsErr } = await supabase
+      .from("planning_slots")
+      .select("id, order_id, volgorde, aankomsttijd")
+      .eq("owner_email", ownerEmail)
+      .eq("datum", planningDate)
+      .order("volgorde", { ascending: true });
+    if (slotsErr) {
+      return NextResponse.json({ error: "Planning ophalen mislukt." }, { status: 500 });
+    }
+
+    const slotList = slots ?? [];
+    if (slotList.length === 0) {
+      return NextResponse.json({ orders: [] });
+    }
+
+    const orderIds = slotList.map((s: { order_id: string }) => s.order_id);
     const { data: ordersData, error: ordersErr } = await supabase
       .from("orders")
-      .select("id, order_nummer, naam, aankomsttijd_slot, telefoon_e164, telefoon_nummer, bezorgtijd_voorkeur, meenemen_in_planning, nieuw_appje_sturen, datum_opmerking, datum")
+      .select("id, order_nummer, naam, aankomsttijd_slot, telefoon_e164, telefoon_nummer, bezorgtijd_voorkeur, status, meenemen_in_planning, nieuw_appje_sturen")
       .eq("owner_email", ownerEmail)
       .eq("status", "ritjes_vandaag")
       .eq("meenemen_in_planning", true)
       .eq("nieuw_appje_sturen", true)
-      .not("aankomsttijd_slot", "is", null)
-      .neq("aankomsttijd_slot", "")
-      .eq("owner_email", ownerEmail)
-      .or(`datum_opmerking.ilike.%vandaag%,datum.eq.${planningDate}`);
-
+      .in("id", orderIds);
     if (ordersErr) {
       return NextResponse.json({ error: "Orders ophalen mislukt." }, { status: 500 });
     }
-    const rows = (ordersData ?? [])
-      .map((o) => ({
-        slot_id: "", // optional for /api/stuur-appjes
-        order_id: String(o.id ?? ""),
-        volgorde: 0,
-        order_nummer: String(o.order_nummer ?? ""),
-        naam: String(o.naam ?? ""),
-        aankomsttijd_slot: String(o.aankomsttijd_slot ?? ""),
-        telefoon_e164: String(o.telefoon_e164 ?? ""),
-        telefoon_nummer: String(o.telefoon_nummer ?? ""),
-        bezorgtijd_voorkeur: String(o.bezorgtijd_voorkeur ?? ""),
-      }))
-      .sort((a, b) => {
-        const sa = (a.aankomsttijd_slot.split(" - ")[0] ?? "").trim();
-        const sb = (b.aankomsttijd_slot.split(" - ")[0] ?? "").trim();
-        return sa.localeCompare(sb);
-      })
-      .map((o, idx) => ({ ...o, volgorde: idx + 1 }));
 
-    if (rows.length === 0) {
-      return NextResponse.json({ orders: [] });
-    }
+    const ordersById = new Map(
+      (ordersData ?? []).map((o: Record<string, unknown>) => [String(o.id), o])
+    );
+
+    const rows = slotList
+      .map((slot: Record<string, unknown>) => {
+        const o = ordersById.get(String(slot.order_id)) ?? null;
+        if (!o) return null;
+        const slotTijd = String(slot.aankomsttijd ?? "").trim();
+        const orderTijd = String((o as Record<string, unknown>).aankomsttijd_slot ?? "").trim();
+        const finalTijd = orderTijd || slotTijd;
+        if (!finalTijd) return null;
+        return {
+          slot_id: String(slot.id ?? ""),
+          order_id: String(slot.order_id ?? ""),
+          volgorde: Number(slot.volgorde ?? 0),
+          order_nummer: String((o as Record<string, unknown>).order_nummer ?? ""),
+          naam: String((o as Record<string, unknown>).naam ?? ""),
+          aankomsttijd_slot: finalTijd,
+          telefoon_e164: String((o as Record<string, unknown>).telefoon_e164 ?? ""),
+          telefoon_nummer: String((o as Record<string, unknown>).telefoon_nummer ?? ""),
+          bezorgtijd_voorkeur: String((o as Record<string, unknown>).bezorgtijd_voorkeur ?? ""),
+        };
+      })
+      .filter((r) => r != null);
 
     return NextResponse.json(
       { orders: rows, datum: planningDate },
