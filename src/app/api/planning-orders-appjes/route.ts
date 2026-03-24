@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { requireAccountEmail } from "@/lib/account";
-import { getPlanningDateForGoedkeuren } from "@/lib/planning-date";
 
 export const dynamic = "force-dynamic";
 
@@ -42,10 +41,8 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ orders: [] });
     }
 
-    // 2) Read planning slots only for those ritjes-orders.
-    // Prefer the operation planning date (same logic as planning-goedkeuren),
-    // but gracefully fallback to the most recent planning date that has slots.
-    const { date: planningDate } = getPlanningDateForGoedkeuren();
+    // 2) Read active planning slots only for those ritjes-orders.
+    // No date selection here: the user wants the strict intersection at click time.
     const ritjesOrderIds = ritjesWithSlot.map((o: Record<string, unknown>) => String(o.id ?? ""));
     const { data: slots, error: slotsErr } = await supabase
       .from("planning_slots")
@@ -63,28 +60,25 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ orders: [] });
     }
 
-    // 3) Use planningDate if present; otherwise use the most recent available date.
-    const preferredSlots = slotList.filter(
-      (s: { datum?: string | null }) => String(s.datum ?? "") === planningDate
-    );
-    const fallbackDate = String(slotList[0]?.datum ?? "");
-    const activeDate = preferredSlots.length > 0 ? planningDate : fallbackDate;
-    const activeSlots = slotList.filter(
-      (s: { datum?: string | null }) => String(s.datum ?? "") === activeDate
-    );
-    if (activeSlots.length === 0) {
-      return NextResponse.json({ orders: [] });
+    // 3) Require non-empty planning slot timeslot as well.
+    // If an order has multiple slots, keep the first one from the sorted list
+    // (latest date first, then lowest volgorde).
+    const activeSlotMap = new Map<string, { slot_id: string; volgorde: number }>();
+    for (const s of slotList as Array<{
+      order_id?: string | null;
+      id?: string | null;
+      volgorde?: number | null;
+      aankomsttijd?: string | null;
+    }>) {
+      const orderId = String(s.order_id ?? "").trim();
+      if (!orderId) continue;
+      if (activeSlotMap.has(orderId)) continue;
+      if (String(s.aankomsttijd ?? "").trim() === "") continue;
+      activeSlotMap.set(orderId, {
+        slot_id: String(s.id ?? ""),
+        volgorde: Number(s.volgorde ?? 0),
+      });
     }
-
-    // Require non-empty planning slot timeslot too.
-    const activeSlotMap = new Map(
-      activeSlots
-        .filter((s: { aankomsttijd?: string | null }) => String(s.aankomsttijd ?? "").trim() !== "")
-        .map((s: { order_id: string; id: string; volgorde: number }) => [
-          String(s.order_id),
-          { slot_id: String(s.id), volgorde: Number(s.volgorde ?? 0) },
-        ])
-    );
     if (activeSlotMap.size === 0) {
       return NextResponse.json({ orders: [] });
     }
