@@ -60,9 +60,21 @@ function env(name: string): string {
 }
 
 function normalizePhone(raw: string | null | undefined): string {
-  return String(raw ?? "")
-    .replace(/[^\d+]/g, "")
-    .replace(/^\+/, "");
+  const cleaned = String(raw ?? "").replace(/[^\d+]/g, "");
+  if (!cleaned) return "";
+
+  // Keep explicit international formats.
+  if (cleaned.startsWith("+")) return cleaned.slice(1);
+  if (cleaned.startsWith("00")) return cleaned.slice(2);
+
+  // Dutch local mobile/landline fallback (e.g. 06..., 010..., 020...).
+  if (cleaned.startsWith("0")) return `31${cleaned.slice(1)}`;
+
+  // Already country-coded without plus.
+  if (cleaned.startsWith("31")) return cleaned;
+
+  // Last resort: keep digits and let WA validate.
+  return cleaned;
 }
 
 export function getOrderKind(order: WhatsAppOrderInput): OrderKind {
