@@ -93,7 +93,11 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
         const res = await fetch(`/api/planning-orders-appjes?t=${Date.now()}`, {
           cache: "no-store",
         });
-        return res.json().catch(() => ({}));
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(String(json.error ?? "Orders ophalen mislukt."));
+        }
+        return json;
       };
 
       // Eerst fetchen (mogelijk terwijl PATCH nog in-flight is),
@@ -114,8 +118,9 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
       await new Promise((r) => setTimeout(r, 500));
       const data2: any = await fetchFresh();
       setOrders(mergeLatestWithCurrent(data2.orders ?? []));
-    } catch {
+    } catch (e) {
       setOrders([]);
+      setTemplatesError(e instanceof Error ? e.message : "Orders ophalen mislukt.");
     } finally {
       setLoadingOrders(false);
     }

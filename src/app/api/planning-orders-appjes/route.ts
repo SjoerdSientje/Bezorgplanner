@@ -25,42 +25,27 @@ export async function GET(request: NextRequest) {
 
     const supabase = createClient(supabaseUrl, serviceKey);
 
-    // 1) Fetch Ritjes voor vandaag orders that already have a visible timeslot.
-    const { data: ritjesOrders, error: ordersErr } = await supabase
-      .from("orders")
-      .select("id, order_nummer, naam, aankomsttijd_slot, telefoon_e164, telefoon_nummer, bezorgtijd_voorkeur")
-      .eq("owner_email", ownerEmail)
-      .eq("status", "ritjes_vandaag");
-    if (ordersErr) {
-      return NextResponse.json({ error: "Orders ophalen mislukt." }, { status: 500 });
-    }
-    const ritjesWithSlot = (ritjesOrders ?? []).filter(
-      (o: Record<string, unknown>) => String(o.aankomsttijd_slot ?? "").trim() !== ""
-    );
-    if (ritjesWithSlot.length === 0) {
-      return NextResponse.json({ orders: [] });
-    }
-
-    // 2) Read active planning slots only for those ritjes-orders.
-    // No date selection here: the user wants the strict intersection at click time.
-    const ritjesOrderIds = ritjesWithSlot.map((o: Record<string, unknown>) => String(o.id ?? ""));
+    // 1) Start from what is currently visible in Planning:
+    // active (not afgerond) slots with a filled planning timeslot.
     const { data: slots, error: slotsErr } = await supabase
       .from("planning_slots")
       .select("id, datum, order_id, volgorde, aankomsttijd")
       .eq("owner_email", ownerEmail)
       .neq("status", "afgerond")
-      .in("order_id", ritjesOrderIds)
       .order("datum", { ascending: false })
       .order("volgorde", { ascending: true });
     if (slotsErr) {
-      return NextResponse.json({ error: "Planning ophalen mislukt." }, { status: 500 });
+      return NextResponse.json(
+        { error: `Planning ophalen mislukt: ${slotsErr.message}` },
+        { status: 500 }
+      );
     }
     const slotList = slots ?? [];
     if (slotList.length === 0) {
       return NextResponse.json({ orders: [] });
     }
 
-    // 3) Require non-empty planning slot timeslot as well.
+    // 2) Keep first valid slot per order.
     // If an order has multiple slots, keep the first one from the sorted list
     // (latest date first, then lowest volgorde).
     const activeSlotMap = new Map<string, { slot_id: string; volgorde: number }>();
@@ -83,9 +68,24 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ orders: [] });
     }
 
-    const ritjesById = new Map(
-      ritjesWithSlot.map((o: Record<string, unknown>) => [String(o.id ?? ""), o])
+    // 3) Intersect with Ritjes voor vandaag that currently has an order timeslot.
+    const activeOrderIds = Array.from(activeSlotMap.keys());
+    const { data: ritjesOrders, error: ordersErr } = await supabase
+      .from("orders")
+      .select("id, order_nummer, naam, aankomsttijd_slot, telefoon_e164, telefoon_nummer, bezorgtijd_voorkeur")
+      .eq("owner_email", ownerEmail)
+      .eq("status", "ritjes_vandaag")
+      .in("id", activeOrderIds);
+    if (ordersErr) {
+      return NextResponse.json(
+        { error: `Ritjes ophalen mislukt: ${ordersErr.message}` },
+        { status: 500 }
+      );
+    }
+    const ritjesWithSlot = (ritjesOrders ?? []).filter(
+      (o: Record<string, unknown>) => String(o.aankomsttijd_slot ?? "").trim() !== ""
     );
+    const ritjesById = new Map(ritjesWithSlot.map((o: Record<string, unknown>) => [String(o.id ?? ""), o]));
 
     const rows = Array.from(activeSlotMap.entries())
       .map(([orderId, slot]) => {
