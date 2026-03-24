@@ -106,9 +106,10 @@ export async function DELETE(
     }
 
     const supabase = createClient(supabaseUrl, serviceKey);
-    const { error } = await supabase
+    const { data: deletedRows, error } = await supabase
       .from("orders")
       .delete()
+      .select("id")
       .eq("owner_email", ownerEmail)
       .eq("id", id);
     if (error) {
@@ -117,6 +118,9 @@ export async function DELETE(
         { error: "Verwijderen mislukt.", detail: error.message },
         { status: 500 }
       );
+    }
+    if (!deletedRows || deletedRows.length === 0) {
+      return NextResponse.json({ error: "Order niet gevonden." }, { status: 404 });
     }
 
     return NextResponse.json({ ok: true }, { headers: { "Cache-Control": "no-store" } });

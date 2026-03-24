@@ -106,7 +106,11 @@ export default function RitjesVandaagPage() {
       setOrders((prev) => prev.filter((_, i) => i !== rowIndex));
       setTableResetKey((k) => k + 1);
       try {
-        await fetch(`/api/orders/${id}`, { method: "DELETE" });
+        const res = await fetch(`/api/orders/${id}`, { method: "DELETE" });
+        if (!res.ok) {
+          // Delete is niet echt gelukt op server; herstel state uit DB.
+          await fetchRitjes();
+        }
       } catch {
         // Rollback bij fout
         await fetchRitjes();

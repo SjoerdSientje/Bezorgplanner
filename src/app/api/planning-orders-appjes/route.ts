@@ -4,6 +4,23 @@ import { requireAccountEmail } from "@/lib/account";
 
 export const dynamic = "force-dynamic";
 
+function shouldIncludeForStuurAppjes(order: {
+  meenemen_in_planning?: boolean | null;
+  nieuw_appje_sturen?: boolean | null;
+  datum_opmerking?: string | null;
+  datum?: string | null;
+}, slotDate: string): boolean {
+  if (order.meenemen_in_planning !== true) return false;
+  if (order.nieuw_appje_sturen !== true) return false;
+
+  const opmerking = String(order.datum_opmerking ?? "").trim().toLowerCase();
+  const hasVandaag = opmerking.includes("vandaag");
+  const orderDate = String(order.datum ?? "").trim();
+  const dateMatchesSlot = orderDate !== "" && slotDate !== "" && orderDate === slotDate;
+
+  return hasVandaag || dateMatchesSlot;
+}
+
 /**
  * GET /api/planning-orders-appjes
  * Returns all orders that are currently in the active planning (today's planning_slots),
@@ -48,11 +65,12 @@ export async function GET(request: NextRequest) {
     // 2) Keep first valid slot per order.
     // If an order has multiple slots, keep the first one from the sorted list
     // (latest date first, then lowest volgorde).
-    const activeSlotMap = new Map<string, { slot_id: string; volgorde: number }>();
+    const activeSlotMap = new Map<string, { slot_id: string; volgorde: number; slot_date: string }>();
     for (const s of slotList as Array<{
       order_id?: string | null;
       id?: string | null;
       volgorde?: number | null;
+      datum?: string | null;
       aankomsttijd?: string | null;
     }>) {
       const orderId = String(s.order_id ?? "").trim();
@@ -62,6 +80,7 @@ export async function GET(request: NextRequest) {
       activeSlotMap.set(orderId, {
         slot_id: String(s.id ?? ""),
         volgorde: Number(s.volgorde ?? 0),
+        slot_date: String(s.datum ?? ""),
       });
     }
     if (activeSlotMap.size === 0) {
@@ -72,7 +91,7 @@ export async function GET(request: NextRequest) {
     const activeOrderIds = Array.from(activeSlotMap.keys());
     const { data: ritjesOrders, error: ordersErr } = await supabase
       .from("orders")
-      .select("id, order_nummer, naam, aankomsttijd_slot, telefoon_e164, telefoon_nummer, bezorgtijd_voorkeur")
+      .select("id, order_nummer, naam, aankomsttijd_slot, telefoon_e164, telefoon_nummer, bezorgtijd_voorkeur, meenemen_in_planning, nieuw_appje_sturen, datum_opmerking, datum")
       .eq("owner_email", ownerEmail)
       .eq("status", "ritjes_vandaag")
       .in("id", activeOrderIds);
@@ -94,6 +113,19 @@ export async function GET(request: NextRequest) {
         const ritjesTijd = String((o as Record<string, unknown>).aankomsttijd_slot ?? "").trim();
         // Must have a timeslot in ritjes too.
         if (!ritjesTijd) return null;
+        if (
+          !shouldIncludeForStuurAppjes(
+            {
+              meenemen_in_planning: (o as Record<string, unknown>).meenemen_in_planning as boolean | null | undefined,
+              nieuw_appje_sturen: (o as Record<string, unknown>).nieuw_appje_sturen as boolean | null | undefined,
+              datum_opmerking: (o as Record<string, unknown>).datum_opmerking as string | null | undefined,
+              datum: (o as Record<string, unknown>).datum as string | null | undefined,
+            },
+            String(slot?.slot_date ?? "")
+          )
+        ) {
+          return null;
+        }
         return {
           slot_id: slot?.slot_id ?? "",
           order_id: orderId,

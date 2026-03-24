@@ -61,10 +61,33 @@ export type RitjesOrderFromApi = Record<string, unknown>;
  * Gebruik na elke fetch (incl. Verversen) zodat de volgorde altijd klopt.
  */
 export function sortRitjesOrdersNewestFirst<T extends RitjesOrderFromApi>(orders: T[]): T[] {
+  const parseOrderNum = (value: unknown): number => {
+    const s = String(value ?? "").trim();
+    const m = s.match(/\d+/g);
+    if (!m || m.length === 0) return 0;
+    const n = parseInt(m.join(""), 10);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const parseTime = (value: unknown): number => {
+    if (!value) return 0;
+    const t = new Date(String(value)).getTime();
+    return Number.isFinite(t) ? t : 0;
+  };
+
   return [...orders].sort((a, b) => {
-    const ta = a.created_at ? new Date(String(a.created_at)).getTime() : 0;
-    const tb = b.created_at ? new Date(String(b.created_at)).getTime() : 0;
-    return tb - ta;
+    const tb = parseTime(b.created_at);
+    const ta = parseTime(a.created_at);
+    if (tb !== ta) return tb - ta;
+
+    // Fallback for rows with missing/equal created_at: highest order number first.
+    const nb = parseOrderNum(b.order_nummer);
+    const na = parseOrderNum(a.order_nummer);
+    if (nb !== na) return nb - na;
+
+    const ub = parseTime(b.updated_at);
+    const ua = parseTime(a.updated_at);
+    return ub - ua;
   });
 }
 
