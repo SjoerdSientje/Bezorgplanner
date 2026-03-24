@@ -16,6 +16,20 @@ export async function DELETE(
     }
 
     const supabase = createServerSupabaseClient();
+    const { data: slot, error: slotErr } = await supabase
+      .from("planning_slots")
+      .select("id, order_id")
+      .eq("owner_email", ownerEmail)
+      .eq("id", slotId)
+      .maybeSingle();
+    if (slotErr) {
+      console.error("[api/planning-slots DELETE] read", slotErr);
+      return NextResponse.json({ error: slotErr.message }, { status: 500 });
+    }
+    if (!slot?.id || !slot?.order_id) {
+      return NextResponse.json({ error: "Planning-slot niet gevonden." }, { status: 404 });
+    }
+
     const { error } = await supabase
       .from("planning_slots")
       .delete()
@@ -24,6 +38,21 @@ export async function DELETE(
     if (error) {
       console.error("[api/planning-slots DELETE]", error);
       return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    // If user deletes from Planning, clear stale timeslot/send-flag on the order
+    // so it does not keep reappearing in "Stuur appjes" unexpectedly.
+    const { error: orderUpdateErr } = await supabase
+      .from("orders")
+      .update({
+        aankomsttijd_slot: null,
+        nieuw_appje_sturen: false,
+      })
+      .eq("owner_email", ownerEmail)
+      .eq("id", String(slot.order_id));
+    if (orderUpdateErr) {
+      console.error("[api/planning-slots DELETE] order update", orderUpdateErr);
+      return NextResponse.json({ error: orderUpdateErr.message }, { status: 500 });
     }
 
     return NextResponse.json({ ok: true }, { headers: { "Cache-Control": "no-store" } });
