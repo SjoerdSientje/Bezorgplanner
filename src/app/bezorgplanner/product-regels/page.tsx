@@ -3,11 +3,16 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import Header from "@/components/Header";
-import { DEFAULT_PRODUCT_RULES_V1 } from "@/lib/product-default-items-rules";
+import ProductRulesForm from "@/components/ProductRulesForm";
+import {
+  DEFAULT_PRODUCT_RULES_V1,
+  isProductDefaultItemsRulesV1,
+} from "@/lib/product-default-items-rules";
 import type { ProductDefaultItemsRulesV1 } from "@/lib/product-default-items-rules";
 
 export default function ProductRegelsPage() {
-  const [jsonText, setJsonText] = useState("");
+  const [rules, setRules] = useState<ProductDefaultItemsRulesV1>(DEFAULT_PRODUCT_RULES_V1);
+  const [jsonDraft, setJsonDraft] = useState("");
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [fromDatabase, setFromDatabase] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -22,8 +27,9 @@ export default function ProductRegelsPage() {
       const res = await fetch(`/api/product-rules?t=${Date.now()}`, { cache: "no-store" });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? "Laden mislukt");
-      const rules = data.rules as ProductDefaultItemsRulesV1;
-      setJsonText(JSON.stringify(rules, null, 2));
+      const loaded = data.rules as ProductDefaultItemsRulesV1;
+      setRules(loaded);
+      setJsonDraft(JSON.stringify(loaded, null, 2));
       setUpdatedAt(data.updated_at ?? null);
       setFromDatabase(Boolean(data.fromDatabase));
     } catch (e) {
@@ -42,21 +48,18 @@ export default function ProductRegelsPage() {
     setMessage(null);
     setError(null);
     try {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(jsonText);
-      } catch {
-        throw new Error("JSON is ongeldig. Controleer komma’s en aanhalingstekens.");
-      }
       const res = await fetch("/api/product-rules", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rules: parsed }),
+        body: JSON.stringify({ rules }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? "Opslaan mislukt");
-      setMessage("Opgeslagen. Nieuwe Shopify/MP-orders gebruiken deze regels.");
-      setJsonText(JSON.stringify(data.rules, null, 2));
+      setMessage("Opgeslagen. Nieuwe bestellingen gebruiken deze regels.");
+      if (data.rules) {
+        setRules(data.rules);
+        setJsonDraft(JSON.stringify(data.rules, null, 2));
+      }
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Opslaan mislukt");
@@ -66,15 +69,39 @@ export default function ProductRegelsPage() {
   };
 
   const resetDefault = () => {
-    setJsonText(JSON.stringify(DEFAULT_PRODUCT_RULES_V1, null, 2));
-    setMessage("Standaardregels in het veld gezet — klik op Opslaan om dit in de database te zetten.");
+    setRules(DEFAULT_PRODUCT_RULES_V1);
+    setJsonDraft(JSON.stringify(DEFAULT_PRODUCT_RULES_V1, null, 2));
+    setMessage(
+      "Standaardregels ingeladen. Klik op Opslaan om dit definitief te maken."
+    );
+  };
+
+  const applyJsonDraft = () => {
+    setError(null);
+    setMessage(null);
+    try {
+      const parsed: unknown = JSON.parse(jsonDraft);
+      if (!isProductDefaultItemsRulesV1(parsed)) {
+        throw new Error(
+          "De JSON klopt niet. Controleer of alle onderdelen aanwezig zijn (versie 1)."
+        );
+      }
+      setRules(parsed);
+      setMessage("JSON toegepast op het formulier hierboven. Vergeet niet op Opslaan te klikken.");
+    } catch (e) {
+      if (e instanceof SyntaxError) {
+        setError("JSON is ongeldig. Controleer komma’s en aanhalingstekens.");
+      } else {
+        setError(e instanceof Error ? e.message : "Kon JSON niet toepassen");
+      }
+    }
   };
 
   return (
     <>
       <Header />
       <main className="min-h-[calc(100vh-4rem)] bg-white">
-        <div className="mx-auto w-full max-w-none px-4 py-8 sm:px-6 sm:py-12">
+        <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 sm:py-12">
           <div className="mb-6 flex items-center gap-4">
             <Link
               href="/bezorgplanner"
@@ -85,54 +112,47 @@ export default function ProductRegelsPage() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
               </svg>
             </Link>
-            <h1 className="text-xl font-semibold text-koopje-black sm:text-2xl">Product regels</h1>
+            <h1 className="text-xl font-semibold text-koopje-black sm:text-2xl">
+              Standaard inbegrepen spullen
+            </h1>
           </div>
 
-          <p className="max-w-3xl text-sm text-koopje-black/75">
-            Hier staan de regels voor <strong>standaard inbegrepen items</strong> per fiets (Fietspompje,
-            levering &quot;Volledig rijklaar&quot; / &quot;In doos&quot;, modelgroepen). Dit wordt gebruikt
-            bij het opbouwen van <code className="rounded bg-stone-100 px-1">line_items_json</code> voor
-            Shopify-webhooks en MP-orders. Wijzigingen gelden voor <strong>nieuwe</strong> imports; bestaande
-            orders in de database veranderen niet.
+          <p className="text-sm leading-relaxed text-stone-700">
+            Hier bepaal je welke items automatisch bij een fiets horen op de paklijst en in
+            het productoverzicht — afhankelijk van <strong>hoe de fiets geleverd wordt</strong>{" "}
+            (volledig rijklaar of in de doos) en <strong>welk model</strong> het is. Wijzigingen
+            gelden voor <strong>nieuwe</strong> orders; bestaande orders in het overzicht blijven
+            zoals ze waren.
           </p>
 
-          <div className="mt-6 max-w-4xl rounded-xl border border-koopje-orange/30 bg-orange-50/60 p-4 text-sm text-stone-800">
-            <p className="font-semibold text-koopje-black">MP, Shopify webshop en handmatig — wat hoort bij deze JSON?</p>
-            <ul className="mt-3 list-inside list-disc space-y-2 text-stone-700">
+          <details className="mt-5 rounded-xl border border-stone-200 bg-stone-50/90 p-4 text-sm text-stone-700">
+            <summary className="cursor-pointer font-medium text-koopje-black">
+              Meer uitleg (Shopify, Marktplaats, prijzen)
+            </summary>
+            <ul className="mt-3 list-inside list-disc space-y-2 pl-0.5">
               <li>
-                <strong>Deze JSON bestuurt alleen de lijst met standaard inbegrepen spullen</strong> (onder
-                &quot;Standaard inbegrepen&quot; in de producten-popup), op basis van de Shopify-property{" "}
-                <strong>Levering</strong> (waarden zoals volledig rijklaar / in doos) en het <strong>model</strong>{" "}
-                uit de productnaam. Dat geldt voor elke bron zodra die property op de fiets-regel staat.
+                Deze instellingen sturen alleen de lijst &quot;standaard inbegrepen&quot;, op basis van
+                de keuze <strong>Levering</strong> en het <strong>model</strong> uit de productnaam.
               </li>
               <li>
-                <strong>Marktplaats (MP)</strong>: bij een nieuwe MP-order wordt de Levering uit het formulier
-                op de fiets gezet; dezelfde regels-engine wordt gebruikt als bij Shopify.
+                <strong>Marktplaats</strong>: bij een nieuwe order vult het formulier Levering in;
+                dezelfde regels worden gebruikt als bij de webshop.
               </li>
               <li>
-                <strong>Shopify (website)</strong>: orders komen binnen met echte line items en vaak
-                properties op de fiets; prijzen komen uit Shopify (regeltotaal).
+                <strong>Webshop (Shopify)</strong>: orders komen binnen met productregels en
+                eigenschappen zoals in de winkel zijn ingevuld.
               </li>
               <li>
-                <strong>Shopify handmatig</strong>: orders zonder properties leunen op de <strong>producttitel</strong>{" "}
-                (splitsing op <code className="rounded bg-white/80 px-1">+</code> en{" "}
-                <code className="rounded bg-white/80 px-1">&amp;</code>, montage-tekst als property op de fiets,
-                extra&apos;s als losse regels). <strong>Die titel-logica staat vast in de code</strong> (
-                <code className="rounded bg-white/80 px-1">buildLineItemsJson</code> in{" "}
-                <code className="rounded bg-white/80 px-1">shopify-order.ts</code>), niet in onderstaande JSON.
-              </li>
-              <li>
-                <strong>Prijzen</strong> (wat de klant betaalt per regel / totaal) worden nergens door deze JSON
-                bepaald: Shopify gebruikt orderregels; MP gebruikt het ingevoerde totaal + technische dummy-prijs
-                op fietsregels voor de app-logica.
+                <strong>Prijzen</strong> worden hier niet ingesteld; die komen uit de order
+                (Shopify) of uit wat je bij Marktplaats invult.
               </li>
             </ul>
-          </div>
+          </details>
 
           {updatedAt && (
-            <p className="mt-2 text-xs text-koopje-black/50">
+            <p className="mt-4 text-xs text-koopje-black/50">
               Laatst opgeslagen: {new Date(updatedAt).toLocaleString("nl-NL")}
-              {!fromDatabase && " (nog geen rij in database — toont code-standaard)"}
+              {!fromDatabase && " (nog geen eigen versie — je ziet de fabrieksstandaard)"}
             </p>
           )}
 
@@ -154,7 +174,7 @@ export default function ProductRegelsPage() {
                   onClick={resetDefault}
                   className="rounded-lg border border-stone-300 bg-white px-4 py-2 text-sm font-medium text-stone-700 hover:bg-stone-50"
                 >
-                  Vul standaard (uit code)
+                  Herstel fabrieksstandaard
                 </button>
                 <button
                   type="button"
@@ -172,34 +192,39 @@ export default function ProductRegelsPage() {
                 <p className="mt-3 text-sm text-red-600">{error}</p>
               )}
 
-              <textarea
-                value={jsonText}
-                onChange={(e) => setJsonText(e.target.value)}
-                spellCheck={false}
-                className="mt-4 h-[min(70vh,720px)] w-full max-w-5xl rounded-xl border-2 border-stone-300 bg-stone-50 p-4 font-mono text-xs text-stone-900 focus:border-koopje-orange focus:outline-none"
-              />
-
-              <div className="mt-6 max-w-3xl rounded-xl border border-stone-200 bg-stone-50/80 p-4 text-xs text-stone-600">
-                <p className="font-semibold text-stone-800">Structuur (version 1)</p>
-                <ul className="mt-2 list-inside list-disc space-y-1">
-                  <li>
-                    <code>always</code>: altijd toegevoegd; gebruik <code>{"{model}"}</code> waar het modelnaam
-                    moet invullen.
-                  </li>
-                  <li>
-                    <code>excludedBrandKeywords</code>: als de productnaam dit bevat (bijv. engwe), worden de
-                    standaard slot/tas (VR) of slot (ID) overgeslagen.
-                  </li>
-                  <li>
-                    <code>volledigRijklaar.standardItems</code> en <code>inDoos.standardItems</code>: voor
-                    alle andere merken.
-                  </li>
-                  <li>
-                    <code>modelExtras</code>: lijsten met <code>models</code> (exacte match op modelstring,
-                    case-insensitive) en <code>items</code> (ook met <code>{"{model}"}</code>).
-                  </li>
-                </ul>
+              <div className="mt-8">
+                <ProductRulesForm rules={rules} onChange={setRules} />
               </div>
+
+              <details
+                className="mt-10 rounded-xl border border-amber-200/80 bg-amber-50/50 p-4"
+                onToggle={(e) => {
+                  const el = e.currentTarget;
+                  if (el.open) setJsonDraft(JSON.stringify(rules, null, 2));
+                }}
+              >
+                <summary className="cursor-pointer text-sm font-medium text-stone-800">
+                  Geavanceerd: ruwe JSON (alleen voor technische beheerders)
+                </summary>
+                <p className="mt-3 text-xs text-stone-600">
+                  Zelfde inhoud als het formulier; gebruik alleen als je bulk-import of
+                  copy-paste vanuit een andere omgeving nodig hebt. Na wijzigingen:{" "}
+                  <strong>Pas JSON toe</strong> en daarna <strong>Opslaan</strong>.
+                </p>
+                <textarea
+                  value={jsonDraft}
+                  onChange={(e) => setJsonDraft(e.target.value)}
+                  spellCheck={false}
+                  className="mt-3 h-64 w-full rounded-lg border border-stone-300 bg-white p-3 font-mono text-xs text-stone-900 focus:border-koopje-orange focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={applyJsonDraft}
+                  className="mt-3 rounded-lg border border-stone-300 bg-white px-4 py-2 text-sm font-medium text-stone-800 hover:bg-stone-50"
+                >
+                  Pas JSON toe op formulier
+                </button>
+              </details>
             </>
           )}
         </div>

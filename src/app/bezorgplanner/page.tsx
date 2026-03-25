@@ -57,9 +57,9 @@ export default function BezorgplannerPage() {
                 href="/bezorgplanner/product-regels"
                 className="block rounded-xl border border-koopje-black/10 bg-white p-5 shadow-sm transition hover:border-koopje-orange hover:shadow"
               >
-                <span className="font-medium text-koopje-black">Product regels</span>
+                <span className="font-medium text-koopje-black">Standaard inbegrepen</span>
                 <span className="mt-1 block text-sm text-koopje-black/60">
-                  Standaard inbegrepen items per levering en model (bewerkbaar)
+                  Wat hoort automatisch bij een fiets (levering en model)
                 </span>
               </Link>
             </li>
