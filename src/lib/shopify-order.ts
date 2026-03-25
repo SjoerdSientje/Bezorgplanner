@@ -586,23 +586,17 @@ function getOrderType(order: ShopifyOrder): RitjesOrderRow["type"] {
  * Doel: de `tag` kolom op "Ritjes vandaag" vullen.
  */
 function getMpTagFromShopifyOrderTags(order: ShopifyOrder): string | null {
-  const raw = String(order.tags ?? "");
-  const t = raw.toLowerCase();
+  // Shopify tags komen als comma-separated string.
+  // We willen deze tags 1-op-1 terugzien in de 'tag' kolom.
+  const raw = String(order.tags ?? "").trim();
+  if (!raw) return "geen tag";
 
-  const matches: string[] = [];
-  const pushIf = (needle: string, label: string) => {
-    if (t.includes(needle)) matches.push(label);
-  };
-
-  pushIf("ophalen", "ophalen");
-  pushIf("terugbrengen", "terugbrengen");
-  pushIf("reparatie aan huis", "reparatie aan huis");
-  pushIf("proefrit", "proefrit");
-
-  // Uniek houden, en netjes join'en.
-  const uniq = Array.from(new Set(matches));
-  if (uniq.length === 0) return "geen tag";
-  return uniq.join(", ");
+  const tags = raw
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean);
+  const uniq = Array.from(new Set(tags));
+  return uniq.length ? uniq.join(", ") : "geen tag";
 }
 
 /** Zet een Shopify-order om naar één rij voor Ritjes voor vandaag (orders-tabel). */
