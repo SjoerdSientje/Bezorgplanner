@@ -188,7 +188,6 @@ export default function RitjesVandaagPage() {
             value={value}
             lineItemsJson={lineItemsJson}
             onSaveMulti={handleSaveMulti}
-            orderTotalPrice={(order as { bestelling_totaal_prijs?: number | null })?.bestelling_totaal_prijs ?? null}
           />
         );
       },

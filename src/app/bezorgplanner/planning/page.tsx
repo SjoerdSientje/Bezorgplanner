@@ -332,7 +332,6 @@ function PlanningTabel({
                               <ProductenCell
                                 value={String(row.producten ?? "")}
                                 lineItemsJson={row.line_items_json ?? null}
-                                orderTotalPrice={row.bestelling_totaal_prijs ?? null}
                               />
                             );
                           }

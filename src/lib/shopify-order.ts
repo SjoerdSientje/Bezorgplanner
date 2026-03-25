@@ -8,6 +8,7 @@ import {
   DEFAULT_PRODUCT_RULES_V1,
   type ProductDefaultItemsRulesV1,
 } from "@/lib/product-default-items-rules";
+import { hasLeveringProperty } from "@/lib/line-items-json-sanitize";
 
 export { extractModelnaamVanProduct } from "@/lib/bike-model-name";
 export type { ProductDefaultItemsRulesV1 } from "@/lib/product-default-items-rules";
@@ -69,6 +70,18 @@ export interface ShopifyOrder {
   billing_address?: ShopifyAddress | null;
   line_items?: ShopifyLineItem[] | null;
   shipping_lines?: ShopifyShippingLine[] | null;
+}
+
+const PRICE_LIMIT_FIETS = 500;
+
+/** Fietsregel: unitprijs boven drempel (Shopify) óf property Levering (o.a. MP). */
+function isFietsShopifyLineItem(item: ShopifyLineItem): boolean {
+  const unitPrice =
+    typeof item.price === "string"
+      ? parseFloat(item.price)
+      : Number(item.price ?? 0);
+  if (unitPrice > PRICE_LIMIT_FIETS) return true;
+  return hasLeveringProperty(item.properties);
 }
 
 const SHIPPING_EXCLUDE_TITLE = "koopjefatbike showroom";
@@ -222,12 +235,8 @@ function getAantalFietsen(order: ShopifyOrder): number {
     tags.includes("proefrit");
 
   if (isReparatieType) return lineItems.length;
-  const priceLimit = 500;
   return lineItems
-    .filter((item) => {
-      const p = typeof item.price === "string" ? parseFloat(item.price) : Number(item.price ?? 0);
-      return p > priceLimit;
-    })
+    .filter((item) => isFietsShopifyLineItem(item))
     .reduce((sum, item) => {
       // Elke '&' in de titel is een extra fiets
       const bikeCount = splitBikesOnAmpersand(item.name ?? "").length || 1;
@@ -251,7 +260,6 @@ function getProducten(order: ShopifyOrder): string {
   return names.join("\n");
 }
 
-const PRICE_LIMIT_FIETS = 500;
 const EXCLUDE_PROPERTY_NAME = "_Personalize";
 
 export interface LineItemForJson {
@@ -392,12 +400,8 @@ export function buildLineItemsJson(
   const structured: LineItemForJson[] = [];
 
   for (const item of items) {
-    const unitPrice =
-      typeof item.price === "string"
-        ? parseFloat(item.price)
-        : Number(item.price ?? 0);
     const lineTotal = getShopifyLineItemLineTotal(item);
-    const isFiets = unitPrice > PRICE_LIMIT_FIETS;
+    const isFiets = isFietsShopifyLineItem(item);
     const rawName = (item.name ?? "").trim();
     const rawProps = item.properties ?? [];
     const hasProps = rawProps.length > 0;

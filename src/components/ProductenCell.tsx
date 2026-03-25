@@ -1,6 +1,14 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { stripMpDummyPricesFromLineItemsJsonString } from "@/lib/line-items-json-sanitize";
+
+/** Oude MP-data: fiets op €999 dummy — tonen als €0 tot DB-migratie is gedraaid. */
+function effectiveLineItemsJson(json: string | null | undefined): string | null | undefined {
+  if (!json) return json;
+  const { json: out } = stripMpDummyPricesFromLineItemsJsonString(json);
+  return out ?? json;
+}
 
 interface LineItem {
   name: string;
@@ -24,10 +32,8 @@ interface Props {
   lineItemsJson?: string | null;
   /** Simpele tekst-save (legacy, wordt niet meer gebruikt in ritjes-vandaag) */
   onSave?: (value: string) => void;
-  /** Multi-field save: producten + line_items_json + bestelling_totaal_prijs */
+  /** Multi-field save: producten + line_items_json + bestelling_totaal_prijs (= som regelprijzen) */
   onSaveMulti?: (fields: Record<string, unknown>) => Promise<void>;
-  /** Optioneel: toon order-totaal i.p.v. berekende som (read-only use-cases zoals Planning). */
-  orderTotalPrice?: string | number | null;
 }
 
 let idCounter = 0;
@@ -36,7 +42,8 @@ function genId() { return String(++idCounter); }
 function parseToEditRows(lineItemsJson: string | null | undefined, fallbackText: string): EditRow[] {
   if (lineItemsJson) {
     try {
-      const items = JSON.parse(lineItemsJson) as LineItem[];
+      const raw = effectiveLineItemsJson(lineItemsJson) ?? lineItemsJson;
+      const items = JSON.parse(raw) as LineItem[];
       return items.map((item) => ({
         _id: genId(),
         name: item.name ?? "",
@@ -65,7 +72,21 @@ function buildLineItemsJsonFromRows(rows: EditRow[]): string {
   return JSON.stringify(items);
 }
 
-export default function ProductenCell({ value, lineItemsJson, onSave, onSaveMulti, orderTotalPrice }: Props) {
+function sumRowPrices(rows: EditRow[]): number {
+  return rows.reduce((sum, r) => {
+    const n = parseFloat(r.price);
+    return sum + (Number.isFinite(n) ? n : 0);
+  }, 0);
+}
+
+function sumLineItemPrices(items: LineItem[]): number {
+  return items.reduce((sum, i) => {
+    const n = Number(i.price);
+    return sum + (Number.isFinite(n) ? n : 0);
+  }, 0);
+}
+
+export default function ProductenCell({ value, lineItemsJson, onSave, onSaveMulti }: Props) {
   const [panelOpen, setPanelOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [rows, setRows] = useState<EditRow[]>([]);
@@ -133,7 +154,7 @@ export default function ProductenCell({ value, lineItemsJson, onSave, onSaveMult
     setNewPrice("0");
   }
 
-  const totalPrice = rows.reduce((sum, r) => sum + (parseFloat(r.price) || 0), 0);
+  const rowSum = sumRowPrices(rows);
 
   const saveEdits = useCallback(async () => {
     setSaving(true);
@@ -149,7 +170,7 @@ export default function ProductenCell({ value, lineItemsJson, onSave, onSaveMult
         await onSaveMulti({
           producten: newProductenText || null,
           line_items_json: newLineItemsJson,
-          bestelling_totaal_prijs: totalPrice || null,
+          bestelling_totaal_prijs: rowSum,
         });
       } else if (onSave) {
         onSave(newProductenText);
@@ -159,34 +180,20 @@ export default function ProductenCell({ value, lineItemsJson, onSave, onSaveMult
     } finally {
       setSaving(false);
     }
-  }, [rows, totalPrice, onSaveMulti, onSave]);
+  }, [rows, rowSum, onSaveMulti, onSave]);
 
   // Platte weergavetekst — gebruikt lokale state zodat wijzigingen direct zichtbaar zijn
   let displayItems: LineItem[] = [];
   if (localLineItemsJson) {
-    try { displayItems = JSON.parse(localLineItemsJson) as LineItem[]; } catch { /* ignore */ }
+    try {
+      const raw = effectiveLineItemsJson(localLineItemsJson) ?? localLineItemsJson;
+      displayItems = JSON.parse(raw) as LineItem[];
+    } catch { /* ignore */ }
   }
   const hasStructured = displayItems.length > 0;
   const displayText = localValue || "—";
-  /**
-   * Prijzen in deze popup komen uit twee bronnen:
-   * - `line_items_json`: per regel (Shopify line items / handmatig in producten-editor),
-   *   gebruikt bij bewerken en soms als "regelprijs" in het overzicht.
-   * - `orderTotalPrice` (optioneel): `bestelling_totaal_prijs` op de order (kolom in
-   *   Ritjes / Planning). Die kan afwijken van de som van regels (korting, verzending,
-   *   handmatige aanpassing in de tabel zonder producten opnieuw op te slaan).
-   *
-   * In **view** (niet-edit): als er een geldig ordertotaal is meegegeven, tonen we geen
-   * € per regel (om 875 vs 999 verwarring te voorkomen) en tonen we onderaan "Bestelling totaal".
-   */
-  const orderTotal =
-    orderTotalPrice === null || orderTotalPrice === undefined || String(orderTotalPrice).trim() === ""
-      ? null
-      : Number(orderTotalPrice);
-  const canEdit = !!(onSaveMulti || onSave);
-  const showPrices =
-    editing ||
-    (canEdit && (orderTotal == null || !Number.isFinite(orderTotal)));
+  /** Onderaan de popup: altijd de som van de regelprijzen (zelfde als bij opslaan in bestelling_totaal_prijs). */
+  const displaySum = sumLineItemPrices(displayItems);
 
   return (
     <div ref={ref} className="relative">
@@ -312,10 +319,10 @@ export default function ProductenCell({ value, lineItemsJson, onSave, onSaveMult
                   </button>
                 </div>
 
-                {/* Totaal */}
+                {/* Zelfde bedrag als bestelling_totaal_prijs na opslaan */}
                 <div className="flex items-center justify-between rounded-lg bg-stone-100 px-2 py-1.5 text-xs">
-                  <span className="font-medium text-stone-500">Totaal prijs</span>
-                  <span className="font-semibold text-stone-700">€ {totalPrice.toFixed(2)}</span>
+                  <span className="font-medium text-stone-500">Bestelling totaal</span>
+                  <span className="font-semibold text-stone-700">€ {rowSum.toFixed(2)}</span>
                 </div>
               </div>
             ) : (
@@ -334,9 +341,9 @@ export default function ProductenCell({ value, lineItemsJson, onSave, onSaveMult
                           {item.isFiets && <span className="mr-1 text-[10px]">🚲</span>}
                           {item.name}
                         </span>
-                        {showPrices ? (
-                          <span className="shrink-0 whitespace-nowrap text-xs text-stone-400">€{item.price.toFixed(2)}</span>
-                        ) : null}
+                        <span className="shrink-0 whitespace-nowrap text-xs text-stone-400">
+                          €{Number.isFinite(item.price) ? item.price.toFixed(2) : "0.00"}
+                        </span>
                       </div>
                       {item.properties.length > 0 && (
                         <ul className="mt-1.5 space-y-0.5 border-t border-stone-200 pt-1.5">
@@ -367,10 +374,10 @@ export default function ProductenCell({ value, lineItemsJson, onSave, onSaveMult
                     {value || "—"}
                   </div>
                 )}
-                {orderTotal != null && Number.isFinite(orderTotal) && (
+                {hasStructured && (
                   <div className="flex items-center justify-between rounded-lg bg-stone-100 px-3 py-2 text-xs">
                     <span className="font-medium text-stone-500">Bestelling totaal</span>
-                    <span className="font-semibold text-stone-700">€ {orderTotal.toFixed(2)}</span>
+                    <span className="font-semibold text-stone-700">€ {displaySum.toFixed(2)}</span>
                   </div>
                 )}
               </div>

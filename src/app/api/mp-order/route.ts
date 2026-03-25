@@ -31,8 +31,7 @@ interface ProductRegel {
 
 /**
  * Bouw line_items_json vanuit de MP producten-lijst.
- * Fietsen krijgen een hoge dummy-prijs (999) zodat isFiets=true en
- * de bestaande getDefaultItemsVoorFiets() correct werkt.
+ * Fietsen: prijs 0 + property Levering — fietsdetectie gaat via Levering (zie shopify-order).
  *
  * Achterzitje/Voorrekje logica:
  * - gemonteerd=ja → extra property op de fiets (verschijnt alleen in producten-dropdown)
@@ -76,7 +75,7 @@ function buildMpLineItemsJson(
           ? [{ name: "Montage opmerking", value: p.montageOpmerking.trim() }]
           : []),
       ];
-      lineItems.push({ name: p.naam, price: 999, properties: props });
+      lineItems.push({ name: p.naam, price: 0, properties: props });
 
       // Losse extra's als aparte line items na de fiets
       for (const extra of losseExtras) {
