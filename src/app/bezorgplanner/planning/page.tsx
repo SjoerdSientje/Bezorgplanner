@@ -131,7 +131,7 @@ function PlanningTabel({
     <div className="mb-8">
       <h2 className={`mb-3 text-base font-semibold ${labelColor}`}>{label}</h2>
       <div
-        className="overflow-x-auto overflow-y-auto pb-2 rounded-xl border-2 border-stone-300 bg-white shadow-sm"
+        className="overflow-x-auto rounded-xl border-2 border-stone-300 bg-white shadow-sm"
         onKeyDownCapture={(e) => {
           if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) return;
           const target = e.target as HTMLElement | null;
