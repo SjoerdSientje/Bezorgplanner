@@ -19,3 +19,21 @@ export function requireAccountEmail(request: NextRequest): string {
 export function allAccountEmails(): string[] {
   return ALLOWED_USERS.map((u) => u.email);
 }
+
+/** Shopify-import voor dit account alleen als de order-notitie dit bevat (case-insensitive). */
+const MALYAR_ACCOUNT = "malyar@aiventive.nl";
+const MALYAR_NOTE_REQUIRED_SUBSTRING = "malyar";
+
+/**
+ * Bepaalt of een binnenkomende Shopify-webhook voor `ownerEmail` een order mag aanmaken/updaten.
+ * Het account malyar@ krijgt alleen orders waar "Malyar" in de ordernote staat; overige accounts ongewijzigd.
+ */
+export function shopifyWebhookOrderAppliesToOwner(
+  ownerEmail: string,
+  orderNote: string | null | undefined
+): boolean {
+  if (normalizeEmail(ownerEmail) !== normalizeEmail(MALYAR_ACCOUNT)) {
+    return true;
+  }
+  return String(orderNote ?? "").toLowerCase().includes(MALYAR_NOTE_REQUIRED_SUBSTRING);
+}

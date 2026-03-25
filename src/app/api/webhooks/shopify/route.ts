@@ -5,7 +5,7 @@ import {
   mapShopifyOrderToRitjesRow,
   type ShopifyOrder,
 } from "@/lib/shopify-order";
-import { allAccountEmails } from "@/lib/account";
+import { allAccountEmails, shopifyWebhookOrderAppliesToOwner } from "@/lib/account";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -25,6 +25,10 @@ export async function POST(request: NextRequest) {
 
     const insertedOrUpdatedIds: string[] = [];
     for (const ownerEmail of allAccountEmails()) {
+      if (!shopifyWebhookOrderAppliesToOwner(ownerEmail, order.note)) {
+        continue;
+      }
+
       const { data: existing } = await supabase
         .from("orders")
         .select("id")
