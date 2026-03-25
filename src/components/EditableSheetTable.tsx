@@ -54,6 +54,8 @@ export default function EditableSheetTable({
   const totalDataRows = dataRowCount ?? initialData?.length ?? 0;
   const effectiveMinRows = readOnly ? 0 : MIN_ROWS;
   const rowCount = Math.max(effectiveMinRows, totalDataRows);
+  const isWideAddressColumn = (header: string) =>
+    header === "Volledig adress" || header === "Adres";
 
   const [values, setValues] = useState<string[][]>(() =>
     initialData ? padToRows(initialData, colCount, rowCount) : createEmptyGrid(headers, rowCount)
@@ -100,7 +102,9 @@ export default function EditableSheetTable({
             {headers.map((h) => (
               <th
                 key={h}
-                className="whitespace-nowrap border border-stone-300 px-2 py-2 font-medium text-stone-800"
+                className={`whitespace-nowrap border border-stone-300 px-2 py-2 font-medium text-stone-800 ${
+                  isWideAddressColumn(h) ? "min-w-[22rem]" : ""
+                }`}
               >
                 {h}
               </th>
@@ -131,15 +135,25 @@ export default function EditableSheetTable({
                   </td>
                 )}
                 {row.map((cellValue, j) => {
+                  const header = headers[j];
+                  const wide = isWideAddressColumn(header);
                   return (
-                    <td key={j} className="min-w-[4rem] border border-stone-300 p-0 align-top">
+                    <td
+                      key={j}
+                      className={`min-w-[4rem] border border-stone-300 p-0 align-top ${
+                        wide ? "min-w-[22rem]" : ""
+                      }`}
+                    >
                       {readOnly ? (
-                        <span className="block px-2 py-1.5 text-sm text-stone-700">
+                        <span
+                          className={`block px-2 py-1.5 text-sm text-stone-700 ${
+                            wide ? "whitespace-normal break-words" : ""
+                          }`}
+                        >
                           {cellValue ?? ""}
                         </span>
                       ) : (
                         (() => {
-                          const header = headers[j];
                           const customRenderer = cellRenderers?.[header];
                           const onSave = (newValue: string) => {
                             handleChange(i, j, newValue);
