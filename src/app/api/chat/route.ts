@@ -77,7 +77,7 @@ function buildContextBlock(ritjesOrders: RitjesOrder[]): string {
     block += ` Momenteel hebben ${withSlot.length} order(s) een slot (de route) en ${withoutSlot.length} order(s) nog geen slot.`;
   }
   block +=
-    "\n\nRoep **set_aankomsttijd_slots** alleen aan nadat de gebruiker je voorstel **expliciet heeft bevestigd** (niet in het eerste antwoord zonder 'ja' / 'doe maar' / vergelijkbaar). Match op order_nummer. Alleen orders die aan de criteria voldoen.";
+    "\n\nRoep **set_aankomsttijd_slots** alleen aan na **expliciete bevestiging** van de gebruiker. Je kunt tijdsloten **zetten**, **wijzigen** of **wissen** (lege string of 'verwijder' per order). Match op order_nummer. Alleen orders die aan de criteria voldoen.";
   return block;
 }
 
@@ -119,13 +119,13 @@ export async function POST(request: NextRequest) {
         function: {
           name: "set_aankomsttijd_slots",
           description:
-            "Zet het klanttijdslot (kolom Aankomsttijd) voor één of meer orders. Formaat: 'HH:MM - HH:MM' (2 uur; 45 min voor + 75 min na verwachte aankomst, of binnen tijdsrestrictie uit bezorgtijd voorkeur). Alleen aanroepen nadat de gebruiker expliciet heeft bevestigd dat je mag doorvoeren. Match op order_nummer.",
+            "Zet, wijzig of wis het klanttijdslot (kolom Aankomsttijd) voor één of meer orders. Zetten: 'HH:MM - HH:MM'. Wissen: lege string of 'verwijder'. Alleen na expliciete bevestiging van de gebruiker. Match op order_nummer.",
           parameters: {
             type: "object",
             properties: {
               updates: {
                 type: "array",
-                description: "Lijst van order_nummer en het nieuwe tijdslot",
+                description: "Lijst van order_nummer met tijdslot of leeg om te wissen",
                 items: {
                   type: "object",
                   properties: {
@@ -135,7 +135,8 @@ export async function POST(request: NextRequest) {
                     },
                     aankomsttijd_slot: {
                       type: "string",
-                      description: "Tijdslot in formaat HH:MM - HH:MM",
+                      description:
+                        "Tijdslot als HH:MM - HH:MM. Lege string of 'verwijder' / 'leeg' om het tijdslot van deze order te verwijderen.",
                     },
                   },
                   required: ["order_nummer", "aankomsttijd_slot"],
@@ -203,7 +204,9 @@ export async function POST(request: NextRequest) {
         // Nieuwe OpenAI-typen hebben verschillende tool_call-varianten; gebruik een veilige any-cast voor function-calls
         const fn = (tc as any).function;
         if (!fn || fn.name !== "set_aankomsttijd_slots") continue;
-        let args: { updates?: Array<{ order_nummer: string; aankomsttijd_slot: string }> };
+        let args: {
+          updates?: Array<{ order_nummer: string; aankomsttijd_slot: string }>;
+        };
         try {
           args = JSON.parse(fn.arguments ?? "{}");
         } catch {
@@ -221,8 +224,11 @@ export async function POST(request: NextRequest) {
 
         for (const u of updates) {
           const onr = String(u.order_nummer ?? "").trim();
-          const slot = String(u.aankomsttijd_slot ?? "").trim();
-          if (!onr || !slot) continue;
+          const slotRaw = String(u.aankomsttijd_slot ?? "").trim();
+          const clearSlot =
+            slotRaw === "" ||
+            /^(verwijder|leeg|wis|clear)$/i.test(slotRaw);
+          if (!onr) continue;
 
           // Zoek de order op — met dubbele beveiliging: status + meenemen_in_planning + datum
           let orderId: string | null = null;
@@ -258,16 +264,22 @@ export async function POST(request: NextRequest) {
             continue;
           }
 
+          const valueToStore = clearSlot ? null : slotRaw;
+
           const { error } = await supabase
             .from("orders")
-            .update({ aankomsttijd_slot: slot })
+            .update({ aankomsttijd_slot: valueToStore })
             .eq("owner_email", ownerEmail)
             .eq("id", orderId);
 
           if (error) {
             results.push(`Order ${onr}: fout (${error.message})`);
           } else {
-            results.push(`Order ${onr}: tijdslot gezet op ${slot}`);
+            results.push(
+              clearSlot
+                ? `Order ${onr}: tijdslot verwijderd`
+                : `Order ${onr}: tijdslot gezet op ${slotRaw}`
+            );
             slotsUpdated = true;
           }
         }
