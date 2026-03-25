@@ -26,6 +26,8 @@ interface Props {
   onSave?: (value: string) => void;
   /** Multi-field save: producten + line_items_json + bestelling_totaal_prijs */
   onSaveMulti?: (fields: Record<string, unknown>) => Promise<void>;
+  /** Optioneel: toon order-totaal i.p.v. berekende som (read-only use-cases zoals Planning). */
+  orderTotalPrice?: string | number | null;
 }
 
 let idCounter = 0;
@@ -63,7 +65,7 @@ function buildLineItemsJsonFromRows(rows: EditRow[]): string {
   return JSON.stringify(items);
 }
 
-export default function ProductenCell({ value, lineItemsJson, onSave, onSaveMulti }: Props) {
+export default function ProductenCell({ value, lineItemsJson, onSave, onSaveMulti, orderTotalPrice }: Props) {
   const [panelOpen, setPanelOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [rows, setRows] = useState<EditRow[]>([]);
@@ -166,6 +168,12 @@ export default function ProductenCell({ value, lineItemsJson, onSave, onSaveMult
   }
   const hasStructured = displayItems.length > 0;
   const displayText = localValue || "—";
+  const isReadOnly = !onSaveMulti && !onSave;
+  const showPrices = !isReadOnly;
+  const orderTotal =
+    orderTotalPrice === null || orderTotalPrice === undefined || String(orderTotalPrice).trim() === ""
+      ? null
+      : Number(orderTotalPrice);
 
   return (
     <div ref={ref} className="relative">
@@ -313,7 +321,9 @@ export default function ProductenCell({ value, lineItemsJson, onSave, onSaveMult
                           {item.isFiets && <span className="mr-1 text-[10px]">🚲</span>}
                           {item.name}
                         </span>
-                        <span className="shrink-0 whitespace-nowrap text-xs text-stone-400">€{item.price.toFixed(2)}</span>
+                        {showPrices ? (
+                          <span className="shrink-0 whitespace-nowrap text-xs text-stone-400">€{item.price.toFixed(2)}</span>
+                        ) : null}
                       </div>
                       {item.properties.length > 0 && (
                         <ul className="mt-1.5 space-y-0.5 border-t border-stone-200 pt-1.5">
@@ -342,6 +352,12 @@ export default function ProductenCell({ value, lineItemsJson, onSave, onSaveMult
                 ) : (
                   <div className="whitespace-pre-wrap rounded-lg bg-stone-50 px-3 py-2 text-sm text-stone-700">
                     {value || "—"}
+                  </div>
+                )}
+                {orderTotal != null && Number.isFinite(orderTotal) && (
+                  <div className="flex items-center justify-between rounded-lg bg-stone-100 px-3 py-2 text-xs">
+                    <span className="font-medium text-stone-500">Bestelling totaal</span>
+                    <span className="font-semibold text-stone-700">€ {orderTotal.toFixed(2)}</span>
                   </div>
                 )}
               </div>

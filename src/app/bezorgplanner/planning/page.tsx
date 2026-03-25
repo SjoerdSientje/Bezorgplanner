@@ -3,6 +3,7 @@
 import { useEffect, useCallback, useState, useMemo, useLayoutEffect, useRef, type KeyboardEvent } from "react";
 import Link from "next/link";
 import Header from "@/components/Header";
+import ProductenCell from "@/components/ProductenCell";
 
 const PLANNING_HEADERS = [
   "Order nummer",
@@ -39,6 +40,7 @@ type PlanningRow = {
   betaald: string | boolean;
   aantal_fietsen: string | number;
   producten: string;
+  line_items_json?: string | null;
   opmerking_klant: string;
   volledig_adres: string;
   telefoon_nummer: string;
@@ -323,6 +325,18 @@ function PlanningTabel({
                         }`}
                       >
                         {(() => {
+                          // Product(en): klikbaar (popup) maar niet bewerkbaar
+                          const isProductenCol = i === 4;
+                          if (isProductenCol) {
+                            return (
+                              <ProductenCell
+                                value={String(row.producten ?? "")}
+                                lineItemsJson={row.line_items_json ?? null}
+                                orderTotalPrice={row.bestelling_totaal_prijs ?? null}
+                              />
+                            );
+                          }
+
                           // Link Aankoopbewijs is the last column in the "Rest" array
                           const isLinkCol = i === 10;
                           const href = isLinkCol ? String(v ?? "").trim() : "";

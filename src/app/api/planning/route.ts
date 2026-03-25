@@ -90,6 +90,7 @@ export async function GET(request: NextRequest) {
           betaalwijze,
           aantal_fietsen: o.aantal_fietsen ?? "",
           producten: o.producten ?? "",
+          line_items_json: o.line_items_json ?? "",
           opmerking_klant: o.opmerkingen_klant ?? "",
           volledig_adres: o.volledig_adres ?? "",
           telefoon_nummer: o.telefoon_nummer ?? "",
