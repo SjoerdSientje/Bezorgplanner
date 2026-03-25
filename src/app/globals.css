@@ -22,4 +22,11 @@
     transform-origin: top left;
     width: calc(100% / 0.75);
   }
+
+  /* Extra table-only zoom-out on mobile (keeps page UI larger). */
+  .mobile-table-scale {
+    transform: scale(0.85);
+    transform-origin: top left;
+    width: calc(100% / 0.85);
+  }
 }

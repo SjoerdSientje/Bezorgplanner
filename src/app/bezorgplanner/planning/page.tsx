@@ -172,187 +172,189 @@ function PlanningTabel({
           handleArrowNavigation(e, cellRow, cellCol);
         }}
       >
-        <table ref={tableRef} className="w-full min-w-max border-collapse text-left text-sm">
-          <thead>
-            <tr className="bg-stone-100">
-              <th className="sticky left-0 z-30 w-8 border border-stone-300 bg-white px-1 py-2 text-center text-xs font-medium text-stone-800">
-                #
-              </th>
-              {/* lege header voor verwijder-kolom */}
-              <th className="border border-stone-300 px-1 py-2" />
-              {PLANNING_HEADERS.map((h) => (
-                <th
-                  key={h}
-                  className={`whitespace-nowrap border border-stone-300 px-2 py-2 font-medium text-stone-800 ${
-                    h === "Volledig adress" ? "min-w-[22rem]" : ""
-                  }`}
-                >
-                  {h}
+        <div className="mobile-table-scale">
+          <table ref={tableRef} className="w-full min-w-max border-collapse text-left text-sm">
+            <thead>
+              <tr className="bg-stone-100">
+                <th className="sticky left-0 z-30 w-8 border border-stone-300 bg-white px-1 py-2 text-center text-xs font-medium text-stone-800">
+                  #
                 </th>
-              ))}
-              {Array.from({ length: fillerCols }).map((_, idx) => (
-                <th
-                  key={`__fill_h_${idx}`}
-                  className="whitespace-nowrap border border-stone-300 px-2 py-2 font-medium text-stone-800 w-16 min-w-[4rem]"
-                />
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 ? (
-              <tr>
-                <td colSpan={PLANNING_HEADERS.length + 2} className="border border-stone-300 px-2 py-4 text-center text-koopje-black/60">
-                  Geen ritjes.
-                </td>
+                {/* lege header voor verwijder-kolom */}
+                <th className="border border-stone-300 px-1 py-2" />
+                {PLANNING_HEADERS.map((h) => (
+                  <th
+                    key={h}
+                    className={`whitespace-nowrap border border-stone-300 px-2 py-2 font-medium text-stone-800 ${
+                      h === "Volledig adress" ? "min-w-[22rem]" : ""
+                    }`}
+                  >
+                    {h}
+                  </th>
+                ))}
+                {Array.from({ length: fillerCols }).map((_, idx) => (
+                  <th
+                    key={`__fill_h_${idx}`}
+                    className="whitespace-nowrap border border-stone-300 px-2 py-2 font-medium text-stone-800 w-16 min-w-[4rem]"
+                  />
+                ))}
               </tr>
-            ) : (
-              rows.map((row, rowIndex) => (
-                <tr key={row.slot_id}>
-                  <td className="sticky left-0 z-30 w-8 border border-stone-300 bg-white px-1 py-1 text-center text-xs text-stone-700">
-                    {rowIndex + 1}
+            </thead>
+            <tbody>
+              {rows.length === 0 ? (
+                <tr>
+                  <td colSpan={PLANNING_HEADERS.length + 2} className="border border-stone-300 px-2 py-4 text-center text-koopje-black/60">
+                    Geen ritjes.
                   </td>
-                  {/* verwijder-knop */}
-                  <td className="border border-stone-300 px-1 py-1 text-center align-middle">
-                    <button
-                      type="button"
-                      onClick={() => onDeleteSlot(row.slot_id, String(row.order_nummer))}
-                      className="rounded p-1 text-stone-400 transition hover:bg-red-50 hover:text-red-500"
-                      title="Verwijder uit planning"
+                </tr>
+              ) : (
+                rows.map((row, rowIndex) => (
+                  <tr key={row.slot_id}>
+                    <td className="sticky left-0 z-30 w-8 border border-stone-300 bg-white px-1 py-1 text-center text-xs text-stone-700">
+                      {rowIndex + 1}
+                    </td>
+                    {/* verwijder-knop */}
+                    <td className="border border-stone-300 px-1 py-1 text-center align-middle">
+                      <button
+                        type="button"
+                        onClick={() => onDeleteSlot(row.slot_id, String(row.order_nummer))}
+                        className="rounded p-1 text-stone-400 transition hover:bg-red-50 hover:text-red-500"
+                        title="Verwijder uit planning"
+                      >
+                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </td>
+                    <td
+                      tabIndex={0}
+                      data-cell-row={rowIndex}
+                      data-cell-col={0}
+                      className="min-w-[4rem] border border-stone-300 p-0 align-top focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
                     >
-                      <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                      </svg>
-                    </button>
-                  </td>
-                  <td
-                    tabIndex={0}
-                    data-cell-row={rowIndex}
-                    data-cell-col={0}
-                    className="min-w-[4rem] border border-stone-300 p-0 align-top focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
-                  >
-                    <Link
-                      href={`/bezorgplanner/afronden/${row.order_id}`}
-                      className="block px-2 py-1.5 text-koopje-orange underline decoration-koopje-orange underline-offset-2 hover:text-koopje-orange-dark"
+                      <Link
+                        href={`/bezorgplanner/afronden/${row.order_id}`}
+                        className="block px-2 py-1.5 text-koopje-orange underline decoration-koopje-orange underline-offset-2 hover:text-koopje-orange-dark"
+                      >
+                        {formatCell(row.order_nummer)} afronden
+                      </Link>
+                    </td>
+                    {/* Naam */} 
+                    <td
+                      tabIndex={0}
+                      data-cell-row={rowIndex}
+                      data-cell-col={1}
+                      className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
                     >
-                      {formatCell(row.order_nummer)} afronden
-                    </Link>
-                  </td>
-                  {/* Naam */} 
-                  <td
-                    tabIndex={0}
-                    data-cell-row={rowIndex}
-                    data-cell-col={1}
-                    className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
-                  >
-                    {formatCell(row.naam)}
-                  </td>
-                  {/* Aankomsttijd */} 
-                  <td
-                    tabIndex={0}
-                    data-cell-row={rowIndex}
-                    data-cell-col={2}
-                    className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
-                  >
-                    {formatCell(row.aankomsttijd)}
-                  </td>
-                  {/* Tijd opmerking */} 
-                  <td
-                    tabIndex={0}
-                    data-cell-row={rowIndex}
-                    data-cell-col={3}
-                    className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
-                  >
-                    {formatCell(row.tijd_opmerking)}
-                  </td>
-                  {/* Adress URL */} 
-                  <td
-                    tabIndex={0}
-                    data-cell-row={rowIndex}
-                    data-cell-col={4}
-                    className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
-                  >
-                    {row.adres_url ? (
-                      <a href={row.adres_url} target="_blank" rel="noopener noreferrer" className="text-koopje-orange underline underline-offset-2">
-                        📍 Kaart
-                      </a>
-                    ) : (
-                      ""
-                    )}
-                  </td>
-                  {/* Bel link */} 
-                  <td
-                    tabIndex={0}
-                    data-cell-row={rowIndex}
-                    data-cell-col={5}
-                    className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
-                  >
-                    {(() => {
-                      const phone =
-                        normalizeToE164(row.telefoon_nummer) ?? extractPhoneFromBelLink(row.bel_link);
-                      return phone ? (
-                        <a href={`tel:${phone}`} className="text-koopje-orange underline underline-offset-2">
-                          📞 Bellen
+                      {formatCell(row.naam)}
+                    </td>
+                    {/* Aankomsttijd */} 
+                    <td
+                      tabIndex={0}
+                      data-cell-row={rowIndex}
+                      data-cell-col={2}
+                      className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
+                    >
+                      {formatCell(row.aankomsttijd)}
+                    </td>
+                    {/* Tijd opmerking */} 
+                    <td
+                      tabIndex={0}
+                      data-cell-row={rowIndex}
+                      data-cell-col={3}
+                      className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
+                    >
+                      {formatCell(row.tijd_opmerking)}
+                    </td>
+                    {/* Adress URL */} 
+                    <td
+                      tabIndex={0}
+                      data-cell-row={rowIndex}
+                      data-cell-col={4}
+                      className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
+                    >
+                      {row.adres_url ? (
+                        <a href={row.adres_url} target="_blank" rel="noopener noreferrer" className="text-koopje-orange underline underline-offset-2">
+                          📍 Kaart
                         </a>
                       ) : (
                         ""
-                      );
-                    })()}
-                  </td>
-                  {/* Rest */} 
-                  {[
-                    row.bestelling_totaal_prijs,
-                    row.betaalwijze,
-                    row.betaald,
-                    row.aantal_fietsen,
-                    row.producten,
-                    row.opmerking_klant,
-                    row.volledig_adres,
-                    row.telefoon_nummer,
-                    row.order_nummer,
-                    row.email,
-                    row.link_aankoopbewijs,
-                  ].map((v, i) => (
+                      )}
+                    </td>
+                    {/* Bel link */} 
                     <td
-                      key={i}
                       tabIndex={0}
                       data-cell-row={rowIndex}
-                      data-cell-col={6 + i}
-                      className={`border border-stone-300 px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-koopje-orange/40 ${
-                        i === 6 ? "min-w-[22rem]" : "min-w-[4rem]"
-                      }`}
+                      data-cell-col={5}
+                      className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
                     >
                       {(() => {
-                        // Link Aankoopbewijs is the last column in the "Rest" array
-                        const isLinkCol = i === 10;
-                        const href = isLinkCol ? String(v ?? "").trim() : "";
-                        if (isLinkCol && href) {
-                          return (
-                            <a
-                              href={href}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-koopje-orange underline underline-offset-2 hover:text-koopje-orange/80"
-                            >
-                              Bekijk PDF
-                            </a>
-                          );
-                        }
-                        return formatCell(v);
+                        const phone =
+                          normalizeToE164(row.telefoon_nummer) ?? extractPhoneFromBelLink(row.bel_link);
+                        return phone ? (
+                          <a href={`tel:${phone}`} className="text-koopje-orange underline underline-offset-2">
+                            📞 Bellen
+                          </a>
+                        ) : (
+                          ""
+                        );
                       })()}
                     </td>
-                  ))}
-                  {Array.from({ length: fillerCols }).map((_, idx) => (
-                    <td
-                      key={`__fill_${rowIndex}_${idx}`}
-                      className="w-16 min-w-[4rem] border border-stone-300 p-0 align-top"
-                      aria-hidden="true"
-                    />
-                  ))}
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+                    {/* Rest */} 
+                    {[
+                      row.bestelling_totaal_prijs,
+                      row.betaalwijze,
+                      row.betaald,
+                      row.aantal_fietsen,
+                      row.producten,
+                      row.opmerking_klant,
+                      row.volledig_adres,
+                      row.telefoon_nummer,
+                      row.order_nummer,
+                      row.email,
+                      row.link_aankoopbewijs,
+                    ].map((v, i) => (
+                      <td
+                        key={i}
+                        tabIndex={0}
+                        data-cell-row={rowIndex}
+                        data-cell-col={6 + i}
+                        className={`border border-stone-300 px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-koopje-orange/40 ${
+                          i === 6 ? "min-w-[22rem]" : "min-w-[4rem]"
+                        }`}
+                      >
+                        {(() => {
+                          // Link Aankoopbewijs is the last column in the "Rest" array
+                          const isLinkCol = i === 10;
+                          const href = isLinkCol ? String(v ?? "").trim() : "";
+                          if (isLinkCol && href) {
+                            return (
+                              <a
+                                href={href}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-koopje-orange underline underline-offset-2 hover:text-koopje-orange/80"
+                              >
+                                Bekijk PDF
+                              </a>
+                            );
+                          }
+                          return formatCell(v);
+                        })()}
+                      </td>
+                    ))}
+                    {Array.from({ length: fillerCols }).map((_, idx) => (
+                      <td
+                        key={`__fill_${rowIndex}_${idx}`}
+                        className="w-16 min-w-[4rem] border border-stone-300 p-0 align-top"
+                        aria-hidden="true"
+                      />
+                    ))}
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
