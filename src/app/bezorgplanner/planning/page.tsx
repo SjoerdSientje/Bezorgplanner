@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useCallback, useState, useMemo, type KeyboardEvent } from "react";
+import { useEffect, useCallback, useState, useMemo, useLayoutEffect, useRef, type KeyboardEvent } from "react";
 import Link from "next/link";
 import Header from "@/components/Header";
 
@@ -93,6 +93,32 @@ function PlanningTabel({
   labelColor: string;
   onDeleteSlot: (slotId: string, orderNummer: string) => void;
 }) {
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const tableRef = useRef<HTMLTableElement | null>(null);
+  const [fillerCols, setFillerCols] = useState(0);
+  const FILLER_CELL_PX = 64; // 4rem
+
+  useLayoutEffect(() => {
+    const wrapper = wrapperRef.current;
+    const table = tableRef.current;
+    if (!wrapper || !table) return;
+
+    const recompute = () => {
+      const wrapperWidth = wrapper.clientWidth;
+      const tableWidth = table.getBoundingClientRect().width;
+      const contentWidth = Math.max(0, tableWidth - fillerCols * FILLER_CELL_PX);
+      const need = Math.max(0, Math.floor((wrapperWidth - contentWidth) / FILLER_CELL_PX));
+      if (need !== fillerCols) setFillerCols(need);
+    };
+
+    recompute();
+    const ro = new ResizeObserver(() => recompute());
+    ro.observe(wrapper);
+    ro.observe(table);
+    return () => ro.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fillerCols, rows.length, PLANNING_HEADERS.length]);
+
   function focusFirstInteractiveCell(cell: HTMLElement) {
     const focusable = cell.querySelector<HTMLElement>(
       'a,button,input,textarea,select,[tabindex]:not([tabindex="-1"])'
@@ -131,6 +157,7 @@ function PlanningTabel({
     <div className="mb-8">
       <h2 className={`mb-3 text-base font-semibold ${labelColor}`}>{label}</h2>
       <div
+        ref={wrapperRef}
         className="overflow-x-auto rounded-xl border-2 border-stone-300 bg-white shadow-sm"
         onKeyDownCapture={(e) => {
           if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) return;
@@ -144,7 +171,7 @@ function PlanningTabel({
           handleArrowNavigation(e, cellRow, cellCol);
         }}
       >
-        <table className="w-full min-w-max border-collapse text-left text-sm">
+        <table ref={tableRef} className="w-full min-w-max border-collapse text-left text-sm">
           <thead>
             <tr className="bg-stone-100">
               <th className="sticky left-0 z-30 w-8 border border-stone-300 bg-white px-1 py-2 text-center text-xs font-medium text-stone-800">
@@ -161,6 +188,12 @@ function PlanningTabel({
                 >
                   {h}
                 </th>
+              ))}
+              {Array.from({ length: fillerCols }).map((_, idx) => (
+                <th
+                  key={`__fill_h_${idx}`}
+                  className="whitespace-nowrap border border-stone-300 px-2 py-2 font-medium text-stone-800 w-16 min-w-[4rem]"
+                />
               ))}
             </tr>
           </thead>
@@ -289,6 +322,13 @@ function PlanningTabel({
                     >
                       {formatCell(v)}
                     </td>
+                  ))}
+                  {Array.from({ length: fillerCols }).map((_, idx) => (
+                    <td
+                      key={`__fill_${rowIndex}_${idx}`}
+                      className="w-16 min-w-[4rem] border border-stone-300 p-0 align-top"
+                      aria-hidden="true"
+                    />
                   ))}
                 </tr>
               ))
