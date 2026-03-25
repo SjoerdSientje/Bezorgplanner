@@ -166,20 +166,24 @@ export async function POST(request: NextRequest) {
     let whatsappSent = 0;
     let whatsappFailed = 0;
     for (const o of whatsappCandidates as any[]) {
-      const sendRes = await sendWhatsAppByEvent("planning_goedgekeurd", {
-        order_nummer: o.order_nummer,
-        naam: o.naam,
-        aankomsttijd_slot: o.aankomsttijd_slot,
-        bestelling_totaal_prijs: o.bestelling_totaal_prijs,
-        telefoon_e164: o.telefoon_e164,
-        telefoon_nummer: o.telefoon_nummer,
-        type: o.type,
-        betaald: o.betaald,
-        mp_tags: o.mp_tags,
-        datum: o.datum ?? planningDate,
-        opmerkingen_klant: o.opmerkingen_klant,
-        bezorgtijd_voorkeur: o.bezorgtijd_voorkeur,
-      });
+      const sendRes = await sendWhatsAppByEvent(
+        "planning_goedgekeurd",
+        {
+          order_nummer: o.order_nummer,
+          naam: o.naam,
+          aankomsttijd_slot: o.aankomsttijd_slot,
+          bestelling_totaal_prijs: o.bestelling_totaal_prijs,
+          telefoon_e164: o.telefoon_e164,
+          telefoon_nummer: o.telefoon_nummer,
+          type: o.type,
+          betaald: o.betaald,
+          mp_tags: o.mp_tags,
+          datum: o.datum ?? planningDate,
+          opmerkingen_klant: o.opmerkingen_klant,
+          bezorgtijd_voorkeur: o.bezorgtijd_voorkeur,
+        },
+        { ownerEmail }
+      );
       if (sendRes.ok) {
         whatsappSent += 1;
         whatsappDetails.push(`Order ${o.order_nummer}: verzonden`);

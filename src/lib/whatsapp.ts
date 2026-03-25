@@ -1,3 +1,5 @@
+import { maySendWhatsAppForOwner } from "@/lib/account";
+
 export type WhatsAppEvent = "planning_goedgekeurd" | "stuur_appjes" | "afronden";
 
 export type OrderKind =
@@ -343,8 +345,14 @@ export async function sendWhatsAppTemplate(params: {
 
 export async function sendWhatsAppByEvent(
   event: WhatsAppEvent,
-  order: WhatsAppOrderInput
+  order: WhatsAppOrderInput,
+  ctx?: { ownerEmail?: string | null }
 ): Promise<SendWhatsAppResult> {
+  const gate = maySendWhatsAppForOwner(ctx?.ownerEmail ?? null, order);
+  if (!gate.ok) {
+    return { ok: false, skipped: true, error: gate.error };
+  }
+
   const to = String(order.telefoon_e164 ?? order.telefoon_nummer ?? "");
 
   // 0) Vaste businessregels (harde mapping)

@@ -121,20 +121,24 @@ export async function POST(request: NextRequest) {
       console.error("[api/afronden] delete planning_slots fout:", delErr);
     }
 
-    const waRes = await sendWhatsAppByEvent("afronden", {
-      order_nummer: (order as any).order_nummer,
-      naam: (order as any).naam,
-      aankomsttijd_slot: (order as any).aankomsttijd_slot,
-      bestelling_totaal_prijs: (order as any).bestelling_totaal_prijs,
-      telefoon_e164: (order as any).telefoon_e164,
-      telefoon_nummer: (order as any).telefoon_nummer,
-      type: (order as any).type,
-      betaald: (order as any).betaald,
-      mp_tags: (order as any).mp_tags,
-      datum: (order as any).datum,
-      opmerkingen_klant: (order as any).opmerkingen_klant,
-      bezorgtijd_voorkeur: (order as any).bezorgtijd_voorkeur,
-    });
+    const waRes = await sendWhatsAppByEvent(
+      "afronden",
+      {
+        order_nummer: (order as any).order_nummer,
+        naam: (order as any).naam,
+        aankomsttijd_slot: (order as any).aankomsttijd_slot,
+        bestelling_totaal_prijs: (order as any).bestelling_totaal_prijs,
+        telefoon_e164: (order as any).telefoon_e164,
+        telefoon_nummer: (order as any).telefoon_nummer,
+        type: (order as any).type,
+        betaald: (order as any).betaald,
+        mp_tags: (order as any).mp_tags,
+        datum: (order as any).datum,
+        opmerkingen_klant: (order as any).opmerkingen_klant,
+        bezorgtijd_voorkeur: (order as any).bezorgtijd_voorkeur,
+      },
+      { ownerEmail }
+    );
 
     return NextResponse.json(
       {

@@ -79,20 +79,24 @@ export async function POST(request: NextRequest) {
 
     for (const o of selected) {
       const meta = metaById.get(o.order_id) ?? {};
-      const sendRes = await sendWhatsAppByEvent("stuur_appjes", {
-        order_nummer: o.order_nummer,
-        naam: o.naam,
-        aankomsttijd_slot: o.aankomsttijd_slot,
-        bestelling_totaal_prijs: (meta as any).bestelling_totaal_prijs ?? null,
-        telefoon_e164: o.telefoon_e164,
-        telefoon_nummer: o.telefoon_nummer,
-        type: String((meta as any).type ?? ""),
-        betaald: (meta as any).betaald ?? null,
-        mp_tags: String((meta as any).mp_tags ?? ""),
-        datum: String((meta as any).datum ?? ""),
-        opmerkingen_klant: String((meta as any).opmerkingen_klant ?? ""),
-        bezorgtijd_voorkeur: String((meta as any).bezorgtijd_voorkeur ?? ""),
-      });
+      const sendRes = await sendWhatsAppByEvent(
+        "stuur_appjes",
+        {
+          order_nummer: o.order_nummer,
+          naam: o.naam,
+          aankomsttijd_slot: o.aankomsttijd_slot,
+          bestelling_totaal_prijs: (meta as any).bestelling_totaal_prijs ?? null,
+          telefoon_e164: o.telefoon_e164,
+          telefoon_nummer: o.telefoon_nummer,
+          type: String((meta as any).type ?? ""),
+          betaald: (meta as any).betaald ?? null,
+          mp_tags: String((meta as any).mp_tags ?? ""),
+          datum: String((meta as any).datum ?? ""),
+          opmerkingen_klant: String((meta as any).opmerkingen_klant ?? ""),
+          bezorgtijd_voorkeur: String((meta as any).bezorgtijd_voorkeur ?? ""),
+        },
+        { ownerEmail }
+      );
       if (sendRes.ok) {
         sentCount += 1;
         details.push(`Order ${o.order_nummer}: verzonden`);
