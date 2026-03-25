@@ -25,7 +25,17 @@ export interface ShopifyLineItemProperty {
 
 export interface ShopifyLineItem {
   name?: string | null;
+  /** Eenheidsprijs vóór regelkorting (REST Admin Order line_item.price). */
   price?: string | number | null;
+  /** Aantal stuks; ontbreekt in sommige payloads → 1. */
+  quantity?: number | null;
+  /**
+   * Totale korting op deze regel (string/number). Wordt afgetrokken van price×quantity.
+   * @see https://shopify.dev/docs/api/admin-rest/latest/resources/order
+   */
+  total_discount?: string | number | null;
+  /** Alternatief voor total_discount: som van toegepaste regelkortingen. */
+  discount_allocations?: { amount?: string }[] | null;
   properties?: ShopifyLineItemProperty[] | null;
 }
 
@@ -243,6 +253,34 @@ export interface LineItemForJson {
   defaultItems: string[];
 }
 
+function parseMoney(v: unknown): number {
+  if (v == null || v === "") return 0;
+  const n = typeof v === "string" ? parseFloat(v) : Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * Totaalbedrag voor één Shopify line item (wat je op een factuur bij die regel verwacht):
+ * `price` (per stuk) × `quantity` − regelkorting (`total_discount` of som `discount_allocations`).
+ *
+ * Alleen `price` gebruiken (zoals voorheen) is onjuist bij quantity≠1 en bij regelkortingen.
+ */
+export function getShopifyLineItemLineTotal(item: ShopifyLineItem): number {
+  const unit = parseMoney(item.price);
+  const q = item.quantity;
+  const qty =
+    q == null
+      ? 1
+      : Math.max(1, Math.round(typeof q === "number" ? q : parseFloat(String(q))) || 1);
+
+  let discount = parseMoney(item.total_discount);
+  if (discount <= 0 && Array.isArray(item.discount_allocations)) {
+    discount = item.discount_allocations.reduce((s, d) => s + parseMoney(d?.amount), 0);
+  }
+
+  return Math.max(0, unit * qty - discount);
+}
+
 function looksLikeMontageTekst(s: string): boolean {
   const t = s.toLowerCase();
   return (
@@ -420,7 +458,10 @@ function getDefaultItemsVoorFiets(
   return items;
 }
 
-/** Bouw een JSON-string van alle line items met naam, prijs en montage-properties (voor fietsen). */
+/**
+ * Bouw JSON voor de producten-popup: per zichtbare regel het **regeltotaal** (Shopify:
+ * eenheidsprijs × quantity − regelkorting), niet alleen de eenheidsprijs.
+ */
 export function buildLineItemsJson(order: ShopifyOrder): string | null {
   const items = order.line_items ?? [];
   if (!items.length) return null;
@@ -428,11 +469,12 @@ export function buildLineItemsJson(order: ShopifyOrder): string | null {
   const structured: LineItemForJson[] = [];
 
   for (const item of items) {
-    const price =
+    const unitPrice =
       typeof item.price === "string"
         ? parseFloat(item.price)
         : Number(item.price ?? 0);
-    const isFiets = price > PRICE_LIMIT_FIETS;
+    const lineTotal = getShopifyLineItemLineTotal(item);
+    const isFiets = unitPrice > PRICE_LIMIT_FIETS;
     const rawName = (item.name ?? "").trim();
     const rawProps = item.properties ?? [];
     const hasProps = rawProps.length > 0;
@@ -440,7 +482,7 @@ export function buildLineItemsJson(order: ShopifyOrder): string | null {
     // ── '&' in de titel → meerdere fietsen in één line item ──────────────
     if (isFiets && rawName.includes("&")) {
       const bikeTitles = splitBikesOnAmpersand(rawName);
-      const pricePerBike = price / Math.max(1, bikeTitles.length);
+      const pricePerBike = lineTotal / Math.max(1, bikeTitles.length);
 
       for (const bikeTitle of bikeTitles) {
         const parsed = parseExtrasFromManualBikeTitle(bikeTitle);
@@ -474,7 +516,7 @@ export function buildLineItemsJson(order: ShopifyOrder): string | null {
 
       structured.push({
         name: parsed.baseName,
-        price,
+        price: lineTotal,
         isFiets: true,
         properties: parsed.montageProperties,
         defaultItems,
@@ -512,7 +554,7 @@ export function buildLineItemsJson(order: ShopifyOrder): string | null {
 
     structured.push({
       name: rawName,
-      price,
+      price: lineTotal,
       isFiets,
       properties,
       defaultItems,
