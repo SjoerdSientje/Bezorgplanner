@@ -2,7 +2,7 @@
 
 import React, { useState, useCallback, useEffect } from "react";
 
-const ROWS = 50;
+const MIN_ROWS = 50;
 
 interface EditableSheetTableProps {
   headers: readonly string[];
@@ -13,6 +13,8 @@ interface EditableSheetTableProps {
   /** Optionele actie per data-rij (bijv. prullenbak). */
   rowAction?: (rowIndex: number) => void;
   cellRenderers?: Record<string, (rowIndex: number, value: string, onSave: (v: string) => void) => React.ReactNode>;
+  /** Zet de tabel volledig read-only (geen inputs/bewerkingen, geen custom renderers). */
+  readOnly?: boolean;
   /**
    * Verhoog deze waarde wanneer je de tabel geforceerd wilt resetten vanuit initialData
    * (bijv. na een echte server-fetch). Celwijzigingen mogen deze NIET verhogen.
@@ -20,22 +22,22 @@ interface EditableSheetTableProps {
   resetKey?: number;
 }
 
-function createEmptyGrid(headers: readonly string[]): string[][] {
-  return Array.from({ length: ROWS }, () =>
+function createEmptyGrid(headers: readonly string[], rowCount: number): string[][] {
+  return Array.from({ length: rowCount }, () =>
     Array.from({ length: headers.length }, () => "")
   );
 }
 
-function padToRows(rows: string[][], colCount: number): string[][] {
+function padToRows(rows: string[][], colCount: number, rowCount: number): string[][] {
   const result = rows.map((r) => {
     const arr = r.slice(0, colCount);
     while (arr.length < colCount) arr.push("");
     return arr;
   });
-  while (result.length < ROWS) {
+  while (result.length < rowCount) {
     result.push(Array.from({ length: colCount }, () => ""));
   }
-  return result.slice(0, ROWS);
+  return result;
 }
 
 export default function EditableSheetTable({
@@ -45,21 +47,25 @@ export default function EditableSheetTable({
   dataRowCount,
   rowAction,
   cellRenderers,
+  readOnly = false,
   resetKey = 0,
 }: EditableSheetTableProps) {
   const colCount = (headers as string[]).length;
+  const totalDataRows = dataRowCount ?? initialData?.length ?? 0;
+  const effectiveMinRows = readOnly ? 0 : MIN_ROWS;
+  const rowCount = Math.max(effectiveMinRows, totalDataRows);
+
   const [values, setValues] = useState<string[][]>(() =>
-    initialData ? padToRows(initialData, colCount) : createEmptyGrid(headers)
+    initialData ? padToRows(initialData, colCount, rowCount) : createEmptyGrid(headers, rowCount)
   );
 
   // Alleen resetten als resetKey verandert (= na een echte server-fetch),
   // NIET op elke initialData-wijziging. Zo verdwijnt de flash bij cel-opslaan.
   useEffect(() => {
-    if (initialData) {
-      setValues(padToRows(initialData, colCount));
-    }
+    if (!initialData) return;
+    setValues(padToRows(initialData, colCount, rowCount));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resetKey, colCount]);
+  }, [resetKey, colCount, rowCount, initialData]);
 
   const handleChange = useCallback(
     (row: number, col: number, value: string) => {
@@ -81,8 +87,7 @@ export default function EditableSheetTable({
     [headers, values, onCellBlur]
   );
 
-  const hasActionCol = Boolean(rowAction);
-  const totalDataRows = dataRowCount ?? 0;
+  const hasActionCol = !readOnly && Boolean(rowAction);
 
   return (
     <div className="overflow-x-auto overflow-y-auto rounded-xl border-2 border-stone-300 bg-white shadow-sm">
@@ -126,25 +131,33 @@ export default function EditableSheetTable({
                   </td>
                 )}
                 {row.map((cellValue, j) => {
-                  const header = headers[j];
-                  const customRenderer = cellRenderers?.[header];
-                  const onSave = (newValue: string) => {
-                    handleChange(i, j, newValue);
-                    onCellBlur?.(i, header, newValue);
-                  };
                   return (
                     <td key={j} className="min-w-[4rem] border border-stone-300 p-0 align-top">
-                      {customRenderer ? (
-                        customRenderer(i, cellValue, onSave)
+                      {readOnly ? (
+                        <span className="block px-2 py-1.5 text-sm text-stone-700">
+                          {cellValue ?? ""}
+                        </span>
                       ) : (
-                        <input
-                          type="text"
-                          value={cellValue}
-                          onChange={(e) => handleChange(i, j, e.target.value)}
-                          onBlur={() => handleBlur(i, j)}
-                          className="w-full min-w-[4rem] border-0 bg-transparent px-2 py-1.5 text-stone-700 outline-none focus:bg-koopje-orange-light/30 focus:ring-1 focus:ring-koopje-orange/50"
-                          aria-label={`Rij ${i + 1}, ${header}`}
-                        />
+                        (() => {
+                          const header = headers[j];
+                          const customRenderer = cellRenderers?.[header];
+                          const onSave = (newValue: string) => {
+                            handleChange(i, j, newValue);
+                            onCellBlur?.(i, header, newValue);
+                          };
+                          return customRenderer ? (
+                            customRenderer(i, cellValue, onSave)
+                          ) : (
+                            <input
+                              type="text"
+                              value={cellValue}
+                              onChange={(e) => handleChange(i, j, e.target.value)}
+                              onBlur={() => handleBlur(i, j)}
+                              className="w-full min-w-[4rem] border-0 bg-transparent px-2 py-1.5 text-stone-700 outline-none focus:bg-koopje-orange-light/30 focus:ring-1 focus:ring-koopje-orange/50"
+                              aria-label={`Rij ${i + 1}, ${header}`}
+                            />
+                          );
+                        })()
                       )}
                     </td>
                   );
