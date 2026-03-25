@@ -144,7 +144,7 @@ function PlanningTabel({
           handleArrowNavigation(e, cellRow, cellCol);
         }}
       >
-        <table className="w-full min-w-0 border-collapse text-left text-sm">
+        <table className="w-full min-w-max border-collapse text-left text-sm">
           <thead>
             <tr className="bg-stone-100">
               <th className="sticky left-0 z-30 w-8 border border-stone-300 bg-white px-1 py-2 text-center text-xs font-medium text-stone-800">

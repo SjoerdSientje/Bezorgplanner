@@ -147,7 +147,7 @@ export default function EditableSheetTable({
         handleArrowNavigation(e, cellRow, cellCol);
       }}
     >
-      <table ref={tableRef} className="w-full min-w-0 border-collapse text-left text-sm">
+      <table ref={tableRef} className="w-full min-w-max border-collapse text-left text-sm">
         <thead>
           <tr className="bg-stone-100">
             {showRowNumbers && (
