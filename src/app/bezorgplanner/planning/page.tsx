@@ -96,7 +96,7 @@ function PlanningTabel({
   return (
     <div className="mb-8">
       <h2 className={`mb-3 text-base font-semibold ${labelColor}`}>{label}</h2>
-      <div className="overflow-x-auto overflow-y-auto rounded-xl border-2 border-stone-300 bg-white shadow-sm">
+      <div className="overflow-x-auto overflow-y-auto pb-2 rounded-xl border-2 border-stone-300 bg-white shadow-sm">
         <table className="w-full min-w-max border-collapse text-left text-sm">
           <thead>
             <tr className="bg-stone-100">
