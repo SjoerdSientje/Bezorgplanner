@@ -280,7 +280,6 @@ export default function RitjesVandaagPage() {
               cellRenderers={cellRenderers}
               resetKey={tableResetKey}
               showRowNumbers
-              minRows={0}
             />
           )}
         </div>

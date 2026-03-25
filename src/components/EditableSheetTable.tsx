@@ -10,8 +10,6 @@ interface EditableSheetTableProps {
   onCellBlur?: (rowIndex: number, header: string, value: string) => void;
   /** Aantal echte datarijen (wordt gebruikt om actie-iconen zichtbaar te maken). */
   dataRowCount?: number;
-  /** Minimum aantal rijen bij bewerkbare modus (default: 50). Zet op `0` om alleen data-rijen te tonen. */
-  minRows?: number;
   /** Optionele actie per data-rij (bijv. prullenbak). */
   rowAction?: (rowIndex: number) => void;
   cellRenderers?: Record<string, (rowIndex: number, value: string, onSave: (v: string) => void) => React.ReactNode>;
@@ -49,7 +47,6 @@ export default function EditableSheetTable({
   initialData,
   onCellBlur,
   dataRowCount,
-  minRows,
   rowAction,
   cellRenderers,
   readOnly = false,
@@ -58,7 +55,7 @@ export default function EditableSheetTable({
 }: EditableSheetTableProps) {
   const colCount = (headers as string[]).length;
   const totalDataRows = dataRowCount ?? initialData?.length ?? 0;
-  const effectiveMinRows = readOnly ? 0 : minRows ?? MIN_ROWS;
+  const effectiveMinRows = readOnly ? 0 : MIN_ROWS;
   const rowCount = Math.max(effectiveMinRows, totalDataRows);
   const isWideAddressColumn = (header: string) =>
     header === "Volledig adress" || header === "Adres";
@@ -150,7 +147,7 @@ export default function EditableSheetTable({
         handleArrowNavigation(e, cellRow, cellCol);
       }}
     >
-      <table ref={tableRef} className="w-full min-w-max border-collapse text-left text-sm">
+      <table ref={tableRef} className="w-full table-fixed border-collapse text-left text-sm">
         <thead>
           <tr className="bg-stone-100">
             {showRowNumbers && (
@@ -164,9 +161,7 @@ export default function EditableSheetTable({
             {headers.map((h) => (
               <th
                 key={h}
-                className={`whitespace-nowrap border border-stone-300 px-2 py-2 font-medium text-stone-800 ${
-                  isWideAddressColumn(h) ? "min-w-[22rem]" : ""
-                }`}
+                className="border border-stone-300 px-2 py-2 font-medium text-stone-800 whitespace-normal break-words align-top"
               >
                 {h}
               </th>
@@ -203,21 +198,16 @@ export default function EditableSheetTable({
                 )}
                 {row.map((cellValue, j) => {
                   const header = headers[j];
-                  const wide = isWideAddressColumn(header);
                   return (
                     <td
                       key={j}
-                      className={`min-w-[4rem] border border-stone-300 p-0 align-top ${
-                        wide ? "min-w-[22rem]" : ""
-                      }`}
+                      className="border border-stone-300 p-0 align-top"
                       data-cell-row={i}
                       data-cell-col={j}
                     >
                       {readOnly ? (
                         <span
-                          className={`block px-2 py-1.5 text-sm text-stone-700 ${
-                            wide ? "whitespace-normal break-words" : ""
-                          }`}
+                          className="block px-2 py-1.5 text-sm text-stone-700 whitespace-normal break-words"
                         >
                           {cellValue ?? ""}
                         </span>
@@ -236,7 +226,7 @@ export default function EditableSheetTable({
                               value={cellValue}
                               onChange={(e) => handleChange(i, j, e.target.value)}
                               onBlur={() => handleBlur(i, j)}
-                              className="w-full min-w-[4rem] border-0 bg-transparent px-2 py-1.5 text-stone-700 outline-none focus:bg-koopje-orange-light/30 focus:ring-1 focus:ring-koopje-orange/50"
+                              className="w-full border-0 bg-transparent px-2 py-1.5 text-stone-700 outline-none focus:bg-koopje-orange-light/30 focus:ring-1 focus:ring-koopje-orange/50"
                               aria-label={`Rij ${i + 1}, ${header}`}
                             />
                           );
