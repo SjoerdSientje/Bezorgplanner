@@ -62,19 +62,32 @@ export async function GET(request: NextRequest) {
         // Ook als `planning_slots` nog even blijven bestaan, mogen ze dan niet meer in de Planning sheet verschijnen.
         if (oStatus !== "ritjes_vandaag" && oStatus !== "gepland") return null;
 
+        const source = String(o.source ?? "");
+        const betaaldBool = o.betaald === true;
+        const betaalwijze =
+          source === "mp"
+            ? "contant aan deur"
+            : betaaldBool
+              ? "was al betaald"
+              : "Factuur betaling aan deur";
+
+        const bezorgtijdVoorkeur = String(o.bezorgtijd_voorkeur ?? "").trim();
+        const tijdOpmerking = bezorgtijdVoorkeur || String(slot.tijd_opmerking ?? "").trim();
+
         return {
           slot_id: slot.id,
           order_id: slot.order_id,
           datum: slot.datum,
           volgorde: slot.volgorde,
           aankomsttijd: slot.aankomsttijd ?? "",
-          tijd_opmerking: slot.tijd_opmerking ?? "",
+          tijd_opmerking: tijdOpmerking,
           order_nummer: o.order_nummer ?? "",
           naam: o.naam ?? "",
           adres_url: o.adres_url ?? "",
           bel_link: o.bel_link ?? "",
           bestelling_totaal_prijs: o.bestelling_totaal_prijs ?? "",
-          betaald: o.betaald ?? "",
+          betaald: o.betaald ?? false,
+          betaalwijze,
           aantal_fietsen: o.aantal_fietsen ?? "",
           producten: o.producten ?? "",
           opmerking_klant: o.opmerkingen_klant ?? "",

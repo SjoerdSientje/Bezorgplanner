@@ -95,7 +95,8 @@ export async function POST(request: NextRequest) {
       order_id: o.id,
       volgorde: i + 1,
       aankomsttijd: (o.aankomsttijd_slot ?? "").toString().trim(),
-      tijd_opmerking: "",
+      // Toon de voorkeur uit "Ritjes vandaag" in de planning.
+      tijd_opmerking: String(o.bezorgtijd_voorkeur ?? "").toString().trim(),
     }));
 
     const { error: insertErr } = await supabase.from("planning_slots").insert(slotsToInsert);

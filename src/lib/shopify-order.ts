@@ -581,6 +581,30 @@ function getOrderType(order: ShopifyOrder): RitjesOrderRow["type"] {
   return "verkoop";
 }
 
+/**
+ * Zet Shopify order.tags om naar een leesbare MP-tag-string.
+ * Doel: de `tag` kolom op "Ritjes vandaag" vullen.
+ */
+function getMpTagFromShopifyOrderTags(order: ShopifyOrder): string | null {
+  const raw = String(order.tags ?? "");
+  const t = raw.toLowerCase();
+
+  const matches: string[] = [];
+  const pushIf = (needle: string, label: string) => {
+    if (t.includes(needle)) matches.push(label);
+  };
+
+  pushIf("ophalen", "ophalen");
+  pushIf("terugbrengen", "terugbrengen");
+  pushIf("reparatie aan huis", "reparatie aan huis");
+  pushIf("proefrit", "proefrit");
+
+  // Uniek houden, en netjes join'en.
+  const uniq = Array.from(new Set(matches));
+  if (uniq.length === 0) return "geen tag";
+  return uniq.join(", ");
+}
+
 /** Zet een Shopify-order om naar één rij voor Ritjes voor vandaag (orders-tabel). */
 export function mapShopifyOrderToRitjesRow(order: ShopifyOrder): RitjesOrderRow {
   const noteParsed = parseNote(order.note);
@@ -613,7 +637,7 @@ export function mapShopifyOrderToRitjesRow(order: ShopifyOrder): RitjesOrderRow 
     telefoon_e164: telefoon !== "geen nummer" ? phoneToE164(telefoon) : null,
     model: null,
     serienummer: null,
-    mp_tags: null,
+    mp_tags: getMpTagFromShopifyOrderTags(order),
     line_items_json: buildLineItemsJson(order),
   };
 }

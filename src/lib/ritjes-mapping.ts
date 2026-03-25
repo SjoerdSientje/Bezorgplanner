@@ -25,7 +25,7 @@ export const RITJES_HEADERS = [
   "Nummer in E.164 formaat",
   "Model",
   "Serienummer",
-  "MP tags",
+  "tag",
 ] as const;
 
 export const RITJES_HEADER_TO_FIELD: Record<string, string> = {
@@ -51,7 +51,7 @@ export const RITJES_HEADER_TO_FIELD: Record<string, string> = {
   "Nummer in E.164 formaat": "telefoon_e164",
   "Model": "model",
   "Serienummer": "serienummer",
-  "MP tags": "mp_tags",
+  "tag": "mp_tags",
 };
 
 export type RitjesOrderFromApi = Record<string, unknown>;
@@ -137,16 +137,29 @@ export function ritjesCellToPayload(
 }
 
 export function ordersToTableRows(orders: RitjesOrderFromApi[]): string[][] {
+  const isMpOrder = (o: RitjesOrderFromApi): boolean => {
+    const source = String((o as any)?.source ?? "").toLowerCase();
+    if (source === "mp") return true;
+    const mpTags = String((o as any)?.mp_tags ?? "").toLowerCase();
+    return /\bmp\b/.test(mpTags);
+  };
+
   return orders.map((o) =>
     RITJES_HEADERS.map((h) => {
-      // Betaald?: toon betaalmethode (bijv. "contant aan deur") als die er is, anders ja/nee
       if (h === "Betaald?") {
-        const methode = o.betaalmethode as string | null | undefined;
-        if (methode != null && String(methode).trim() !== "") return String(methode).trim();
-        const v = o.betaald;
-        if (v === null || v === undefined) return "";
-        return typeof v === "boolean" ? (v ? "ja" : "nee") : String(v);
+        // We tonen altijd ja/nee in de UI; betaalmethode komt naar voren in de planning.
+        const betaald = (o as any)?.betaald === true;
+        // Voor MP orders moet dit altijd standaard "nee" zijn (tenzij expliciet betaald=true).
+        if (isMpOrder(o)) return betaald ? "ja" : "nee";
+        return betaald ? "ja" : "nee";
       }
+
+      if (h === "tag") {
+        const v = (o as any)?.mp_tags;
+        const s = v == null ? "" : String(v).trim();
+        return s ? s : "geen tag";
+      }
+
       const key = RITJES_HEADER_TO_FIELD[h];
       const v = key ? o[key] : undefined;
       if (v === null || v === undefined) return "";

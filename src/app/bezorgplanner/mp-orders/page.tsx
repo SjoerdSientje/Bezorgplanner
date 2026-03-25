@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useCallback, useState } from "react";
+import { useEffect, useCallback, useState, useMemo } from "react";
 import Link from "next/link";
 import Header from "@/components/Header";
+import EditableSheetTable from "@/components/EditableSheetTable";
 
 const HEADERS = [
   "Order Nummer",
@@ -87,6 +88,10 @@ export default function MPOrdersPage() {
 
   useEffect(() => { fetchOrders(); }, [fetchOrders]);
 
+  const tableRows = useMemo(() => {
+    return orders.map((o) => HEADERS.map((h) => cel(o, h)));
+  }, [orders]);
+
   return (
     <>
       <Header />
@@ -116,39 +121,11 @@ export default function MPOrdersPage() {
           ) : orders.length === 0 ? (
             <p className="text-sm text-koopje-black/60">Geen MP orders gevonden.</p>
           ) : (
-            <div className="overflow-x-auto rounded-xl border-2 border-stone-300 bg-white shadow-sm">
-              <table className="w-full min-w-max border-collapse text-left text-sm">
-                <thead>
-                  <tr className="bg-stone-100">
-                    {HEADERS.map((h) => (
-                      <th key={h} className="whitespace-nowrap border border-stone-300 px-3 py-2 font-medium text-stone-800">
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {orders.map((o) => (
-                    <tr key={o.id} className="hover:bg-stone-50">
-                      {HEADERS.map((h) => (
-                        <td key={h} className="whitespace-nowrap border border-stone-300 px-3 py-2 text-stone-700">
-                          {h === "Link Aankoopbewijs" && cel(o, h) ? (
-                            <a
-                              href={cel(o, h)}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-koopje-orange underline"
-                            >
-                              Bekijk PDF
-                            </a>
-                          ) : cel(o, h)}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <EditableSheetTable
+              headers={HEADERS}
+              initialData={tableRows}
+              dataRowCount={orders.length}
+            />
           )}
         </div>
       </main>

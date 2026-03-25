@@ -85,7 +85,7 @@ export default function EditableSheetTable({
   const totalDataRows = dataRowCount ?? 0;
 
   return (
-    <div className="overflow-x-auto rounded-xl border-2 border-stone-300 bg-white shadow-sm">
+    <div className="overflow-x-auto overflow-y-auto rounded-xl border-2 border-stone-300 bg-white shadow-sm">
       <table className="w-full min-w-max border-collapse text-left text-sm">
         <thead>
           <tr className="bg-stone-100">

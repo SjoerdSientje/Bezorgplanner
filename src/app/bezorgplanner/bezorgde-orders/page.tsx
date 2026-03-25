@@ -66,23 +66,26 @@ export default function BezorgdeOrdersPage() {
   }, [fetchOrders]);
 
   const tableRows = useMemo(() => {
-    const toDDMMYYYY = (isoOrDate: string | null) => {
-      if (!isoOrDate) return "";
-      const d = new Date(isoOrDate + "T00:00:00");
-      if (isNaN(d.getTime())) return "";
-      const dd = String(d.getDate()).padStart(2, "0");
-      const mm = String(d.getMonth() + 1).padStart(2, "0");
-      const yyyy = d.getFullYear();
-      return `${dd}-${mm}-${yyyy}`;
-    };
+    const today = new Date();
+    const todayDDMMYYYY = `${String(today.getDate()).padStart(2, "0")}-${String(today.getMonth() + 1).padStart(2, "0")}-${today.getFullYear()}`;
 
     return orders.map((o) => [
       o.order_nummer ?? "",
       o.naam ?? "",
       o.bezorger_naam ?? "",
       o.betaalmethode ?? "",
-      o.betaald_bedrag != null ? String(o.betaald_bedrag) : "",
-      toDDMMYYYY(o.afgerond_at),
+
+      (() => {
+        const betaalmethode = String(o.betaalmethode ?? "");
+        const wasAlBetaald = betaalmethode.toLowerCase() === "was al betaald";
+        if (wasAlBetaald) {
+          return o.bestelling_totaal_prijs != null ? String(o.bestelling_totaal_prijs) : "";
+        }
+        return o.betaald_bedrag != null ? String(o.betaald_bedrag) : "";
+      })(),
+
+      // Vereiste: altijd vandaag (DD-MM-YYYY)
+      todayDDMMYYYY,
       o.producten ?? "",
       o.bestelling_totaal_prijs != null ? String(o.bestelling_totaal_prijs) : "",
       o.volledig_adres ?? "",

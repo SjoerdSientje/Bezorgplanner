@@ -12,6 +12,7 @@ const PLANNING_HEADERS = [
   "Adress URL",
   "Bel link",
   "Bestelling Totaal Prijs",
+  "Betaalwijze",
   "Betaald?",
   "Aantal fietsen",
   "Product(en)",
@@ -34,6 +35,7 @@ type PlanningRow = {
   adres_url: string;
   bel_link: string;
   bestelling_totaal_prijs: string | number;
+  betaalwijze: string;
   betaald: string | boolean;
   aantal_fietsen: string | number;
   producten: string;
@@ -94,7 +96,7 @@ function PlanningTabel({
   return (
     <div className="mb-8">
       <h2 className={`mb-3 text-base font-semibold ${labelColor}`}>{label}</h2>
-      <div className="overflow-x-auto rounded-xl border-2 border-stone-300 bg-white shadow-sm">
+      <div className="overflow-x-auto overflow-y-auto rounded-xl border-2 border-stone-300 bg-white shadow-sm">
         <table className="w-full min-w-max border-collapse text-left text-sm">
           <thead>
             <tr className="bg-stone-100">
@@ -171,6 +173,7 @@ function PlanningTabel({
                   {/* Rest */} 
                   {[
                     row.bestelling_totaal_prijs,
+                    row.betaalwijze,
                     row.betaald,
                     row.aantal_fietsen,
                     row.producten,
