@@ -147,7 +147,7 @@ export default function EditableSheetTable({
         handleArrowNavigation(e, cellRow, cellCol);
       }}
     >
-      <table ref={tableRef} className="w-full table-fixed border-collapse text-left text-sm">
+      <table ref={tableRef} className="w-full min-w-max border-collapse text-left text-sm">
         <thead>
           <tr className="bg-stone-100">
             {showRowNumbers && (
@@ -161,7 +161,9 @@ export default function EditableSheetTable({
             {headers.map((h) => (
               <th
                 key={h}
-                className="border border-stone-300 px-2 py-2 font-medium text-stone-800 whitespace-normal break-words align-top"
+                className={`whitespace-nowrap border border-stone-300 px-2 py-2 font-medium text-stone-800 ${
+                  isWideAddressColumn(h) ? "min-w-[22rem]" : ""
+                }`}
               >
                 {h}
               </th>
@@ -198,16 +200,21 @@ export default function EditableSheetTable({
                 )}
                 {row.map((cellValue, j) => {
                   const header = headers[j];
+                  const wide = isWideAddressColumn(header);
                   return (
                     <td
                       key={j}
-                      className="border border-stone-300 p-0 align-top"
+                      className={`min-w-[4rem] border border-stone-300 p-0 align-top ${
+                        wide ? "min-w-[22rem]" : ""
+                      }`}
                       data-cell-row={i}
                       data-cell-col={j}
                     >
                       {readOnly ? (
                         <span
-                          className="block px-2 py-1.5 text-sm text-stone-700 whitespace-normal break-words"
+                          className={`block px-2 py-1.5 text-sm text-stone-700 ${
+                            wide ? "whitespace-normal" : "whitespace-nowrap"
+                          }`}
                         >
                           {cellValue ?? ""}
                         </span>
@@ -226,7 +233,7 @@ export default function EditableSheetTable({
                               value={cellValue}
                               onChange={(e) => handleChange(i, j, e.target.value)}
                               onBlur={() => handleBlur(i, j)}
-                              className="w-full border-0 bg-transparent px-2 py-1.5 text-stone-700 outline-none focus:bg-koopje-orange-light/30 focus:ring-1 focus:ring-koopje-orange/50"
+                              className="w-full min-w-[4rem] border-0 bg-transparent px-2 py-1.5 text-stone-700 outline-none focus:bg-koopje-orange-light/30 focus:ring-1 focus:ring-koopje-orange/50"
                               aria-label={`Rij ${i + 1}, ${header}`}
                             />
                           );

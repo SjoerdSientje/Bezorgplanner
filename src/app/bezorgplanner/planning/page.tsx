@@ -144,7 +144,7 @@ function PlanningTabel({
           handleArrowNavigation(e, cellRow, cellCol);
         }}
       >
-        <table className="w-full table-fixed border-collapse text-left text-sm">
+        <table className="w-full min-w-max border-collapse text-left text-sm">
           <thead>
             <tr className="bg-stone-100">
               <th className="sticky left-0 z-30 w-8 border border-stone-300 bg-white px-1 py-2 text-center text-xs font-medium text-stone-800">
@@ -153,7 +153,12 @@ function PlanningTabel({
               {/* lege header voor verwijder-kolom */}
               <th className="border border-stone-300 px-1 py-2" />
               {PLANNING_HEADERS.map((h) => (
-                <th key={h} className="border border-stone-300 px-2 py-2 font-medium text-stone-800 whitespace-normal break-words align-top">
+                <th
+                  key={h}
+                  className={`whitespace-nowrap border border-stone-300 px-2 py-2 font-medium text-stone-800 ${
+                    h === "Volledig adress" ? "min-w-[22rem]" : ""
+                  }`}
+                >
                   {h}
                 </th>
               ))}
@@ -189,7 +194,7 @@ function PlanningTabel({
                     tabIndex={0}
                     data-cell-row={rowIndex}
                     data-cell-col={0}
-                    className="border border-stone-300 p-0 align-top focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
+                    className="min-w-[4rem] border border-stone-300 p-0 align-top focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
                   >
                     <Link
                       href={`/bezorgplanner/afronden/${row.order_id}`}
@@ -203,7 +208,7 @@ function PlanningTabel({
                     tabIndex={0}
                     data-cell-row={rowIndex}
                     data-cell-col={1}
-                    className="border border-stone-300 px-2 py-1.5 text-stone-700 whitespace-normal break-words focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
+                    className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
                   >
                     {formatCell(row.naam)}
                   </td>
@@ -212,7 +217,7 @@ function PlanningTabel({
                     tabIndex={0}
                     data-cell-row={rowIndex}
                     data-cell-col={2}
-                    className="border border-stone-300 px-2 py-1.5 text-stone-700 whitespace-normal break-words focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
+                    className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
                   >
                     {formatCell(row.aankomsttijd)}
                   </td>
@@ -221,7 +226,7 @@ function PlanningTabel({
                     tabIndex={0}
                     data-cell-row={rowIndex}
                     data-cell-col={3}
-                    className="border border-stone-300 px-2 py-1.5 text-stone-700 whitespace-normal break-words focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
+                    className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
                   >
                     {formatCell(row.tijd_opmerking)}
                   </td>
@@ -230,7 +235,7 @@ function PlanningTabel({
                     tabIndex={0}
                     data-cell-row={rowIndex}
                     data-cell-col={4}
-                    className="border border-stone-300 px-2 py-1.5 text-stone-700 whitespace-normal break-words focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
+                    className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
                   >
                     {row.adres_url ? (
                       <a href={row.adres_url} target="_blank" rel="noopener noreferrer" className="text-koopje-orange underline underline-offset-2">
@@ -245,7 +250,7 @@ function PlanningTabel({
                     tabIndex={0}
                     data-cell-row={rowIndex}
                     data-cell-col={5}
-                    className="border border-stone-300 px-2 py-1.5 text-stone-700 whitespace-normal break-words focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
+                    className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
                   >
                     {(() => {
                       const phone =
@@ -278,7 +283,9 @@ function PlanningTabel({
                       tabIndex={0}
                       data-cell-row={rowIndex}
                       data-cell-col={6 + i}
-                      className="border border-stone-300 px-2 py-1.5 text-stone-700 whitespace-normal break-words focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
+                      className={`border border-stone-300 px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-koopje-orange/40 ${
+                        i === 6 ? "min-w-[22rem]" : "min-w-[4rem]"
+                      }`}
                     >
                       {formatCell(v)}
                     </td>
