@@ -10,6 +10,8 @@ interface EditableSheetTableProps {
   onCellBlur?: (rowIndex: number, header: string, value: string) => void;
   /** Aantal echte datarijen (wordt gebruikt om actie-iconen zichtbaar te maken). */
   dataRowCount?: number;
+  /** Minimum aantal rijen bij bewerkbare modus (default: 50). Zet op `0` om alleen data-rijen te tonen. */
+  minRows?: number;
   /** Optionele actie per data-rij (bijv. prullenbak). */
   rowAction?: (rowIndex: number) => void;
   cellRenderers?: Record<string, (rowIndex: number, value: string, onSave: (v: string) => void) => React.ReactNode>;
@@ -47,6 +49,7 @@ export default function EditableSheetTable({
   initialData,
   onCellBlur,
   dataRowCount,
+  minRows,
   rowAction,
   cellRenderers,
   readOnly = false,
@@ -55,7 +58,7 @@ export default function EditableSheetTable({
 }: EditableSheetTableProps) {
   const colCount = (headers as string[]).length;
   const totalDataRows = dataRowCount ?? initialData?.length ?? 0;
-  const effectiveMinRows = readOnly ? 0 : MIN_ROWS;
+  const effectiveMinRows = readOnly ? 0 : minRows ?? MIN_ROWS;
   const rowCount = Math.max(effectiveMinRows, totalDataRows);
   const isWideAddressColumn = (header: string) =>
     header === "Volledig adress" || header === "Adres";
