@@ -1,7 +1,7 @@
 export const AUTH_COOKIE = "bp_auth_email";
 
 export const ALLOWED_USERS = [
-  { email: "info@koopjefatbike.nl", defaultPassword: "FatBaiks2025!@#" },
+  { email: "info@koopjefatbike.nl", defaultPassword: "0814" },
   { email: "malyar@aiventive.nl", defaultPassword: "123456" },
 ] as const;
 
