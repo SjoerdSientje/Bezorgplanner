@@ -49,7 +49,8 @@ const BUCKET = "garantiebewijzen";
  */
 export async function verwerkGarantiebewijs(
   data: GarantieData,
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  options?: { skipEmail?: boolean }
 ): Promise<string> {
   const datumStr = formatDatum(new Date());
   const pdfData = {
@@ -81,7 +82,9 @@ export async function verwerkGarantiebewijs(
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/$/, "") ?? "";
   const publicUrl = `${supabaseUrl}/storage/v1/object/public/${BUCKET}/${path}`;
 
-  await stuurGarantieEmail(data, publicUrl, pdfBuffer, fileName);
+  if (!options?.skipEmail) {
+    await stuurGarantieEmail(data, publicUrl, pdfBuffer, fileName);
+  }
   return publicUrl;
 }
 

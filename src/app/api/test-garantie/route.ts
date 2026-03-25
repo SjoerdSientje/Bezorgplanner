@@ -1,13 +1,36 @@
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { verwerkGarantiebewijs, type GarantieData } from "@/lib/garantiebewijs";
 
+/** Voorkomt statische prerender / cache; elke hit moet expliciet zijn. */
+export const dynamic = "force-dynamic";
+
 /**
  * GET /api/test-garantie
- * Test de garantiebewijs-flow: PDF genereren, upload Supabase, email met bijlage.
- * Open in browser: http://localhost:3000/api/test-garantie
+ * Test de garantiebewijs-flow: PDF genereren, upload Supabase, optioneel e-mail.
+ *
+ * Lokale dev (`next dev`): zonder extra geheim.
+ * Productie / `next start`: zet TEST_GARANTIE_SECRET en roep aan met ?key=...
+ *
+ * Stuur geen testmail naar GMAIL_FROM — dat spamde het service-inbox. Zet
+ * TEST_GARANTIE_EMAIL als je echt een testmail wilt; anders alleen PDF-upload.
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const isLocalDev = process.env.NODE_ENV === "development";
+  const secret = process.env.TEST_GARANTIE_SECRET;
+  if (!isLocalDev) {
+    if (!secret) {
+      return NextResponse.json(
+        { ok: false, error: "Test endpoint uitgeschakeld (TEST_GARANTIE_SECRET ontbreekt)." },
+        { status: 403 }
+      );
+    }
+    const key = request.nextUrl.searchParams.get("key");
+    if (key !== secret) {
+      return NextResponse.json({ ok: false, error: "Niet toegestaan." }, { status: 403 });
+    }
+  }
+
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!supabaseUrl || !serviceKey) {
@@ -17,11 +40,14 @@ export async function GET() {
     );
   }
 
+  const testEmail = process.env.TEST_GARANTIE_EMAIL?.trim() || null;
+  const skipEmail = !testEmail;
+
   const testData: GarantieData = {
     order_id: "test-" + Date.now(),
     order_nummer: "#MPATEST",
     naam: "Test Klant",
-    email: process.env.GMAIL_FROM ?? "test@test.nl",
+    email: testEmail,
     producten: "V20 PRO Fatbike 2026",
     serienummer: "TEST123",
     totaal_prijs: 850,
@@ -31,11 +57,14 @@ export async function GET() {
 
   try {
     const supabase = createClient(supabaseUrl, serviceKey);
-    const link = await verwerkGarantiebewijs(testData, supabase);
+    const link = await verwerkGarantiebewijs(testData, supabase, { skipEmail });
     return NextResponse.json({
       ok: true,
       link,
-      summary: "PDF aangemaakt, geüpload en email verstuurd (met bijlage).",
+      emailSent: !skipEmail,
+      summary: skipEmail
+        ? "PDF aangemaakt en geüpload; geen e-mail (zet TEST_GARANTIE_EMAIL om te mailen)."
+        : "PDF aangemaakt, geüpload en e-mail verstuurd naar TEST_GARANTIE_EMAIL.",
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
