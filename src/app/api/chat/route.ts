@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 import { requireAccountEmail } from "@/lib/account";
+import { buildSientjeSystemPrompt } from "@/lib/sientje-system-prompt";
 
 export const maxDuration = 60;
 
@@ -53,7 +54,7 @@ function isEligibleOrder(o: RitjesOrder): boolean {
 function formatOrderForContext(o: RitjesOrder): string {
   const slot = o.aankomsttijd_slot?.trim() ?? "";
   const slotStr = slot ? slot : "(nog geen slot)";
-  return `Order ${o.order_nummer ?? "?"} | ${o.naam ?? ""} | Adres: ${o.volledig_adres ?? ""} | Aankomsttijd: ${slotStr} | Bezorgtijd voorkeur: ${o.bezorgtijd_voorkeur ?? "-"} | Aantal fietsen: ${o.aantal_fietsen ?? ""}`;
+  return `Order ${o.order_nummer ?? "?"} | ${o.naam ?? ""} | Adres: ${o.volledig_adres ?? ""} | Aankomsttijd (tijdslot): ${slotStr} | Bezorgtijd voorkeur (tijdsvenster/restrictie): ${o.bezorgtijd_voorkeur ?? "-"} | Datum opmerking: ${o.datum_opmerking ?? "-"} | Aantal fietsen: ${o.aantal_fietsen ?? ""}`;
 }
 
 function buildContextBlock(ritjesOrders: RitjesOrder[]): string {
@@ -106,17 +107,9 @@ export async function POST(request: NextRequest) {
     }
 
     const ritjesOrders = (body.ritjesContext?.orders ?? []) as RitjesOrder[];
+    const vertrektijd = (body.ritjesContext as { vertrektijd?: string } | undefined)?.vertrektijd;
     const contextBlock = buildContextBlock(ritjesOrders);
-
-    const systemPrompt = `Je bent Sientje, de vriendelijke planning-assistent van Koopjefatbike. Je helpt met sparren over bezorgplanning, routes en logistiek.
-
-BELANGRIJK: Je mag ALLEEN tijdsloten bekijken, toevoegen of bewerken voor orders die aan BEIDE voorwaarden voldoen:
-1. Datum opmerking = "vandaag" (of de datum van vandaag)
-2. Meenemen in planning = ja
-
-Orders die hier niet aan voldoen mag je NIET bespreken of aanpassen. Als iemand vraagt om een order buiten deze criteria aan te passen, leg dan uit dat je dat niet kunt doen.
-
-Wees bondig, helder en behulpzaam. Antwoord in het Nederlands.${contextBlock}`;
+    const systemPrompt = buildSientjeSystemPrompt(contextBlock, vertrektijd);
 
     const openai = new OpenAI({ apiKey });
 
@@ -126,7 +119,7 @@ Wees bondig, helder en behulpzaam. Antwoord in het Nederlands.${contextBlock}`;
         function: {
           name: "set_aankomsttijd_slots",
           description:
-            "Zet of vervang de aankomsttijd (tijdslot) voor één of meer orders in Ritjes voor vandaag. Gebruik het order_nummer om de juiste order te vinden. Het tijdslot moet het formaat 'HH:MM - HH:MM' hebben, bijv. '12:22 - 14:22'.",
+            "Zet of vervang het klanttijdslot (kolom Aankomsttijd) voor één of meer orders. Formaat: 'HH:MM - HH:MM' (2 uur venster). Houd rekening met de bezorgtijd-voorkeur van die order. Match op order_nummer.",
           parameters: {
             type: "object",
             properties: {

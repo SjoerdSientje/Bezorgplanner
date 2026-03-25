@@ -26,6 +26,8 @@ type Message = { role: "user" | "assistant"; content: string };
 export interface SparrenMetSientjeProps {
   /** Huidige orders uit Ritjes voor vandaag; de chat kan deze lezen en tijdsloten aanpassen. */
   ritjesOrders?: RitjesOrderFromApi[];
+  /** Zelfde vertrektijd als rechtsboven bij Route genereren (HH:MM). */
+  vertrektijd?: string;
   /** Wordt aangeroepen nadat de chat tijdsloten heeft doorgevoerd, zodat de tabel ververst. */
   onSlotsUpdated?: () => void;
 }
@@ -56,6 +58,7 @@ function SientjeAvatar({ className }: { className?: string }) {
 
 export default function SparrenMetSientje({
   ritjesOrders = [],
+  vertrektijd = "10:30",
   onSlotsUpdated,
 }: SparrenMetSientjeProps) {
   const [open, setOpen] = useState(false);
@@ -119,7 +122,7 @@ export default function SparrenMetSientje({
             role: m.role,
             content: m.content,
           })),
-          ritjesContext: { orders: ritjesOrders },
+          ritjesContext: { orders: ritjesOrders, vertrektijd },
         }),
       });
       const data = await res.json().catch(() => ({}));

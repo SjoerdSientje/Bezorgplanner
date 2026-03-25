@@ -64,10 +64,16 @@ function TijdPicker({ value, onChange }: { value: string; onChange: (v: string) 
 
 interface Props {
   onRouteGenerated?: () => void;
+  /** Vertrektijd rechtsboven op Ritjes voor vandaag; gedeeld met o.a. Sparren met Sientje. */
+  vertrektijd: string;
+  onVertrektijdChange: (v: string) => void;
 }
 
-export default function RitjesRouteControls({ onRouteGenerated }: Props) {
-  const [vertrektijd, setVertrektijd] = useState("10:30");
+export default function RitjesRouteControls({
+  onRouteGenerated,
+  vertrektijd,
+  onVertrektijdChange,
+}: Props) {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: "ok" | "error"; text: string } | null>(null);
 
@@ -151,7 +157,7 @@ export default function RitjesRouteControls({ onRouteGenerated }: Props) {
             <label htmlFor="vertrektijd" className="text-sm font-medium text-koopje-black">
               Vertrektijd
             </label>
-            <TijdPicker value={vertrektijd} onChange={setVertrektijd} />
+            <TijdPicker value={vertrektijd} onChange={onVertrektijdChange} />
           </div>
           <button
             type="button"
