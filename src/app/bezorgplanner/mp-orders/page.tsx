@@ -92,6 +92,26 @@ export default function MPOrdersPage() {
     return orders.map((o) => HEADERS.map((h) => cel(o, h)));
   }, [orders]);
 
+  const cellRenderers = useMemo(
+    () => ({
+      "Link Aankoopbewijs": (_rowIndex: number, value: string) => {
+        const href = String(value ?? "").trim();
+        if (!href) return <span className="block px-2 py-1.5 text-sm text-stone-300">—</span>;
+        return (
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block truncate px-2 py-1.5 text-sm text-koopje-orange underline underline-offset-2 hover:text-koopje-orange/80"
+          >
+            Bekijk PDF
+          </a>
+        );
+      },
+    }),
+    []
+  );
+
   return (
     <>
       <Header />
@@ -125,6 +145,7 @@ export default function MPOrdersPage() {
               headers={HEADERS}
               initialData={tableRows}
               dataRowCount={orders.length}
+              cellRenderers={cellRenderers}
             />
           )}
         </div>

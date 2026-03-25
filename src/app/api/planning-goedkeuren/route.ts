@@ -3,6 +3,7 @@ import { createServerSupabaseClient } from "@/lib/supabase";
 import { getPlanningDateForGoedkeuren } from "@/lib/planning-date";
 import { sendWhatsAppByEvent } from "@/lib/whatsapp";
 import { requireAccountEmail } from "@/lib/account";
+import { verwerkGarantiebewijs } from "@/lib/garantiebewijs";
 
 function shouldSendPlanningGoedkeurenWhatsApp(
   order: {
@@ -46,7 +47,7 @@ export async function POST(request: NextRequest) {
     // Orders ophalen die in aanmerking komen
     const { data: orders, error: queryError } = await supabase
       .from("orders")
-      .select("id, order_nummer, aankomsttijd_slot, bestelling_totaal_prijs, naam, telefoon_e164, telefoon_nummer, type, betaald, mp_tags, datum, datum_opmerking, meenemen_in_planning, nieuw_appje_sturen, opmerkingen_klant, bezorgtijd_voorkeur")
+      .select("id, order_nummer, aankomsttijd_slot, bestelling_totaal_prijs, naam, telefoon_e164, telefoon_nummer, type, betaald, mp_tags, datum, datum_opmerking, meenemen_in_planning, nieuw_appje_sturen, opmerkingen_klant, bezorgtijd_voorkeur, email, producten, serienummer, aantal_fietsen, link_aankoopbewijs")
       .eq("owner_email", ownerEmail)
       .eq("status", "ritjes_vandaag")
       .eq("meenemen_in_planning", true)
@@ -79,6 +80,42 @@ export async function POST(request: NextRequest) {
       const startB = ((b.aankomsttijd_slot ?? "").toString().split(" - ")[0] ?? "");
       return startA.localeCompare(startB);
     });
+
+    // Zorg dat MP orders een aankoopbewijs-link hebben na goedkeuren.
+    // Criteria: order_nummer begint met #MP (MPA/MPB...) en link_aankoopbewijs ontbreekt.
+    for (const o of sorted as any[]) {
+      const orderNummer = String(o.order_nummer ?? "").trim();
+      const isMp = /^#MP/i.test(orderNummer);
+      const hasLink = String(o.link_aankoopbewijs ?? "").trim() !== "";
+      if (!isMp || hasLink) continue;
+
+      try {
+        const garantieLink = await verwerkGarantiebewijs(
+          {
+            order_id: String(o.id),
+            order_nummer: o.order_nummer ?? null,
+            naam: o.naam ?? null,
+            email: o.email ?? null,
+            producten: o.producten ?? null,
+            serienummer: o.serienummer ?? null,
+            totaal_prijs:
+              o.bestelling_totaal_prijs != null ? Number(o.bestelling_totaal_prijs) : null,
+            aantal_fietsen:
+              o.aantal_fietsen != null ? Number(o.aantal_fietsen) : null,
+            datum: new Date().toLocaleDateString("nl-NL"),
+          },
+          supabase as any
+        );
+
+        await supabase
+          .from("orders")
+          .update({ link_aankoopbewijs: garantieLink })
+          .eq("owner_email", ownerEmail)
+          .eq("id", String(o.id));
+      } catch (err) {
+        console.error("[api/planning-goedkeuren] garantiebewijs fout voor", orderNummer, err);
+      }
+    }
 
     // Verwijder altijd de bestaande slots voor deze datum.
     // - "replace": vervangt de huidige dag-planning volledig.

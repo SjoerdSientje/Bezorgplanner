@@ -321,7 +321,24 @@ function PlanningTabel({
                         i === 6 ? "min-w-[22rem]" : "min-w-[4rem]"
                       }`}
                     >
-                      {formatCell(v)}
+                      {(() => {
+                        // Link Aankoopbewijs is the last column in the "Rest" array
+                        const isLinkCol = i === 10;
+                        const href = isLinkCol ? String(v ?? "").trim() : "";
+                        if (isLinkCol && href) {
+                          return (
+                            <a
+                              href={href}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-koopje-orange underline underline-offset-2 hover:text-koopje-orange/80"
+                            >
+                              Bekijk PDF
+                            </a>
+                          );
+                        }
+                        return formatCell(v);
+                      })()}
                     </td>
                   ))}
                   {Array.from({ length: fillerCols }).map((_, idx) => (
