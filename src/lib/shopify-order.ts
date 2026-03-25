@@ -486,7 +486,8 @@ export function buildLineItemsJson(order: ShopifyOrder): string | null {
 
       for (const bikeTitle of bikeTitles) {
         const parsed = parseExtrasFromManualBikeTitle(bikeTitle);
-        const defaultItems = getDefaultItemsVoorFiets(parsed.baseName, []);
+        // Zelfde Levering-properties als op het Shopify line item (geldt voor alle fietsen op deze regel).
+        const defaultItems = getDefaultItemsVoorFiets(parsed.baseName, rawProps);
 
         structured.push({
           name: parsed.baseName,
