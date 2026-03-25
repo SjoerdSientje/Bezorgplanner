@@ -279,6 +279,7 @@ export default function RitjesVandaagPage() {
               rowAction={deleteOrder}
               cellRenderers={cellRenderers}
               resetKey={tableResetKey}
+              showRowNumbers
             />
           )}
         </div>

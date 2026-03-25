@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 
 const MIN_ROWS = 50;
 
@@ -15,6 +15,8 @@ interface EditableSheetTableProps {
   cellRenderers?: Record<string, (rowIndex: number, value: string, onSave: (v: string) => void) => React.ReactNode>;
   /** Zet de tabel volledig read-only (geen inputs/bewerkingen, geen custom renderers). */
   readOnly?: boolean;
+  /** Toon rijnummers links (sticky) en maak cellen keyboard-navigable. */
+  showRowNumbers?: boolean;
   /**
    * Verhoog deze waarde wanneer je de tabel geforceerd wilt resetten vanuit initialData
    * (bijv. na een echte server-fetch). Celwijzigingen mogen deze NIET verhogen.
@@ -48,6 +50,7 @@ export default function EditableSheetTable({
   rowAction,
   cellRenderers,
   readOnly = false,
+  showRowNumbers = false,
   resetKey = 0,
 }: EditableSheetTableProps) {
   const colCount = (headers as string[]).length;
@@ -56,6 +59,43 @@ export default function EditableSheetTable({
   const rowCount = Math.max(effectiveMinRows, totalDataRows);
   const isWideAddressColumn = (header: string) =>
     header === "Volledig adress" || header === "Adres";
+
+  const tableRef = useRef<HTMLTableElement | null>(null);
+
+  function focusFirstInteractiveCell(cell: HTMLElement) {
+    const focusable = cell.querySelector<HTMLElement>(
+      'input,textarea,select,button,a,[tabindex]:not([tabindex="-1"])'
+    );
+    if (focusable) focusable.focus();
+  }
+
+  function handleArrowNavigation(
+    e: React.KeyboardEvent<HTMLDivElement>,
+    currentRow: number,
+    currentCol: number
+  ) {
+    const maxRow = Math.max(0, totalDataRows - 1);
+    const maxCol = Math.max(0, colCount - 1);
+
+    let nextRow = currentRow;
+    let nextCol = currentCol;
+
+    if (e.key === "ArrowUp") nextRow = Math.max(0, currentRow - 1);
+    else if (e.key === "ArrowDown") nextRow = Math.min(maxRow, currentRow + 1);
+    else if (e.key === "ArrowLeft") nextCol = Math.max(0, currentCol - 1);
+    else if (e.key === "ArrowRight") nextCol = Math.min(maxCol, currentCol + 1);
+    else return;
+
+    e.preventDefault();
+    const tableEl = tableRef.current;
+    if (!tableEl) return;
+
+    const nextTd = tableEl.querySelector<HTMLElement>(
+      `td[data-cell-row="${nextRow}"][data-cell-col="${nextCol}"]`
+    );
+    if (!nextTd) return;
+    focusFirstInteractiveCell(nextTd);
+  }
 
   const [values, setValues] = useState<string[][]>(() =>
     initialData ? padToRows(initialData, colCount, rowCount) : createEmptyGrid(headers, rowCount)
@@ -92,10 +132,29 @@ export default function EditableSheetTable({
   const hasActionCol = !readOnly && Boolean(rowAction);
 
   return (
-    <div className="overflow-x-auto overflow-y-auto pb-2 rounded-xl border-2 border-stone-300 bg-white shadow-sm">
-      <table className="w-full min-w-max border-collapse text-left text-sm">
+    <div
+      className="overflow-x-auto overflow-y-auto pb-2 rounded-xl border-2 border-stone-300 bg-white shadow-sm"
+      onKeyDownCapture={(e) => {
+        if (!showRowNumbers) return;
+        if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) return;
+        const target = e.target as HTMLElement | null;
+        const td = target?.closest?.('td[data-cell-row][data-cell-col]') as HTMLElement | null;
+        if (!td) return;
+        const cellRow = Number(td.getAttribute("data-cell-row"));
+        const cellCol = Number(td.getAttribute("data-cell-col"));
+        if (!Number.isFinite(cellRow) || !Number.isFinite(cellCol)) return;
+        if (cellRow < 0 || cellRow >= totalDataRows) return;
+        handleArrowNavigation(e, cellRow, cellCol);
+      }}
+    >
+      <table ref={tableRef} className="w-full min-w-max border-collapse text-left text-sm">
         <thead>
           <tr className="bg-stone-100">
+            {showRowNumbers && (
+              <th className="sticky left-0 z-30 w-8 border border-stone-300 bg-white px-1 py-2 text-center text-xs font-medium text-stone-800">
+                #
+              </th>
+            )}
             {hasActionCol && (
               <th className="w-8 border border-stone-300" />
             )}
@@ -116,6 +175,11 @@ export default function EditableSheetTable({
             const isDataRow = i < totalDataRows;
             return (
               <tr key={i}>
+                {showRowNumbers && (
+                  <td className="sticky left-0 z-30 w-8 border border-stone-300 bg-white px-1 py-1 text-center text-xs text-stone-700">
+                    {isDataRow ? i + 1 : ""}
+                  </td>
+                )}
                 {hasActionCol && (
                   <td className="w-8 border border-stone-300 p-0 align-middle">
                     {isDataRow ? (
@@ -143,6 +207,8 @@ export default function EditableSheetTable({
                       className={`min-w-[4rem] border border-stone-300 p-0 align-top ${
                         wide ? "min-w-[22rem]" : ""
                       }`}
+                      data-cell-row={i}
+                      data-cell-col={j}
                     >
                       {readOnly ? (
                         <span

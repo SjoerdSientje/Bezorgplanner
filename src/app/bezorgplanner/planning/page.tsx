@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useCallback, useState, useMemo } from "react";
+import { useEffect, useCallback, useState, useMemo, type KeyboardEvent } from "react";
 import Link from "next/link";
 import Header from "@/components/Header";
 
@@ -93,13 +93,63 @@ function PlanningTabel({
   labelColor: string;
   onDeleteSlot: (slotId: string, orderNummer: string) => void;
 }) {
+  function focusFirstInteractiveCell(cell: HTMLElement) {
+    const focusable = cell.querySelector<HTMLElement>(
+      'a,button,input,textarea,select,[tabindex]:not([tabindex="-1"])'
+    );
+    if (focusable) focusable.focus();
+    else cell.focus();
+  }
+
+  function handleArrowNavigation(
+    e: KeyboardEvent<HTMLDivElement>,
+    currentRow: number,
+    currentCol: number
+  ) {
+    const maxRow = Math.max(0, rows.length - 1);
+    const maxCol = Math.max(0, PLANNING_HEADERS.length - 1);
+
+    let nextRow = currentRow;
+    let nextCol = currentCol;
+
+    if (e.key === "ArrowUp") nextRow = Math.max(0, currentRow - 1);
+    else if (e.key === "ArrowDown") nextRow = Math.min(maxRow, currentRow + 1);
+    else if (e.key === "ArrowLeft") nextCol = Math.max(0, currentCol - 1);
+    else if (e.key === "ArrowRight") nextCol = Math.min(maxCol, currentCol + 1);
+    else return;
+
+    e.preventDefault();
+    const root = e.currentTarget as HTMLElement;
+    const nextTd = root.querySelector<HTMLElement>(
+      `td[data-cell-row="${nextRow}"][data-cell-col="${nextCol}"]`
+    );
+    if (!nextTd) return;
+    focusFirstInteractiveCell(nextTd);
+  }
+
   return (
     <div className="mb-8">
       <h2 className={`mb-3 text-base font-semibold ${labelColor}`}>{label}</h2>
-      <div className="overflow-x-auto overflow-y-auto pb-2 rounded-xl border-2 border-stone-300 bg-white shadow-sm">
+      <div
+        className="overflow-x-auto overflow-y-auto pb-2 rounded-xl border-2 border-stone-300 bg-white shadow-sm"
+        onKeyDownCapture={(e) => {
+          if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) return;
+          const target = e.target as HTMLElement | null;
+          const td = target?.closest?.('td[data-cell-row][data-cell-col]') as HTMLElement | null;
+          if (!td) return;
+          const cellRow = Number(td.getAttribute("data-cell-row"));
+          const cellCol = Number(td.getAttribute("data-cell-col"));
+          if (!Number.isFinite(cellRow) || !Number.isFinite(cellCol)) return;
+          if (cellRow < 0 || cellRow >= rows.length) return;
+          handleArrowNavigation(e, cellRow, cellCol);
+        }}
+      >
         <table className="w-full min-w-max border-collapse text-left text-sm">
           <thead>
             <tr className="bg-stone-100">
+              <th className="sticky left-0 z-30 w-8 border border-stone-300 bg-white px-1 py-2 text-center text-xs font-medium text-stone-800">
+                #
+              </th>
               {/* lege header voor verwijder-kolom */}
               <th className="border border-stone-300 px-1 py-2" />
               {PLANNING_HEADERS.map((h) => (
@@ -112,13 +162,16 @@ function PlanningTabel({
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={PLANNING_HEADERS.length + 1} className="border border-stone-300 px-2 py-4 text-center text-koopje-black/60">
+                <td colSpan={PLANNING_HEADERS.length + 2} className="border border-stone-300 px-2 py-4 text-center text-koopje-black/60">
                   Geen ritjes.
                 </td>
               </tr>
             ) : (
-              rows.map((row) => (
+              rows.map((row, rowIndex) => (
                 <tr key={row.slot_id}>
+                  <td className="sticky left-0 z-30 w-8 border border-stone-300 bg-white px-1 py-1 text-center text-xs text-stone-700">
+                    {rowIndex + 1}
+                  </td>
                   {/* verwijder-knop */}
                   <td className="border border-stone-300 px-1 py-1 text-center align-middle">
                     <button
@@ -132,7 +185,12 @@ function PlanningTabel({
                       </svg>
                     </button>
                   </td>
-                  <td className="min-w-[4rem] border border-stone-300 p-0 align-top">
+                  <td
+                    tabIndex={0}
+                    data-cell-row={rowIndex}
+                    data-cell-col={0}
+                    className="min-w-[4rem] border border-stone-300 p-0 align-top focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
+                  >
                     <Link
                       href={`/bezorgplanner/afronden/${row.order_id}`}
                       className="block px-2 py-1.5 text-koopje-orange underline decoration-koopje-orange underline-offset-2 hover:text-koopje-orange-dark"
@@ -141,13 +199,39 @@ function PlanningTabel({
                     </Link>
                   </td>
                   {/* Naam */} 
-                  <td className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700">{formatCell(row.naam)}</td>
+                  <td
+                    tabIndex={0}
+                    data-cell-row={rowIndex}
+                    data-cell-col={1}
+                    className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
+                  >
+                    {formatCell(row.naam)}
+                  </td>
                   {/* Aankomsttijd */} 
-                  <td className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700">{formatCell(row.aankomsttijd)}</td>
+                  <td
+                    tabIndex={0}
+                    data-cell-row={rowIndex}
+                    data-cell-col={2}
+                    className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
+                  >
+                    {formatCell(row.aankomsttijd)}
+                  </td>
                   {/* Tijd opmerking */} 
-                  <td className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700">{formatCell(row.tijd_opmerking)}</td>
+                  <td
+                    tabIndex={0}
+                    data-cell-row={rowIndex}
+                    data-cell-col={3}
+                    className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
+                  >
+                    {formatCell(row.tijd_opmerking)}
+                  </td>
                   {/* Adress URL */} 
-                  <td className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700">
+                  <td
+                    tabIndex={0}
+                    data-cell-row={rowIndex}
+                    data-cell-col={4}
+                    className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
+                  >
                     {row.adres_url ? (
                       <a href={row.adres_url} target="_blank" rel="noopener noreferrer" className="text-koopje-orange underline underline-offset-2">
                         📍 Kaart
@@ -157,7 +241,12 @@ function PlanningTabel({
                     )}
                   </td>
                   {/* Bel link */} 
-                  <td className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700">
+                  <td
+                    tabIndex={0}
+                    data-cell-row={rowIndex}
+                    data-cell-col={5}
+                    className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
+                  >
                     {(() => {
                       const phone =
                         normalizeToE164(row.telefoon_nummer) ?? extractPhoneFromBelLink(row.bel_link);
@@ -184,7 +273,13 @@ function PlanningTabel({
                     row.email,
                     row.link_aankoopbewijs,
                   ].map((v, i) => (
-                    <td key={i} className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700">
+                    <td
+                      key={i}
+                      tabIndex={0}
+                      data-cell-row={rowIndex}
+                      data-cell-col={6 + i}
+                      className="min-w-[4rem] border border-stone-300 px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-koopje-orange/40"
+                    >
                       {formatCell(v)}
                     </td>
                   ))}
