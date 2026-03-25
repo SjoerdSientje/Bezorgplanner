@@ -96,6 +96,39 @@ export default function ProductRegelsPage() {
             orders in de database veranderen niet.
           </p>
 
+          <div className="mt-6 max-w-4xl rounded-xl border border-koopje-orange/30 bg-orange-50/60 p-4 text-sm text-stone-800">
+            <p className="font-semibold text-koopje-black">MP, Shopify webshop en handmatig — wat hoort bij deze JSON?</p>
+            <ul className="mt-3 list-inside list-disc space-y-2 text-stone-700">
+              <li>
+                <strong>Deze JSON bestuurt alleen de lijst met standaard inbegrepen spullen</strong> (onder
+                &quot;Standaard inbegrepen&quot; in de producten-popup), op basis van de Shopify-property{" "}
+                <strong>Levering</strong> (waarden zoals volledig rijklaar / in doos) en het <strong>model</strong>{" "}
+                uit de productnaam. Dat geldt voor elke bron zodra die property op de fiets-regel staat.
+              </li>
+              <li>
+                <strong>Marktplaats (MP)</strong>: bij een nieuwe MP-order wordt de Levering uit het formulier
+                op de fiets gezet; dezelfde regels-engine wordt gebruikt als bij Shopify.
+              </li>
+              <li>
+                <strong>Shopify (website)</strong>: orders komen binnen met echte line items en vaak
+                properties op de fiets; prijzen komen uit Shopify (regeltotaal).
+              </li>
+              <li>
+                <strong>Shopify handmatig</strong>: orders zonder properties leunen op de <strong>producttitel</strong>{" "}
+                (splitsing op <code className="rounded bg-white/80 px-1">+</code> en{" "}
+                <code className="rounded bg-white/80 px-1">&amp;</code>, montage-tekst als property op de fiets,
+                extra&apos;s als losse regels). <strong>Die titel-logica staat vast in de code</strong> (
+                <code className="rounded bg-white/80 px-1">buildLineItemsJson</code> in{" "}
+                <code className="rounded bg-white/80 px-1">shopify-order.ts</code>), niet in onderstaande JSON.
+              </li>
+              <li>
+                <strong>Prijzen</strong> (wat de klant betaalt per regel / totaal) worden nergens door deze JSON
+                bepaald: Shopify gebruikt orderregels; MP gebruikt het ingevoerde totaal + technische dummy-prijs
+                op fietsregels voor de app-logica.
+              </li>
+            </ul>
+          </div>
+
           {updatedAt && (
             <p className="mt-2 text-xs text-koopje-black/50">
               Laatst opgeslagen: {new Date(updatedAt).toLocaleString("nl-NL")}
