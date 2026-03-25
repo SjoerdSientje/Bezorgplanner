@@ -20,7 +20,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="nl">
-      <body className="antialiased">{children}</body>
+      <body className="antialiased">
+        <div className="app-scale">{children}</div>
+      </body>
     </html>
   );
 }

@@ -14,3 +14,12 @@
     -moz-osx-font-smoothing: grayscale;
   }
 }
+
+/* Mobile: default "zoomed out" view like Sheets */
+@media (max-width: 640px) {
+  .app-scale {
+    transform: scale(0.75);
+    transform-origin: top left;
+    width: calc(100% / 0.75);
+  }
+}
