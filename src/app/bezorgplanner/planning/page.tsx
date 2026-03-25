@@ -158,7 +158,8 @@ function PlanningTabel({
       <h2 className={`mb-3 text-base font-semibold ${labelColor}`}>{label}</h2>
       <div
         ref={wrapperRef}
-        className="overflow-x-auto rounded-xl border-2 border-stone-300 bg-white shadow-sm"
+        className="overflow-x-auto pb-3 rounded-xl border-2 border-stone-300 bg-white shadow-sm"
+        style={{ scrollbarGutter: "stable both-edges" }}
         onKeyDownCapture={(e) => {
           if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) return;
           const target = e.target as HTMLElement | null;
@@ -398,7 +399,7 @@ export default function PlanningPage() {
     <>
       <Header />
       <main className="min-h-[calc(100vh-4rem)] bg-white">
-        <div className="mx-auto max-w-[1600px] px-4 py-8 sm:px-6 sm:py-12">
+        <div className="mx-auto w-full max-w-none px-4 py-8 sm:px-6 sm:py-12">
           <div className="mb-6 flex items-center justify-between gap-4">
             <div className="flex items-center gap-4">
               <Link

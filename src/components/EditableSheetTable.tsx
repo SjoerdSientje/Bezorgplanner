@@ -158,7 +158,8 @@ export default function EditableSheetTable({
   return (
     <div
       ref={wrapperRef}
-      className="overflow-x-auto rounded-xl border-2 border-stone-300 bg-white shadow-sm"
+      className="overflow-x-auto pb-3 rounded-xl border-2 border-stone-300 bg-white shadow-sm"
+      style={{ scrollbarGutter: "stable both-edges" }}
       onKeyDownCapture={(e) => {
         if (!showRowNumbers) return;
         if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) return;
