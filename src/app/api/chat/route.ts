@@ -77,7 +77,7 @@ function buildContextBlock(ritjesOrders: RitjesOrder[]): string {
     block += ` Momenteel hebben ${withSlot.length} order(s) een slot (de route) en ${withoutSlot.length} order(s) nog geen slot.`;
   }
   block +=
-    '\n\nGebruik de functie set_aankomsttijd_slots wanneer de gebruiker vraagt om tijdsloten door te voeren (bijv. "zet deze tijdsloten in aankomsttijd"). Match op order_nummer. Je mag ALLEEN tijdsloten zetten voor orders die aan de criteria voldoen.';
+    "\n\nRoep **set_aankomsttijd_slots** alleen aan nadat de gebruiker je voorstel **expliciet heeft bevestigd** (niet in het eerste antwoord zonder 'ja' / 'doe maar' / vergelijkbaar). Match op order_nummer. Alleen orders die aan de criteria voldoen.";
   return block;
 }
 
@@ -119,7 +119,7 @@ export async function POST(request: NextRequest) {
         function: {
           name: "set_aankomsttijd_slots",
           description:
-            "Zet of vervang het klanttijdslot (kolom Aankomsttijd) voor één of meer orders. Formaat: 'HH:MM - HH:MM' (2 uur venster). Houd rekening met de bezorgtijd-voorkeur van die order. Match op order_nummer.",
+            "Zet het klanttijdslot (kolom Aankomsttijd) voor één of meer orders. Formaat: 'HH:MM - HH:MM' (2 uur; 45 min voor + 75 min na verwachte aankomst, of binnen tijdsrestrictie uit bezorgtijd voorkeur). Alleen aanroepen nadat de gebruiker expliciet heeft bevestigd dat je mag doorvoeren. Match op order_nummer.",
           parameters: {
             type: "object",
             properties: {
