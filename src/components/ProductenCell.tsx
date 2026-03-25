@@ -168,12 +168,25 @@ export default function ProductenCell({ value, lineItemsJson, onSave, onSaveMult
   }
   const hasStructured = displayItems.length > 0;
   const displayText = localValue || "—";
-  const isReadOnly = !onSaveMulti && !onSave;
-  const showPrices = !isReadOnly;
+  /**
+   * Prijzen in deze popup komen uit twee bronnen:
+   * - `line_items_json`: per regel (Shopify line items / handmatig in producten-editor),
+   *   gebruikt bij bewerken en soms als "regelprijs" in het overzicht.
+   * - `orderTotalPrice` (optioneel): `bestelling_totaal_prijs` op de order (kolom in
+   *   Ritjes / Planning). Die kan afwijken van de som van regels (korting, verzending,
+   *   handmatige aanpassing in de tabel zonder producten opnieuw op te slaan).
+   *
+   * In **view** (niet-edit): als er een geldig ordertotaal is meegegeven, tonen we geen
+   * € per regel (om 875 vs 999 verwarring te voorkomen) en tonen we onderaan "Bestelling totaal".
+   */
   const orderTotal =
     orderTotalPrice === null || orderTotalPrice === undefined || String(orderTotalPrice).trim() === ""
       ? null
       : Number(orderTotalPrice);
+  const canEdit = !!(onSaveMulti || onSave);
+  const showPrices =
+    editing ||
+    (canEdit && (orderTotal == null || !Number.isFinite(orderTotal)));
 
   return (
     <div ref={ref} className="relative">
