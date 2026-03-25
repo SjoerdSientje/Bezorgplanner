@@ -21,10 +21,10 @@ export default function BezorgplannerPage() {
           </div>
 
           <p className="text-koopje-black/70">
-            Overzicht van de sheets: ritjes voor vandaag en planning.
+            Overzicht van de sheets, regels en hulppagina&apos;s.
           </p>
 
-          <ul className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <ul className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-4">
             <li>
               <Link
                 href="/bezorgplanner/ritjes-vandaag"
@@ -50,6 +50,17 @@ export default function BezorgplannerPage() {
               >
                 <span className="font-medium text-koopje-black">WhatsApp template debug</span>
                 <span className="mt-1 block text-sm text-koopje-black/60">Controleer template-keuze per flow en ordertype</span>
+              </Link>
+            </li>
+            <li>
+              <Link
+                href="/bezorgplanner/product-regels"
+                className="block rounded-xl border border-koopje-black/10 bg-white p-5 shadow-sm transition hover:border-koopje-orange hover:shadow"
+              >
+                <span className="font-medium text-koopje-black">Product regels</span>
+                <span className="mt-1 block text-sm text-koopje-black/60">
+                  Standaard inbegrepen items per levering en model (bewerkbaar)
+                </span>
               </Link>
             </li>
           </ul>

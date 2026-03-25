@@ -6,6 +6,7 @@ import {
   type ShopifyOrder,
 } from "@/lib/shopify-order";
 import { allAccountEmails, shopifyWebhookOrderAppliesToOwner } from "@/lib/account";
+import { loadProductDefaultItemsRules } from "@/lib/product-rules-server";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -19,9 +20,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, skipped: "filter" }, { status: 200 });
     }
 
-    const row = mapShopifyOrderToRitjesRow(order);
-
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    const productRules = await loadProductDefaultItemsRules(supabase);
+    const row = mapShopifyOrderToRitjesRow(order, productRules);
 
     const insertedOrUpdatedIds: string[] = [];
     for (const ownerEmail of allAccountEmails()) {

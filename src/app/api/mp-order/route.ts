@@ -7,6 +7,8 @@ import {
   buildLineItemsJson,
   type ShopifyLineItem,
 } from "@/lib/shopify-order";
+import type { ProductDefaultItemsRulesV1 } from "@/lib/product-default-items-rules";
+import { loadProductDefaultItemsRules } from "@/lib/product-rules-server";
 
 /** Extraheer fietsmodel: 'V20 PRO Fatbike 2026 + ringslot | Combi-Deal 🔥' → 'V20 PRO' */
 function extractModel(producten: string | null): string | null {
@@ -36,7 +38,10 @@ interface ProductRegel {
  * - gemonteerd=ja → extra property op de fiets (verschijnt alleen in producten-dropdown)
  * - gemonteerd=nee → los extra product (paklijst + afronden checklist)
  */
-function buildMpLineItemsJson(productenLijst: ProductRegel[]): string | null {
+function buildMpLineItemsJson(
+  productenLijst: ProductRegel[],
+  rules: ProductDefaultItemsRulesV1
+): string | null {
   if (!productenLijst?.length) return null;
 
   const lineItems: ShopifyLineItem[] = [];
@@ -82,7 +87,7 @@ function buildMpLineItemsJson(productenLijst: ProductRegel[]): string | null {
     }
   }
 
-  return buildLineItemsJson({ line_items: lineItems });
+  return buildLineItemsJson({ line_items: lineItems }, rules);
 }
 
 /**
@@ -186,9 +191,10 @@ export async function POST(request: NextRequest) {
       ? extractModelnaamVanProduct(eersteFiets.naam)
       : extractModel(producten);
 
+    const productRules = await loadProductDefaultItemsRules(supabaseTemp);
     // line_items_json
     const lineItemsJson = productenLijst.length
-      ? buildMpLineItemsJson(productenLijst)
+      ? buildMpLineItemsJson(productenLijst, productRules)
       : null;
 
     const insert = {

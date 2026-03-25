@@ -3,6 +3,16 @@
  * Filter, veldmapping en hulpfuncties.
  */
 
+import {
+  applyProductDefaultItemsRules,
+  DEFAULT_PRODUCT_RULES_V1,
+  type ProductDefaultItemsRulesV1,
+} from "@/lib/product-default-items-rules";
+
+export { extractModelnaamVanProduct } from "@/lib/bike-model-name";
+export type { ProductDefaultItemsRulesV1 } from "@/lib/product-default-items-rules";
+export { DEFAULT_PRODUCT_RULES_V1 } from "@/lib/product-default-items-rules";
+
 export interface ShopifyAddress {
   address1?: string | null;
   address2?: string | null;
@@ -360,109 +370,22 @@ function parseExtrasFromManualBikeTitle(title: string): {
   return { baseName, extraItems, montageProperties };
 }
 
-/**
- * Haalt het korte modelnaam op uit een productnaam.
- * 'V20 PRO Fatbike 2026 + ringslot | Combi-Deal 🔥' → 'V20 PRO'
- */
-export function extractModelnaamVanProduct(naam: string): string {
-  const match = naam.match(/^(.+?)\s+fatbike/i);
-  if (match) return match[1].trim();
-  // Fallback: eerste twee woorden
-  const words = naam.trim().split(/\s+/);
-  return words.slice(0, 2).join(" ");
-}
-
-/** Normaliseert een Levering-waarde: trim + verwijder afsluitende dubbele punt + lowercase. */
-function normaliseerLevering(v: string): string {
-  return v.trim().replace(/:$/, "").trim().toLowerCase();
-}
-
-/** Case-insensitieve vergelijking van modelnaam tegen een lijst van doelmodellen. */
-function matchesModels(model: string, targets: string[]): boolean {
-  const ml = model.toLowerCase().trim();
-  return targets.some((t) => t.toLowerCase().trim() === ml);
-}
-
-/**
- * Geeft de standaard inbegrepen producten voor een fiets,
- * op basis van modelnaam én de Levering-property uit Shopify.
- *
- * Altijd (elke fiets > €500):
- *   - Fietspompje
- *   - Opladerdoosje {model}
- *
- * Afhankelijk van Levering-waarde + model: zie implementatie.
- */
 function getDefaultItemsVoorFiets(
   naam: string,
-  rawProperties: ShopifyLineItemProperty[]
+  rawProperties: ShopifyLineItemProperty[],
+  rules: ProductDefaultItemsRulesV1 = DEFAULT_PRODUCT_RULES_V1
 ): string[] {
-  const model = extractModelnaamVanProduct(naam);
-  const naamLower = naam.toLowerCase();
-
-  const items: string[] = ["Fietspompje", `Opladerdoosje ${model}`];
-
-  const isEngweOfAdo =
-    naamLower.includes("engwe") || naamLower.includes("ado");
-
-  const leveringRaw =
-    rawProperties.find((p) => p.name?.toLowerCase().trim() === "levering")
-      ?.value ?? "";
-  const levering = normaliseerLevering(leveringRaw);
-
-  if (levering === "volledig rijklaar") {
-    // Alle fietsen behalve Engwe/Ado
-    if (!isEngweOfAdo) {
-      items.push("ART-2 kettingslot", "telefoontasje");
-    }
-
-    // V8 MAX ultra + V8 ultra
-    if (matchesModels(model, ["V8 MAX ultra", "V8 ultra"])) {
-      items.push("goedkope spiegel links");
-    }
-
-    // Voorrekje-modellen
-    if (
-      matchesModels(model, [
-        "V20 Limited", "GT20", "V8 ultra mini", "V8 MAX ultra", "V8 ultra",
-        "V8 PRO", "V8 PRO MAX", "Q8", "S20 PRO", "H9", "V20 PRO comfort",
-      ])
-    ) {
-      items.push("voorrekje");
-    }
-  } else if (levering === "in doos") {
-    // Alle fietsen behalve Engwe/Ado
-    if (!isEngweOfAdo) {
-      items.push("ART-2 kettingslot");
-    }
-
-    // Accu-modellen (altijd met modelnaam, zelfde patroon als Opladerdoosje)
-    if (
-      matchesModels(model, [
-        "V20 Pro", "V20 Limited", "S20 Pro", "V20 mini", "V20 Pro Comfort",
-      ])
-    ) {
-      items.push(`Accu ${model}`);
-    }
-
-    // Display + losse oplader (altijd met modelnaam)
-    if (
-      matchesModels(model, [
-        "V20 Pro", "V20 Pro comfort", "V20 Limited", "S20 Pro",
-      ])
-    ) {
-      items.push(`Display ${model}`, `Losse oplader ${model}`);
-    }
-  }
-
-  return items;
+  return applyProductDefaultItemsRules(naam, rawProperties, rules);
 }
 
 /**
  * Bouw JSON voor de producten-popup: per zichtbare regel het **regeltotaal** (Shopify:
  * eenheidsprijs × quantity − regelkorting), niet alleen de eenheidsprijs.
  */
-export function buildLineItemsJson(order: ShopifyOrder): string | null {
+export function buildLineItemsJson(
+  order: ShopifyOrder,
+  rules: ProductDefaultItemsRulesV1 = DEFAULT_PRODUCT_RULES_V1
+): string | null {
   const items = order.line_items ?? [];
   if (!items.length) return null;
 
@@ -487,7 +410,7 @@ export function buildLineItemsJson(order: ShopifyOrder): string | null {
       for (const bikeTitle of bikeTitles) {
         const parsed = parseExtrasFromManualBikeTitle(bikeTitle);
         // Zelfde Levering-properties als op het Shopify line item (geldt voor alle fietsen op deze regel).
-        const defaultItems = getDefaultItemsVoorFiets(parsed.baseName, rawProps);
+        const defaultItems = getDefaultItemsVoorFiets(parsed.baseName, rawProps, rules);
 
         structured.push({
           name: parsed.baseName,
@@ -513,7 +436,7 @@ export function buildLineItemsJson(order: ShopifyOrder): string | null {
     // ── Handmatige order zonder properties ('+' in titel) ─────────────────
     if (isFiets && !hasProps) {
       const parsed = parseExtrasFromManualBikeTitle(rawName);
-      const defaultItems = getDefaultItemsVoorFiets(parsed.baseName, rawProps);
+      const defaultItems = getDefaultItemsVoorFiets(parsed.baseName, rawProps, rules);
 
       structured.push({
         name: parsed.baseName,
@@ -550,7 +473,7 @@ export function buildLineItemsJson(order: ShopifyOrder): string | null {
       : [];
 
     const defaultItems = isFiets
-      ? getDefaultItemsVoorFiets(rawName, rawProps)
+      ? getDefaultItemsVoorFiets(rawName, rawProps, rules)
       : [];
 
     structured.push({
@@ -643,7 +566,10 @@ function getMpTagFromShopifyOrderTags(order: ShopifyOrder): string | null {
 }
 
 /** Zet een Shopify-order om naar één rij voor Ritjes voor vandaag (orders-tabel). */
-export function mapShopifyOrderToRitjesRow(order: ShopifyOrder): RitjesOrderRow {
+export function mapShopifyOrderToRitjesRow(
+  order: ShopifyOrder,
+  rules: ProductDefaultItemsRulesV1 = DEFAULT_PRODUCT_RULES_V1
+): RitjesOrderRow {
   const noteParsed = parseNote(order.note);
   const volledigAdres = getVolledigAdres(order);
   const telefoon = getPhone(order);
@@ -675,7 +601,7 @@ export function mapShopifyOrderToRitjesRow(order: ShopifyOrder): RitjesOrderRow 
     model: null,
     serienummer: null,
     mp_tags: getMpTagFromShopifyOrderTags(order),
-    line_items_json: buildLineItemsJson(order),
+    line_items_json: buildLineItemsJson(order, rules),
   };
 }
 
