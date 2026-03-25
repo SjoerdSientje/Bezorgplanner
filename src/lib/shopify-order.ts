@@ -436,22 +436,22 @@ function getDefaultItemsVoorFiets(
       items.push("ART-2 kettingslot");
     }
 
-    // Accu-modellen
+    // Accu-modellen (altijd met modelnaam, zelfde patroon als Opladerdoosje)
     if (
       matchesModels(model, [
         "V20 Pro", "V20 Limited", "S20 Pro", "V20 mini", "V20 Pro Comfort",
       ])
     ) {
-      items.push("accu");
+      items.push(`Accu ${model}`);
     }
 
-    // Display + losse oplader
+    // Display + losse oplader (altijd met modelnaam)
     if (
       matchesModels(model, [
         "V20 Pro", "V20 Pro comfort", "V20 Limited", "S20 Pro",
       ])
     ) {
-      items.push("display", "losse oplader");
+      items.push(`Display ${model}`, `Losse oplader ${model}`);
     }
   }
 
