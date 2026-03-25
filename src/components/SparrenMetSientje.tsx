@@ -4,12 +4,22 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import type { RitjesOrderFromApi } from "@/lib/ritjes-mapping";
 
 // Browser SpeechRecognition type (niet in standaard TS lib)
+type SpeechRecognitionResultListLike = {
+  length: number;
+  [index: number]: { isFinal: boolean; [key: number]: { transcript: string } };
+};
+type SpeechRecognitionResultEvent = {
+  resultIndex: number;
+  results: SpeechRecognitionResultListLike;
+};
+type SpeechRecognitionErrorEvent = { error: string };
+
 type SpeechRecognitionInstance = {
   lang: string;
   continuous: boolean;
   interimResults: boolean;
-  onresult: (e: { results: { [key: number]: { [key: number]: { transcript: string } } } }) => void;
-  onerror: () => void;
+  onresult: (e: SpeechRecognitionResultEvent) => void;
+  onerror: (e: SpeechRecognitionErrorEvent) => void;
   onend: () => void;
   start: () => void;
   stop: () => void;
@@ -69,6 +79,8 @@ export default function SparrenMetSientje({
   const [listening, setListening] = useState(false);
   const listEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
+  /** true = microfoon aan tot gebruiker opnieuw klikt (niet stoppen bij korte stilte) */
+  const shouldListenRef = useRef(false);
 
   useEffect(() => {
     listEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -80,27 +92,98 @@ export default function SparrenMetSientje({
     if (!SpeechRecognition) return;
 
     if (listening) {
-      recognitionRef.current?.stop();
+      shouldListenRef.current = false;
+      try {
+        recognitionRef.current?.stop();
+      } catch {
+        /* ignore */
+      }
+      recognitionRef.current = null;
       setListening(false);
       return;
     }
 
+    shouldListenRef.current = true;
     const rec = new SpeechRecognition();
     rec.lang = "nl-NL";
-    rec.continuous = false;
+    rec.continuous = true;
     rec.interimResults = false;
 
     rec.onresult = (e) => {
-      const transcript = e.results[0][0].transcript;
-      setInput((prev) => (prev ? prev + " " + transcript : transcript));
+      let chunk = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const row = e.results[i];
+        if (row.isFinal) {
+          chunk += row[0]?.transcript ?? "";
+        }
+      }
+      const t = chunk.trim();
+      if (t) {
+        setInput((prev) => (prev ? `${prev} ${t}` : t));
+      }
     };
-    rec.onerror = () => setListening(false);
-    rec.onend = () => setListening(false);
+
+    /** Blijft luisteren: na stilte (onend / no-speech) opnieuw starten tot gebruiker microfoon uitzet. */
+    const scheduleRestart = (instance: SpeechRecognitionInstance) => {
+      window.setTimeout(() => {
+        if (!shouldListenRef.current) return;
+        try {
+          instance.start();
+        } catch {
+          window.setTimeout(() => {
+            if (!shouldListenRef.current) return;
+            try {
+              instance.start();
+            } catch {
+              shouldListenRef.current = false;
+              setListening(false);
+            }
+          }, 200);
+        }
+      }, 50);
+    };
+
+    rec.onerror = (ev) => {
+      const code = ev.error;
+      if ((code === "no-speech" || code === "audio-capture") && shouldListenRef.current) {
+        scheduleRestart(rec);
+        return;
+      }
+      if (code === "aborted") return;
+      if (code === "not-allowed" || code === "service-not-allowed") {
+        shouldListenRef.current = false;
+        setListening(false);
+      }
+    };
+
+    rec.onend = () => {
+      if (!shouldListenRef.current) {
+        setListening(false);
+        return;
+      }
+      scheduleRestart(rec);
+    };
 
     recognitionRef.current = rec;
-    rec.start();
-    setListening(true);
+    try {
+      rec.start();
+      setListening(true);
+    } catch {
+      shouldListenRef.current = false;
+      setListening(false);
+    }
   }, [listening]);
+
+  useEffect(() => {
+    return () => {
+      shouldListenRef.current = false;
+      try {
+        recognitionRef.current?.stop();
+      } catch {
+        /* ignore */
+      }
+    };
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
