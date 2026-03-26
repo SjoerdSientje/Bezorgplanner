@@ -34,6 +34,20 @@ function shouldIgnorePaklijstItemName(name: string): boolean {
   return false;
 }
 
+function parseProductsTextFallback(producten: unknown): LineItemFromJson[] {
+  return String(producten ?? "")
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((name) => ({
+      name,
+      price: 0,
+      isFiets: false,
+      properties: [],
+      defaultItems: [],
+    }));
+}
+
 export async function GET(request: NextRequest) {
   try {
     const ownerEmail = requireAccountEmail(request);
@@ -62,6 +76,9 @@ export async function GET(request: NextRequest) {
           products = JSON.parse(order.line_items_json as string) as LineItemFromJson[];
         }
       } catch { /* ignore */ }
+      if (products.length === 0) {
+        products = parseProductsTextFallback(order.producten);
+      }
 
       return {
         id: String(order.id),
@@ -96,9 +113,13 @@ export async function GET(request: NextRequest) {
 
     for (const order of orders) {
       const raw = order.line_items_json as string | null | undefined;
-      if (!raw) continue;
       let items: LineItemFromJson[] = [];
-      try { items = JSON.parse(raw) as LineItemFromJson[]; } catch { continue; }
+      if (raw) {
+        try { items = JSON.parse(raw) as LineItemFromJson[]; } catch { /* ignore */ }
+      }
+      if (items.length === 0) {
+        items = parseProductsTextFallback(order.producten);
+      }
 
       for (const item of items) {
         if (!item.isFiets) {
