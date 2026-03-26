@@ -13,6 +13,7 @@ const PAYMENT_OPTIONS = new Set([
 ]);
 const MAKE_AFRONDEN_WEBHOOK_URL =
   "https://hook.eu2.make.com/vuvbe7u93yr2lbg8augxh23gu7u22sgd";
+const MAKE_AFRONDEN_OWNER_EMAIL = "info@koopjefatbike.nl";
 
 function isMpTagged(mpTags: unknown): boolean {
   const t = String(mpTags ?? "").toLowerCase();
@@ -149,7 +150,12 @@ export async function POST(request: NextRequest) {
     // Make-webhook: alleen voor shopify orders (ordernummer zonder #MP) die uit planning komen.
     const hadPlanningSlot = (slotsVoor?.length ?? 0) > 0;
     const orderNummer = String((order as any).order_nummer ?? "").trim();
-    if (hadPlanningSlot && orderNummer && !isMpOrderNummer(orderNummer)) {
+    if (
+      ownerEmail.toLowerCase() === MAKE_AFRONDEN_OWNER_EMAIL &&
+      hadPlanningSlot &&
+      orderNummer &&
+      !isMpOrderNummer(orderNummer)
+    ) {
       try {
         await fetch(MAKE_AFRONDEN_WEBHOOK_URL, {
           method: "POST",
