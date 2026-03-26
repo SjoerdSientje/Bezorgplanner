@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { fetchAllOrders } from "@/lib/supabase";
-import { getPlanningDate } from "@/lib/planning-date";
+import { getPlanningDate, isDatumOpmerkingVandaagOfMorgen } from "@/lib/planning-date";
 import { requireAccountEmail } from "@/lib/account";
 import {
   buildRoutificPayload,
@@ -61,10 +61,10 @@ export async function POST(request: NextRequest) {
       if (String((o as unknown as Record<string, unknown>).owner_email ?? "") !== ownerEmail) return false;
       if ((o as unknown as Record<string, unknown>).status !== "ritjes_vandaag") return false;
       if (!(o as unknown as Record<string, unknown>).meenemen_in_planning) return false;
-      const opmerking = (((o as unknown as Record<string, unknown>).datum_opmerking as string) ?? "").toLowerCase();
-      const heeftVandaag = opmerking.includes("vandaag");
+      const opmerking = ((o as unknown as Record<string, unknown>).datum_opmerking as string) ?? "";
+      const heeftVandaagOfMorgen = isDatumOpmerkingVandaagOfMorgen(opmerking);
       const heeftDatum = ((o as unknown as Record<string, unknown>).datum as string | null) === planningDate;
-      return heeftVandaag || heeftDatum;
+      return heeftVandaagOfMorgen || heeftDatum;
     });
     if (rows.length === 0) {
       return NextResponse.json({

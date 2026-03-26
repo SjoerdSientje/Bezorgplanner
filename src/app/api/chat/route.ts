@@ -3,6 +3,7 @@ import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 import { requireAccountEmail } from "@/lib/account";
 import { buildSientjeSystemPrompt } from "@/lib/sientje-system-prompt";
+import { isDatumOpmerkingVandaagOfMorgen } from "@/lib/planning-date";
 
 export const maxDuration = 60;
 
@@ -33,22 +34,13 @@ type RitjesOrder = {
   mp_tags: string | null;
 };
 
-function todayDDMMYYYY(): string {
-  const d = new Date();
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  return `${dd}-${mm}-${d.getFullYear()}`;
-}
-
 /**
- * Alleen orders met datum_opmerking = "vandaag" (of de datum van vandaag)
+ * Alleen orders met datum_opmerking vandaag/morgen (incl. datumformaten)
  * én meenemen_in_planning = true mogen gezien/bewerkt worden door Sientje.
  */
 function isEligibleOrder(o: RitjesOrder): boolean {
   if (!o.meenemen_in_planning) return false;
-  const datum = String(o.datum_opmerking ?? "").toLowerCase().trim();
-  if (!datum) return false;
-  return datum === "vandaag" || datum === todayDDMMYYYY();
+  return isDatumOpmerkingVandaagOfMorgen(o.datum_opmerking);
 }
 
 function formatOrderForContext(o: RitjesOrder): string {
@@ -58,16 +50,16 @@ function formatOrderForContext(o: RitjesOrder): string {
 }
 
 function buildContextBlock(ritjesOrders: RitjesOrder[]): string {
-  // Sientje ziet alleen orders die voor vandaag én op "ja" staan
+  // Sientje ziet alleen orders met datum-opmerking vandaag/morgen én op "ja"
   const eligible = ritjesOrders.filter(isEligibleOrder);
 
   if (eligible.length === 0) {
-    return "\n\nEr zijn momenteel geen orders die aan de criteria voldoen (datum = vandaag én meenemen in planning = ja).";
+    return "\n\nEr zijn momenteel geen orders die aan de criteria voldoen (datum-opmerking = vandaag of morgen én meenemen in planning = ja).";
   }
   const withSlot = eligible.filter((o) => (o.aankomsttijd_slot ?? "").trim().length > 0);
   const withoutSlot = eligible.filter((o) => !(o.aankomsttijd_slot ?? "").trim().length);
   let block =
-    "\n\nOrders die jij mag bekijken en bewerken (datum = vandaag, meenemen in planning = ja):\n" +
+    "\n\nOrders die jij mag bekijken en bewerken (datum-opmerking = vandaag/morgen, meenemen in planning = ja):\n" +
     eligible.map(formatOrderForContext).join("\n");
   if (withSlot.length > 0) {
     block +=
@@ -220,8 +212,6 @@ export async function POST(request: NextRequest) {
 
         const updates = args.updates ?? [];
         const results: string[] = [];
-        const today = todayDDMMYYYY();
-
         for (const u of updates) {
           const onr = String(u.order_nummer ?? "").trim();
           const slotRaw = String(u.aankomsttijd_slot ?? "").trim();
@@ -230,37 +220,39 @@ export async function POST(request: NextRequest) {
             /^(verwijder|leeg|wis|clear)$/i.test(slotRaw);
           if (!onr) continue;
 
-          // Zoek de order op — met dubbele beveiliging: status + meenemen_in_planning + datum
+          // Zoek de order op — met dubbele beveiliging: status + meenemen_in_planning + datum-opmerking
           let orderId: string | null = null;
           const baseQuery = supabase
             .from("orders")
-            .select("id")
+            .select("id, datum_opmerking")
             .eq("owner_email", ownerEmail)
             .eq("status", "ritjes_vandaag")
             .eq("meenemen_in_planning", true)
-            .or(`datum_opmerking.eq.vandaag,datum_opmerking.eq.${today}`);
+            .limit(1);
 
           const { data: byExact } = await baseQuery
             .eq("order_nummer", onr)
-            .limit(1)
             .maybeSingle();
-          if (byExact?.id) orderId = byExact.id;
+          if (byExact?.id && isDatumOpmerkingVandaagOfMorgen(byExact.datum_opmerking)) {
+            orderId = byExact.id;
+          }
           if (!orderId) {
             const alt = onr.startsWith("#") ? onr.slice(1) : "#" + onr;
             const { data: byAlt } = await supabase
               .from("orders")
-              .select("id")
+              .select("id, datum_opmerking")
               .eq("owner_email", ownerEmail)
               .eq("status", "ritjes_vandaag")
               .eq("meenemen_in_planning", true)
-              .or(`datum_opmerking.eq.vandaag,datum_opmerking.eq.${today}`)
               .eq("order_nummer", alt)
               .limit(1)
               .maybeSingle();
-            if (byAlt?.id) orderId = byAlt.id;
+            if (byAlt?.id && isDatumOpmerkingVandaagOfMorgen(byAlt.datum_opmerking)) {
+              orderId = byAlt.id;
+            }
           }
           if (!orderId) {
-            results.push(`Order ${onr}: niet gevonden (of voldoet niet aan de criteria: datum vandaag + meenemen in planning = ja)`);
+            results.push(`Order ${onr}: niet gevonden (of voldoet niet aan de criteria: datum-opmerking vandaag/morgen + meenemen in planning = ja)`);
             continue;
           }
 

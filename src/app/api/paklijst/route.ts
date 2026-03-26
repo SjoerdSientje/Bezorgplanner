@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { requireAccountEmail } from "@/lib/account";
+import { isDatumOpmerkingVandaagOfMorgen } from "@/lib/planning-date";
 
 export const dynamic = "force-dynamic";
 
@@ -33,20 +34,6 @@ function shouldIgnorePaklijstItemName(name: string): boolean {
   return false;
 }
 
-function todayDDMMYYYY(): string {
-  const d = new Date();
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  return `${dd}-${mm}-${d.getFullYear()}`;
-}
-
-function isDatumVandaag(datum: unknown): boolean {
-  if (!datum) return false;
-  const d = String(datum).toLowerCase().trim();
-  if (d === "vandaag") return true;
-  return d === todayDDMMYYYY();
-}
-
 export async function GET(request: NextRequest) {
   try {
     const ownerEmail = requireAccountEmail(request);
@@ -63,7 +50,7 @@ export async function GET(request: NextRequest) {
     const orders = (allOrders ?? []).filter((o) => {
       if (o.status !== "ritjes_vandaag") return false;
       if (!o.meenemen_in_planning) return false;
-      if (!isDatumVandaag(o.datum_opmerking)) return false;
+      if (!isDatumOpmerkingVandaagOfMorgen(o.datum_opmerking)) return false;
       return true;
     });
 

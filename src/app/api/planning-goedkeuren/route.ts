@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
-import { getPlanningDateForGoedkeuren } from "@/lib/planning-date";
+import {
+  getPlanningDateForGoedkeuren,
+  isDatumOpmerkingVandaagOfMorgen,
+} from "@/lib/planning-date";
 import { sendWhatsAppByEvent } from "@/lib/whatsapp";
 import { requireAccountEmail } from "@/lib/account";
 import { verwerkGarantiebewijs } from "@/lib/garantiebewijs";
@@ -17,12 +20,11 @@ function shouldSendPlanningGoedkeurenWhatsApp(
   if (order.meenemen_in_planning !== true) return false;
   if (order.nieuw_appje_sturen !== true) return false;
 
-  const datumOpmerking = String(order.datum_opmerking ?? "").trim().toLowerCase();
-  const hasVandaagInOpmerking = datumOpmerking.includes("vandaag");
+  const hasVandaagOfMorgenInOpmerking = isDatumOpmerkingVandaagOfMorgen(order.datum_opmerking);
   const datumFromOrder = String(order.datum ?? "").trim();
   const datumIsPlanningDate = datumFromOrder === planningDate;
 
-  return hasVandaagInOpmerking || datumIsPlanningDate;
+  return hasVandaagOfMorgenInOpmerking || datumIsPlanningDate;
 }
 
 /**
@@ -51,8 +53,7 @@ export async function POST(request: NextRequest) {
       .eq("owner_email", ownerEmail)
       .eq("status", "ritjes_vandaag")
       .eq("meenemen_in_planning", true)
-      .not("aankomsttijd_slot", "is", null)
-      .or(`datum_opmerking.ilike.%vandaag%,datum.eq.${planningDate}`);
+      .not("aankomsttijd_slot", "is", null);
 
     if (queryError) {
       console.error("[api/planning-goedkeuren]", queryError);
@@ -62,9 +63,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const rows = (orders ?? []).filter(
-      (o) => (o.aankomsttijd_slot ?? "").toString().trim().length > 0
-    );
+    const rows = (orders ?? []).filter((o) => {
+      if ((o.aankomsttijd_slot ?? "").toString().trim().length === 0) return false;
+      const datumOpmerkingOk = isDatumOpmerkingVandaagOfMorgen(o.datum_opmerking);
+      const datumIsPlanningDate = String(o.datum ?? "").trim() === planningDate;
+      return datumOpmerkingOk || datumIsPlanningDate;
+    });
     if (rows.length === 0) {
       return NextResponse.json({
         ok: true,
@@ -141,6 +145,21 @@ export async function POST(request: NextRequest) {
       console.error("[api/planning-goedkeuren] insert:", insertErr);
       return NextResponse.json(
         { error: "Planning opslaan mislukt.", detail: insertErr.message },
+        { status: 500 }
+      );
+    }
+
+    // Orders die in de planning zijn gezet niet opnieuw meenemen in planning.
+    const plannedOrderIds = sorted.map((o) => String(o.id));
+    const { error: updateOrdersErr } = await supabase
+      .from("orders")
+      .update({ meenemen_in_planning: false })
+      .eq("owner_email", ownerEmail)
+      .in("id", plannedOrderIds);
+    if (updateOrdersErr) {
+      console.error("[api/planning-goedkeuren] update meenemen_in_planning:", updateOrdersErr);
+      return NextResponse.json(
+        { error: "Planning opgeslagen, maar orders bijwerken naar 'nee' is mislukt." },
         { status: 500 }
       );
     }

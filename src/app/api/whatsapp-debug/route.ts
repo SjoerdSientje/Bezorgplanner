@@ -6,7 +6,10 @@ import {
   type WhatsAppOrderInput,
   type WhatsAppEvent,
 } from "@/lib/whatsapp";
-import { getPlanningDateForGoedkeuren } from "@/lib/planning-date";
+import {
+  getPlanningDateForGoedkeuren,
+  isDatumOpmerkingVandaagOfMorgen,
+} from "@/lib/planning-date";
 import { requireAccountEmail } from "@/lib/account";
 
 export const dynamic = "force-dynamic";
@@ -20,10 +23,9 @@ function isPlanningGoedkeurenRecipient(o: {
   const { date: planningDate } = getPlanningDateForGoedkeuren();
   if (o.meenemen_in_planning !== true) return false;
   if (o.nieuw_appje_sturen !== true) return false;
-  const datumOpmerking = String(o.datum_opmerking ?? "").trim().toLowerCase();
-  const hasVandaagInOpmerking = datumOpmerking.includes("vandaag");
+  const hasVandaagOfMorgenInOpmerking = isDatumOpmerkingVandaagOfMorgen(o.datum_opmerking);
   const datumIsPlanningDate = String(o.datum ?? "").trim() === planningDate;
-  return hasVandaagInOpmerking || datumIsPlanningDate;
+  return hasVandaagOfMorgenInOpmerking || datumIsPlanningDate;
 }
 
 export async function GET(request: NextRequest) {
