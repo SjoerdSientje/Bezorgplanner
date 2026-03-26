@@ -190,7 +190,7 @@ export async function POST(request: NextRequest) {
       ? extractModelnaamVanProduct(eersteFiets.naam)
       : extractModel(producten);
 
-    const productRules = await loadProductDefaultItemsRules(supabaseTemp);
+    const productRules = await loadProductDefaultItemsRules(supabaseTemp, ownerEmail);
     // line_items_json
     const lineItemsJson = productenLijst.length
       ? buildMpLineItemsJson(productenLijst, productRules)

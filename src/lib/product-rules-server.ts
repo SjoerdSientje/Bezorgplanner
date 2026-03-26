@@ -9,11 +9,13 @@ import {
  * Laadt actieve productregels uit Supabase; bij ontbreken/fout valt terug op code-default.
  */
 export async function loadProductDefaultItemsRules(
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  ownerEmail: string
 ): Promise<ProductDefaultItemsRulesV1> {
   const { data, error } = await supabase
     .from("product_default_items_rules")
     .select("rules")
+    .eq("owner_email", ownerEmail)
     .eq("id", "default")
     .maybeSingle();
 

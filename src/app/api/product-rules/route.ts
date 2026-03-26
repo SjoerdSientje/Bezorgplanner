@@ -15,11 +15,12 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(request: NextRequest) {
   try {
-    requireAccountEmail(request);
+    const ownerEmail = requireAccountEmail(request);
     const supabase = createServerSupabaseClient();
     const { data: row } = await supabase
       .from("product_default_items_rules")
       .select("rules, updated_at")
+      .eq("owner_email", ownerEmail)
       .eq("id", "default")
       .maybeSingle();
 
@@ -46,7 +47,7 @@ export async function GET(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   try {
-    requireAccountEmail(request);
+    const ownerEmail = requireAccountEmail(request);
     const body = await request.json().catch(() => ({}));
     const candidate = body.rules as unknown;
     if (!isProductDefaultItemsRulesV1(candidate)) {
@@ -60,11 +61,12 @@ export async function PUT(request: NextRequest) {
     const supabase = createServerSupabaseClient();
     const { error } = await supabase.from("product_default_items_rules").upsert(
       {
+        owner_email: ownerEmail,
         id: "default",
         rules,
         updated_at: new Date().toISOString(),
       },
-      { onConflict: "id" }
+      { onConflict: "owner_email,id" }
     );
 
     if (error) {

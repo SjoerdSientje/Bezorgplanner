@@ -21,14 +21,14 @@ export async function POST(request: NextRequest) {
     }
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
-    const productRules = await loadProductDefaultItemsRules(supabase);
-    const row = mapShopifyOrderToRitjesRow(order, productRules);
 
     const insertedOrUpdatedIds: string[] = [];
     for (const ownerEmail of allAccountEmails()) {
       if (!shopifyWebhookOrderAppliesToOwner(ownerEmail, order.note)) {
         continue;
       }
+      const productRules = await loadProductDefaultItemsRules(supabase, ownerEmail);
+      const row = mapShopifyOrderToRitjesRow(order, productRules);
 
       const { data: existing } = await supabase
         .from("orders")

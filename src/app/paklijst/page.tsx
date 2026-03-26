@@ -44,10 +44,11 @@ interface SavedPaklijst {
   data: PaklijstData;
 }
 
-// ─── localStorage helpers ─────────────────────────────────────────────────────
-
-const STORAGE_KEY = "paklijst_history";
-const MAX_SAVED = 3;
+interface HistoryEntryFromApi {
+  id: number | string;
+  generated_at: string;
+  data: PaklijstData;
+}
 
 function formatLabel(iso: string): string {
   const d = new Date(iso);
@@ -56,25 +57,6 @@ function formatLabel(iso: string): string {
   const hh = String(d.getHours()).padStart(2, "0");
   const min = String(d.getMinutes()).padStart(2, "0");
   return `Paklijst ${dd}-${mm} ${hh}:${min}`;
-}
-
-function loadHistory(): SavedPaklijst[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as SavedPaklijst[]) : [];
-  } catch { return []; }
-}
-
-function appendToHistory(data: PaklijstData): SavedPaklijst[] {
-  const existing = loadHistory();
-  const entry: SavedPaklijst = {
-    id: String(Date.now()),
-    label: formatLabel(data.generatedAt),
-    data,
-  };
-  const updated = [entry, ...existing].slice(0, MAX_SAVED);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-  return updated;
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -259,9 +241,24 @@ export default function PaklijstPage() {
   const [printEntry, setPrintEntry] = useState<SavedPaklijst | null>(null);
   const printReadyRef = useRef(false);
 
-  // Laad history uit localStorage bij mount
+  // Laad account-gebonden paklijst-historie bij mount
   useEffect(() => {
-    setHistory(loadHistory());
+    const loadHistory = async () => {
+      try {
+        const res = await fetch(`/api/paklijst-history?t=${Date.now()}`, { cache: "no-store" });
+        const json = await res.json().catch(() => ({}));
+        const entries = Array.isArray(json?.entries) ? (json.entries as HistoryEntryFromApi[]) : [];
+        const mapped: SavedPaklijst[] = entries.map((e) => ({
+          id: String(e.id),
+          label: formatLabel(e.generated_at),
+          data: e.data,
+        }));
+        setHistory(mapped);
+      } catch {
+        setHistory([]);
+      }
+    };
+    loadHistory();
   }, []);
 
   // Zodra printEntry gezet is én printReadyRef true is, open het print-dialoog
@@ -292,11 +289,22 @@ export default function PaklijstPage() {
       if (!res.ok) throw new Error("Ophalen mislukt");
       const json = await res.json() as PaklijstData;
       setData(json);
-      // Opslaan in history
-      const updated = appendToHistory(json);
-      setHistory(updated);
-      // Nieuw gegenereerde automatisch uitklappen
-      setExpandedId(updated[0]?.id ?? null);
+      const saveRes = await fetch("/api/paklijst-history", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ data: json }),
+      });
+      const saveJson = await saveRes.json().catch(() => ({}));
+      const saved = saveJson?.entry as HistoryEntryFromApi | undefined;
+      if (saveRes.ok && saved) {
+        const newEntry: SavedPaklijst = {
+          id: String(saved.id),
+          label: formatLabel(saved.generated_at),
+          data: saved.data,
+        };
+        setHistory((prev) => [newEntry, ...prev].slice(0, 3));
+        setExpandedId(String(saved.id));
+      }
     } catch {
       setError("Er ging iets mis bij het genereren.");
     } finally {
