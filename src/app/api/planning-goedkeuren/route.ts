@@ -149,17 +149,20 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Orders die in de planning zijn gezet niet opnieuw meenemen in planning.
+    // Orders die in de planning zijn gezet niet opnieuw meenemen of opnieuw appen.
     const plannedOrderIds = sorted.map((o) => String(o.id));
     const { error: updateOrdersErr } = await supabase
       .from("orders")
-      .update({ meenemen_in_planning: false })
+      .update({
+        meenemen_in_planning: false,
+        nieuw_appje_sturen: false,
+      })
       .eq("owner_email", ownerEmail)
       .in("id", plannedOrderIds);
     if (updateOrdersErr) {
-      console.error("[api/planning-goedkeuren] update meenemen_in_planning:", updateOrdersErr);
+      console.error("[api/planning-goedkeuren] update order toggles:", updateOrdersErr);
       return NextResponse.json(
-        { error: "Planning opgeslagen, maar orders bijwerken naar 'nee' is mislukt." },
+        { error: "Planning opgeslagen, maar order-instellingen naar 'nee' bijwerken is mislukt." },
         { status: 500 }
       );
     }
