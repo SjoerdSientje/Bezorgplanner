@@ -20,6 +20,9 @@ interface OrderDetail {
   naam: string | null;
   volledig_adres: string | null;
   aankomsttijd_slot: string | null;
+  telefoon_nummer: string | null;
+  bestelling_totaal_prijs: number | null;
+  betaald: boolean | null;
   products: LineItem[];
 }
 
@@ -134,6 +137,13 @@ function ProductBlok({ item }: { item: LineItem }) {
 }
 
 function OrderBlok({ order, index }: { order: OrderDetail; index: number }) {
+  const bedrag =
+    order.bestelling_totaal_prijs != null
+      ? `€${order.bestelling_totaal_prijs.toFixed(2)}`
+      : "—";
+  const betaaldLabel =
+    order.betaald == null ? "Onbekend" : order.betaald ? "Ja" : "Nee";
+
   return (
     <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm print:break-inside-avoid print:shadow-none">
       <div className="flex flex-wrap items-start justify-between gap-2 border-b border-stone-100 bg-stone-50 px-4 py-3 print:bg-stone-100">
@@ -154,6 +164,16 @@ function OrderBlok({ order, index }: { order: OrderDetail; index: number }) {
           {order.volledig_adres && (
             <p className="mt-0.5 pl-7 text-xs text-stone-500">{order.volledig_adres}</p>
           )}
+          <p className="mt-1 pl-7 text-xs text-stone-500">
+            Totaal bedrag: <span className="font-medium text-stone-700">{bedrag}</span>
+            {" · "}
+            Betaald?: <span className="font-medium text-stone-700">{betaaldLabel}</span>
+            {" · "}
+            Telefoonnummer:{" "}
+            <span className="font-medium text-stone-700">
+              {order.telefoon_nummer?.trim() || "—"}
+            </span>
+          </p>
         </div>
         {order.aankomsttijd_slot && (
           <span className="shrink-0 rounded-full border border-koopje-orange/30 bg-koopje-orange-light px-3 py-1 text-xs font-semibold text-koopje-orange print:border-orange-300">

@@ -89,7 +89,13 @@ export default function MPOrdersPage() {
   useEffect(() => { fetchOrders(); }, [fetchOrders]);
 
   const tableRows = useMemo(() => {
-    return orders.map((o) => HEADERS.map((h) => cel(o, h)));
+    const sortedOrders = [...orders].sort((a, b) => {
+      const aTime = a.datum ? new Date(`${a.datum}T00:00:00`).getTime() : 0;
+      const bTime = b.datum ? new Date(`${b.datum}T00:00:00`).getTime() : 0;
+      return bTime - aTime;
+    });
+
+    return sortedOrders.map((o) => HEADERS.map((h) => cel(o, h)));
   }, [orders]);
 
   const cellRenderers = useMemo(

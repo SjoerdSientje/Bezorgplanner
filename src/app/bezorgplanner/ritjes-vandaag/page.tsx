@@ -7,6 +7,7 @@ import EditableSheetTable from "@/components/EditableSheetTable";
 import RitjesRouteControls from "@/components/RitjesRouteControls";
 import SparrenMetSientje from "@/components/SparrenMetSientje";
 import ProductenCell from "@/components/ProductenCell";
+import OpmerkingKlantCell from "@/components/OpmerkingKlantCell";
 import JaNeeCell from "@/components/JaNeeCell";
 import {
   RITJES_HEADERS,
@@ -193,6 +194,9 @@ export default function RitjesVandaagPage() {
           />
         );
       },
+      "Opmerkingen klant": (_rowIndex: number, value: string) => (
+        <OpmerkingKlantCell value={String(value ?? "")} />
+      ),
     }),
     [orders, deleteOrder, patchOrderInState]
   );

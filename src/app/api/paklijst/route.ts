@@ -18,6 +18,9 @@ interface OrderDetail {
   naam: string | null;
   volledig_adres: string | null;
   aankomsttijd_slot: string | null;
+  telefoon_nummer: string | null;
+  bestelling_totaal_prijs: number | null;
+  betaald: boolean | null;
   products: LineItemFromJson[];
 }
 
@@ -79,6 +82,11 @@ export async function GET(request: NextRequest) {
         naam: order.naam as string | null ?? null,
         volledig_adres: order.volledig_adres as string | null ?? null,
         aankomsttijd_slot: order.aankomsttijd_slot as string | null ?? null,
+        telefoon_nummer: order.telefoon_nummer as string | null ?? null,
+        bestelling_totaal_prijs: typeof order.bestelling_totaal_prijs === "number"
+          ? order.bestelling_totaal_prijs
+          : null,
+        betaald: typeof order.betaald === "boolean" ? order.betaald : null,
         products,
       };
     });

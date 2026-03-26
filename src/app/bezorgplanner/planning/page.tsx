@@ -4,6 +4,7 @@ import { useEffect, useCallback, useState, useMemo, useLayoutEffect, useRef, typ
 import Link from "next/link";
 import Header from "@/components/Header";
 import ProductenCell from "@/components/ProductenCell";
+import OpmerkingKlantCell from "@/components/OpmerkingKlantCell";
 
 const PLANNING_HEADERS = [
   "Order nummer",
@@ -334,6 +335,11 @@ function PlanningTabel({
                                 lineItemsJson={row.line_items_json ?? null}
                               />
                             );
+                          }
+
+                          const isOpmerkingCol = i === 5;
+                          if (isOpmerkingCol) {
+                            return <OpmerkingKlantCell value={String(row.opmerking_klant ?? "")} />;
                           }
 
                           // Link Aankoopbewijs is the last column in the "Rest" array

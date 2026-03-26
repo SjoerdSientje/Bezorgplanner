@@ -46,6 +46,13 @@ export default function BezorgdeOrdersPage() {
   const [orders, setOrders] = useState<BezorgdeOrder[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const formatAfgerondDatum = (iso: string | null): string => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    return `${String(d.getDate()).padStart(2, "0")}-${String(d.getMonth() + 1).padStart(2, "0")}-${d.getFullYear()}`;
+  };
+
   const fetchOrders = useCallback(async () => {
     setLoading(true);
     try {
@@ -66,10 +73,13 @@ export default function BezorgdeOrdersPage() {
   }, [fetchOrders]);
 
   const tableRows = useMemo(() => {
-    const today = new Date();
-    const todayDDMMYYYY = `${String(today.getDate()).padStart(2, "0")}-${String(today.getMonth() + 1).padStart(2, "0")}-${today.getFullYear()}`;
+    const sortedOrders = [...orders].sort((a, b) => {
+      const aTime = a.afgerond_at ? new Date(a.afgerond_at).getTime() : 0;
+      const bTime = b.afgerond_at ? new Date(b.afgerond_at).getTime() : 0;
+      return bTime - aTime;
+    });
 
-    return orders.map((o) => [
+    return sortedOrders.map((o) => [
       o.order_nummer ?? "",
       o.naam ?? "",
       o.bezorger_naam ?? "",
@@ -84,8 +94,7 @@ export default function BezorgdeOrdersPage() {
         return o.betaald_bedrag != null ? String(o.betaald_bedrag) : "";
       })(),
 
-      // Vereiste: altijd vandaag (DD-MM-YYYY)
-      todayDDMMYYYY,
+      formatAfgerondDatum(o.afgerond_at),
       o.producten ?? "",
       o.bestelling_totaal_prijs != null ? String(o.bestelling_totaal_prijs) : "",
       o.volledig_adres ?? "",
