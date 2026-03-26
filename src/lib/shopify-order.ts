@@ -250,11 +250,22 @@ function getProducten(order: ShopifyOrder): string {
   for (const item of items) {
     const name = (item.name ?? "").trim();
     if (!name) continue;
+    const qtyRaw = item.quantity;
+    const qty =
+      qtyRaw == null
+        ? 1
+        : Math.max(1, Math.round(typeof qtyRaw === "number" ? qtyRaw : parseFloat(String(qtyRaw))) || 1);
+
     if (name.includes("&")) {
       // Elke fiets na '&' als aparte regel tonen
-      names.push(...splitBikesOnAmpersand(name));
+      const splitNames = splitBikesOnAmpersand(name);
+      for (let i = 0; i < qty; i += 1) {
+        names.push(...splitNames);
+      }
     } else {
-      names.push(name);
+      for (let i = 0; i < qty; i += 1) {
+        names.push(name);
+      }
     }
   }
   return names.join("\n");

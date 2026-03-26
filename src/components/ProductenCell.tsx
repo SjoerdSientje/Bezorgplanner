@@ -30,6 +30,7 @@ interface EditRow {
 interface Props {
   value: string;
   lineItemsJson?: string | null;
+  bestellingTotaalPrijs?: number | null;
   /** Simpele tekst-save (legacy, wordt niet meer gebruikt in ritjes-vandaag) */
   onSave?: (value: string) => void;
   /** Multi-field save: producten + line_items_json + bestelling_totaal_prijs (= som regelprijzen) */
@@ -86,7 +87,13 @@ function sumLineItemPrices(items: LineItem[]): number {
   }, 0);
 }
 
-export default function ProductenCell({ value, lineItemsJson, onSave, onSaveMulti }: Props) {
+export default function ProductenCell({
+  value,
+  lineItemsJson,
+  bestellingTotaalPrijs,
+  onSave,
+  onSaveMulti,
+}: Props) {
   const [panelOpen, setPanelOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [rows, setRows] = useState<EditRow[]>([]);
@@ -161,6 +168,24 @@ export default function ProductenCell({ value, lineItemsJson, onSave, onSaveMult
     try {
       const newLineItemsJson = buildLineItemsJsonFromRows(rows);
       const newProductenText = rows.map((r) => r.name).filter(Boolean).join("\n");
+      const hasUsableLineItemsJson = (() => {
+        if (!localLineItemsJson) return false;
+        try {
+          const raw = effectiveLineItemsJson(localLineItemsJson) ?? localLineItemsJson;
+          const parsed = JSON.parse(raw) as unknown;
+          return Array.isArray(parsed) && parsed.length > 0;
+        } catch {
+          return false;
+        }
+      })();
+      const existingTotal =
+        typeof bestellingTotaalPrijs === "number" && Number.isFinite(bestellingTotaalPrijs)
+          ? bestellingTotaalPrijs
+          : 0;
+      const totalForSave =
+        !hasUsableLineItemsJson && rowSum === 0 && existingTotal > 0
+          ? existingTotal
+          : rowSum;
 
       // Meteen de lokale display bijwerken — cel toont nieuwe producten direct.
       setLocalValue(newProductenText);
@@ -170,7 +195,7 @@ export default function ProductenCell({ value, lineItemsJson, onSave, onSaveMult
         await onSaveMulti({
           producten: newProductenText || null,
           line_items_json: newLineItemsJson,
-          bestelling_totaal_prijs: rowSum,
+          bestelling_totaal_prijs: totalForSave,
         });
       } else if (onSave) {
         onSave(newProductenText);
@@ -180,7 +205,7 @@ export default function ProductenCell({ value, lineItemsJson, onSave, onSaveMult
     } finally {
       setSaving(false);
     }
-  }, [rows, rowSum, onSaveMulti, onSave]);
+  }, [rows, rowSum, onSaveMulti, onSave, localLineItemsJson, bestellingTotaalPrijs]);
 
   // Platte weergavetekst — gebruikt lokale state zodat wijzigingen direct zichtbaar zijn
   let displayItems: LineItem[] = [];

@@ -173,6 +173,11 @@ export default function RitjesVandaagPage() {
         const id = order?.id as string | undefined;
         const lineItemsJson =
           order != null ? (order.line_items_json as string | null | undefined) ?? null : null;
+        const bestellingTotaalPrijs =
+          order != null &&
+          typeof (order as any).bestelling_totaal_prijs === "number"
+            ? ((order as any).bestelling_totaal_prijs as number)
+            : null;
         const handleSaveMulti = id
           ? async (fields: Record<string, unknown>) => {
               // Update orders state + reset tabel zodat producten-tekst en prijs direct zichtbaar zijn.
@@ -190,6 +195,7 @@ export default function RitjesVandaagPage() {
           <ProductenCell
             value={value}
             lineItemsJson={lineItemsJson}
+            bestellingTotaalPrijs={bestellingTotaalPrijs}
             onSaveMulti={handleSaveMulti}
           />
         );
