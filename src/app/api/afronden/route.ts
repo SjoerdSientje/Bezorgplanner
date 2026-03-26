@@ -11,11 +11,17 @@ const PAYMENT_OPTIONS = new Set([
   "Contant aan deur",
   "Anders",
 ]);
+const MAKE_AFRONDEN_WEBHOOK_URL =
+  "https://hook.eu2.make.com/vuvbe7u93yr2lbg8augxh23gu7u22sgd";
 
 function isMpTagged(mpTags: unknown): boolean {
   const t = String(mpTags ?? "").toLowerCase();
   // Match zowel "MP" als "mp" als losse tag of onderdeel van comma/space-separated tekst
   return /\bmp\b/.test(t);
+}
+
+function isMpOrderNummer(orderNummer: unknown): boolean {
+  return /^#mp/i.test(String(orderNummer ?? "").trim());
 }
 
 export async function POST(request: NextRequest) {
@@ -139,6 +145,24 @@ export async function POST(request: NextRequest) {
       },
       { ownerEmail }
     );
+
+    // Make-webhook: alleen voor shopify orders (ordernummer zonder #MP) die uit planning komen.
+    const hadPlanningSlot = (slotsVoor?.length ?? 0) > 0;
+    const orderNummer = String((order as any).order_nummer ?? "").trim();
+    if (hadPlanningSlot && orderNummer && !isMpOrderNummer(orderNummer)) {
+      try {
+        await fetch(MAKE_AFRONDEN_WEBHOOK_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ordernummer: orderNummer,
+            order_nummer: orderNummer,
+          }),
+        });
+      } catch (webhookErr) {
+        console.error("[api/afronden] make webhook fout:", webhookErr);
+      }
+    }
 
     return NextResponse.json(
       {
