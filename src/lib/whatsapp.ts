@@ -176,11 +176,22 @@ function fillVars(template: string, order: WhatsAppOrderInput): string {
     .replaceAll("{tijdslot}", String(order.aankomsttijd_slot ?? ""));
 }
 
-function formatDDMM(input: string | null | undefined): string {
-  const raw = String(input ?? "").trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return `${raw.slice(8, 10)}-${raw.slice(5, 7)}`;
-  const d = new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Amsterdam" }));
-  return `${String(d.getDate()).padStart(2, "0")}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+/** DD-MM for WhatsApp {datum}: vandaag vóór 19:00 Amsterdam, anders morgen (op verzendmoment). */
+function formatDatumPlaceholderAmsterdam(): string {
+  const s = new Date().toLocaleString("sv-SE", { timeZone: "Europe/Amsterdam" });
+  const [datePart, timePart] = s.split(" ");
+  const [y, m, d] = datePart.split("-").map(Number);
+  const hour = Number(timePart.split(":")[0]);
+  let yy = y;
+  let mm = m;
+  let dd = d;
+  if (hour >= 19) {
+    const next = new Date(Date.UTC(y, m - 1, d + 1));
+    yy = next.getUTCFullYear();
+    mm = next.getUTCMonth() + 1;
+    dd = next.getUTCDate();
+  }
+  return `${String(dd).padStart(2, "0")}-${String(mm).padStart(2, "0")}`;
 }
 
 export function resolveTemplateForOrder(
@@ -227,7 +238,7 @@ function buildAutoVariables(
 function buildBusinessVariables(order: WhatsAppOrderInput, count: number): string[] {
   const vars = [
     String(order.naam ?? ""),
-    formatDDMM(order.datum),
+    formatDatumPlaceholderAmsterdam(),
     String(order.aankomsttijd_slot ?? ""),
     String(order.bestelling_totaal_prijs ?? ""),
   ];
