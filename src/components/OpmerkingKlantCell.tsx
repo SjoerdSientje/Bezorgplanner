@@ -20,6 +20,7 @@ export default function OpmerkingKlantCell({ value, onSave }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const text = String(value ?? "").trim();
   const klikbaar = isKlikbaarOpmerking(text);
+  const canEdit = Boolean(onSave);
 
   useEffect(() => {
     function handleOutsideClick(e: MouseEvent) {
@@ -45,7 +46,7 @@ export default function OpmerkingKlantCell({ value, onSave }: Props) {
     }
   }
 
-  if (!klikbaar) {
+  if (!klikbaar && !canEdit) {
     return (
       <span className="block px-2 py-1.5 text-sm text-stone-700">
         {text || "—"}
@@ -55,14 +56,28 @@ export default function OpmerkingKlantCell({ value, onSave }: Props) {
 
   return (
     <div ref={ref} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="w-full px-2 py-1.5 text-left text-sm text-stone-700 hover:bg-koopje-orange-light/40"
-      >
-        <span className="line-clamp-2 leading-snug">{text}</span>
-        <span className="ml-1 inline-block align-middle text-[10px] text-koopje-orange opacity-70">▾</span>
-      </button>
+      {klikbaar ? (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="w-full px-2 py-1.5 text-left text-sm text-stone-700 hover:bg-koopje-orange-light/40"
+        >
+          <span className="line-clamp-2 leading-snug">{text}</span>
+          <span className="ml-1 inline-block align-middle text-[10px] text-koopje-orange opacity-70">▾</span>
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={() => {
+            setDraft("");
+            setEditing(true);
+            setOpen(true);
+          }}
+          className="w-full px-2 py-1.5 text-left text-sm text-koopje-orange hover:bg-koopje-orange-light/40"
+        >
+          Opmerking toevoegen
+        </button>
+      )}
 
       {open && (
         <div className="absolute left-0 top-full z-50 mt-1 w-96 rounded-xl border border-stone-200 bg-white p-3 shadow-2xl">
@@ -70,7 +85,7 @@ export default function OpmerkingKlantCell({ value, onSave }: Props) {
             <p className="text-[11px] font-semibold uppercase tracking-wide text-stone-400">
               Opmerkingen klant
             </p>
-            {onSave && !editing && (
+            {onSave && klikbaar && !editing && (
               <button
                 type="button"
                 onClick={() => {
