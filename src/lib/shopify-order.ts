@@ -52,6 +52,7 @@ export interface ShopifyLineItem {
 
 export interface ShopifyShippingLine {
   title?: string | null;
+  code?: string | null;
 }
 
 export interface ShopifyOrder {
@@ -84,15 +85,19 @@ function isFietsShopifyLineItem(item: ShopifyLineItem): boolean {
   return hasLeveringProperty(item.properties);
 }
 
-const SHIPPING_EXCLUDE_TITLE = "koopjefatbike showroom";
+const SHIPPING_EXCLUDE_MATCH = "koopjefatbike showroom";
 
 /** Order komt alleen in Ritjes voor vandaag als hij door dit filter gaat */
 export function passesRitjesFilter(order: ShopifyOrder): boolean {
-  // Uitsluiten: shipping line title is (case insensitive) "koopjefatbike showroom"
+  // Uitsluiten: shipping line title/code bevat "koopjefatbike showroom" (case insensitive),
+  // dus ook varianten zoals "Koopjefatbike Showroom De Bilt".
   const shippingLines = order.shipping_lines ?? [];
   const isShowroom = shippingLines.some(
-    (line) =>
-      (line.title ?? "").trim().toLowerCase() === SHIPPING_EXCLUDE_TITLE.toLowerCase()
+    (line) => {
+      const title = String(line.title ?? "").trim().toLowerCase();
+      const code = String(line.code ?? "").trim().toLowerCase();
+      return title.includes(SHIPPING_EXCLUDE_MATCH) || code.includes(SHIPPING_EXCLUDE_MATCH);
+    }
   );
   if (isShowroom) return false;
 

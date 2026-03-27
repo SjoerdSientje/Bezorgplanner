@@ -200,9 +200,22 @@ export default function RitjesVandaagPage() {
           />
         );
       },
-      "Opmerkingen klant": (_rowIndex: number, value: string) => (
-        <OpmerkingKlantCell value={String(value ?? "")} />
-      ),
+      "Opmerkingen klant": (rowIndex: number, value: string) => {
+        const order = orders[rowIndex];
+        const id = order?.id as string | undefined;
+        const handleSave = id
+          ? async (nextValue: string) => {
+              const payload = { opmerkingen_klant: nextValue.trim() || null };
+              patchOrderInState(rowIndex, payload);
+              await fetch(`/api/orders/${id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+              });
+            }
+          : undefined;
+        return <OpmerkingKlantCell value={String(value ?? "")} onSave={handleSave} />;
+      },
     }),
     [orders, deleteOrder, patchOrderInState]
   );
