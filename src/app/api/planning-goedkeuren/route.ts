@@ -203,6 +203,7 @@ export async function POST(request: NextRequest) {
           datum: o.datum ?? planningDate,
           opmerkingen_klant: o.opmerkingen_klant,
           bezorgtijd_voorkeur: o.bezorgtijd_voorkeur,
+          in_planning_en_ritjes_vandaag: true,
         },
         { ownerEmail }
       );

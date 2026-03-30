@@ -34,6 +34,8 @@ export type WhatsAppOrderInput = {
   datum?: string | null;
   opmerkingen_klant?: string | null;
   bezorgtijd_voorkeur?: string | null;
+  /** True wanneer de order op verzendmoment in zowel ritjes_vandaag als planning staat. */
+  in_planning_en_ritjes_vandaag?: boolean | null;
 };
 
 export type SendWhatsAppResult = {
@@ -106,8 +108,10 @@ function resolveFixedBusinessTemplate(
   const kind = getOrderKind(order);
   const paid = order.betaald === true;
   const mp = isMpOrder(order);
+  const inPlanningEnRitjesVandaag = order.in_planning_en_ritjes_vandaag === true;
 
   if (event === "planning_goedgekeurd" || event === "stuur_appjes") {
+    if (inPlanningEnRitjesVandaag) return { name: "nieuw_tijdslot", language: "nl" };
     if (kind === "terugbrengen") return { name: "fatbike_terugbrengen", language: "nl" };
     if (kind === "ophalen") return { name: "fatbike_ophalen", language: "nl" };
     if (kind === "reparatie_aan_huis" || kind === "proefrit") {
@@ -245,6 +249,15 @@ function buildBusinessVariables(order: WhatsAppOrderInput, count: number): strin
   return Array.from({ length: Math.max(0, count) }, (_, i) => vars[i] ?? "");
 }
 
+function buildNieuwTijdslotVariables(order: WhatsAppOrderInput, count: number): string[] {
+  const vars = [
+    String(order.naam ?? ""),
+    String(order.aankomsttijd_slot ?? ""),
+    String(order.order_nummer ?? ""),
+  ];
+  return Array.from({ length: Math.max(0, count) }, (_, i) => vars[i] ?? "");
+}
+
 let templatesCache: { expiresAt: number; templates: WaTemplate[] } | null = null;
 
 async function getCachedTemplates(): Promise<WaTemplate[]> {
@@ -373,12 +386,14 @@ export async function sendWhatsAppByEvent(
     const tpl = templates.find((t) => String(t.name) === fixed.name);
     const bodyCount = tpl ? extractParamCount(tpl, "BODY") : 0;
     const headerCount = tpl ? extractParamCount(tpl, "HEADER") : 0;
+    const buildVars =
+      fixed.name === "nieuw_tijdslot" ? buildNieuwTijdslotVariables : buildBusinessVariables;
     return sendWhatsAppTemplate({
       to,
       templateName: fixed.name,
       languageCode: fixed.language || "nl",
-      bodyVariables: buildBusinessVariables(order, bodyCount),
-      headerVariables: buildBusinessVariables(order, headerCount),
+      bodyVariables: buildVars(order, bodyCount),
+      headerVariables: buildVars(order, headerCount),
     });
   }
 

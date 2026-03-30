@@ -72,13 +72,22 @@ export async function POST(request: NextRequest) {
 
     const { data: ordersMeta } = await supabase
       .from("orders")
-      .select("id, type, betaald, mp_tags, datum, opmerkingen_klant, bezorgtijd_voorkeur, bestelling_totaal_prijs")
+      .select("id, status, type, betaald, mp_tags, datum, opmerkingen_klant, bezorgtijd_voorkeur, bestelling_totaal_prijs")
       .eq("owner_email", ownerEmail)
       .in("id", selected.map((o) => o.order_id));
     const metaById = new Map((ordersMeta ?? []).map((o: any) => [String(o.id), o]));
 
+    const { data: planningRows } = await supabase
+      .from("planning_slots")
+      .select("order_id")
+      .eq("owner_email", ownerEmail)
+      .in("order_id", selected.map((o) => o.order_id));
+    const plannedOrderIds = new Set((planningRows ?? []).map((r: any) => String(r.order_id ?? "")));
+
     for (const o of selected) {
       const meta = metaById.get(o.order_id) ?? {};
+      const inPlanningEnRitjesVandaag =
+        String((meta as any).status ?? "") === "ritjes_vandaag" && plannedOrderIds.has(String(o.order_id));
       const sendRes = await sendWhatsAppByEvent(
         "stuur_appjes",
         {
@@ -94,6 +103,7 @@ export async function POST(request: NextRequest) {
           datum: String((meta as any).datum ?? ""),
           opmerkingen_klant: String((meta as any).opmerkingen_klant ?? ""),
           bezorgtijd_voorkeur: String((meta as any).bezorgtijd_voorkeur ?? ""),
+          in_planning_en_ritjes_vandaag: inPlanningEnRitjesVandaag,
         },
         { ownerEmail }
       );
