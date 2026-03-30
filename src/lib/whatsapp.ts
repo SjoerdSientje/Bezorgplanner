@@ -64,6 +64,13 @@ function env(name: string): string {
   return String(process.env[name] ?? "").trim();
 }
 
+/** Meta template language for `nieuw_tijdslot` — must match Business Manager exactly (e.g. en, en_US). */
+function nieuwTijdslotTemplateLanguage(): string {
+  const fromEnv = env("WHATSAPP_NIEUW_TIJDSLOT_LANGUAGE");
+  if (fromEnv) return fromEnv;
+  return "en";
+}
+
 function normalizePhone(raw: string | null | undefined): string {
   const cleaned = String(raw ?? "").replace(/[^\d+]/g, "");
   if (!cleaned) return "";
@@ -111,7 +118,9 @@ function resolveFixedBusinessTemplate(
   const inPlanningEnRitjesVandaag = order.in_planning_en_ritjes_vandaag === true;
 
   if (event === "planning_goedgekeurd" || event === "stuur_appjes") {
-    if (inPlanningEnRitjesVandaag) return { name: "nieuw_tijdslot", language: "nl" };
+    if (inPlanningEnRitjesVandaag) {
+      return { name: "nieuw_tijdslot", language: nieuwTijdslotTemplateLanguage() };
+    }
     if (kind === "terugbrengen") return { name: "fatbike_terugbrengen", language: "nl" };
     if (kind === "ophalen") return { name: "fatbike_ophalen", language: "nl" };
     if (kind === "reparatie_aan_huis" || kind === "proefrit") {
