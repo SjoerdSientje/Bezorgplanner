@@ -44,6 +44,7 @@ interface Props {
 }
 
 type LeveringOption = "Volledig rijklaar" | "In doos";
+type MountedExtra = "achterzitje" | "voorrekje";
 
 let idCounter = 0;
 function genId() { return String(++idCounter); }
@@ -53,14 +54,16 @@ function parseToEditRows(lineItemsJson: string | null | undefined, fallbackText:
     try {
       const raw = effectiveLineItemsJson(lineItemsJson) ?? lineItemsJson;
       const items = JSON.parse(raw) as LineItem[];
-      return items.map((item) => ({
-        _id: genId(),
-        name: item.name ?? "",
-        price: item.price != null ? String(item.price) : "0",
-        isFiets: item.isFiets ?? false,
-        properties: item.properties ?? [],
-        defaultItems: item.defaultItems ?? [],
-      }));
+      return items
+        .map((item) => ({
+          _id: genId(),
+          name: item.name ?? "",
+          price: item.price != null ? String(item.price) : "0",
+          isFiets: item.isFiets ?? false,
+          properties: item.properties ?? [],
+          defaultItems: item.defaultItems ?? [],
+        }))
+        .map(normalizeRowMountedTitle);
     } catch { /* fall through */ }
   }
   if (fallbackText) {
@@ -119,6 +122,71 @@ function withLeveringProperty(
   });
   if (!found) next.push({ name: "Levering", value: levering });
   return next;
+}
+
+function parseMountedExtrasFromText(text: string): Set<MountedExtra> {
+  const out = new Set<MountedExtra>();
+  const t = String(text ?? "").toLowerCase();
+  if (t.includes("achterzitje gemonteerd")) out.add("achterzitje");
+  if (t.includes("voorrekje gemonteerd")) out.add("voorrekje");
+  return out;
+}
+
+function parseMountedExtrasFromProperties(
+  properties: { name: string; value: string }[]
+): Set<MountedExtra> {
+  const out = new Set<MountedExtra>();
+  for (const p of properties ?? []) {
+    if (String(p.name ?? "").trim().toLowerCase() !== "montage") continue;
+    const found = parseMountedExtrasFromText(String(p.value ?? ""));
+    found.forEach((x) => out.add(x));
+  }
+  return out;
+}
+
+function appendMountedToTitle(baseName: string, mounted: Set<MountedExtra>): string {
+  const cleanBase = String(baseName ?? "")
+    .replace(/\s*\+\s*achterzitje\s+gemonteerd/gi, "")
+    .replace(/\s*\+\s*voorrekje\s+gemonteerd/gi, "")
+    .trim();
+  const suffix: string[] = [];
+  if (mounted.has("achterzitje")) suffix.push("achterzitje gemonteerd");
+  if (mounted.has("voorrekje")) suffix.push("voorrekje gemonteerd");
+  if (suffix.length === 0) return cleanBase;
+  return `${cleanBase} + ${suffix.join(" + ")}`;
+}
+
+function removeMountedFromMontageProperties(
+  properties: { name: string; value: string }[]
+): { cleaned: { name: string; value: string }[]; mounted: Set<MountedExtra> } {
+  const mounted = new Set<MountedExtra>();
+  const cleaned: { name: string; value: string }[] = [];
+  for (const p of properties ?? []) {
+    if (String(p.name ?? "").trim().toLowerCase() !== "montage") {
+      cleaned.push(p);
+      continue;
+    }
+    const raw = String(p.value ?? "");
+    const found = parseMountedExtrasFromText(raw);
+    found.forEach((x) => mounted.add(x));
+    const nextValue = raw
+      .replace(/(^|\+)\s*achterzitje\s+gemonteerd\s*(?=\+|$)/gi, "")
+      .replace(/(^|\+)\s*voorrekje\s+gemonteerd\s*(?=\+|$)/gi, "")
+      .replace(/\+\s*\+/g, "+")
+      .replace(/^\s*\+\s*|\s*\+\s*$/g, "")
+      .trim();
+    if (nextValue) cleaned.push({ ...p, value: nextValue });
+  }
+  return { cleaned, mounted };
+}
+
+function normalizeRowMountedTitle(row: EditRow): EditRow {
+  if (!row.isFiets) return row;
+  const fromTitle = parseMountedExtrasFromText(row.name);
+  const fromProps = parseMountedExtrasFromProperties(row.properties ?? []);
+  const mounted = new Set<MountedExtra>([...fromTitle, ...fromProps]);
+  if (mounted.size === 0) return row;
+  return { ...row, name: appendMountedToTitle(row.name, mounted) };
 }
 
 export default function ProductenCell({
@@ -215,14 +283,49 @@ export default function ProductenCell({
   }
 
   function updateLevering(id: string, levering: LeveringOption) {
-    setRows((prev) =>
-      prev.map((r) => {
-        if (r._id !== id || !r.isFiets) return r;
-        const properties = withLeveringProperty(r.properties ?? [], levering);
-        const defaultItems = applyProductDefaultItemsRules(r.name ?? "", properties, productRules);
-        return { ...r, properties, defaultItems };
-      })
-    );
+    setRows((prev) => {
+      const next = prev.map((r) => ({ ...r }));
+      const idx = next.findIndex((r) => r._id === id);
+      if (idx < 0) return prev;
+      const target = next[idx];
+      if (!target.isFiets) return prev;
+
+      let properties = withLeveringProperty(target.properties ?? [], levering);
+      let name = target.name;
+      const mountedInTitle = parseMountedExtrasFromText(name);
+      const mountedInProps = parseMountedExtrasFromProperties(properties);
+      const mounted = new Set<MountedExtra>([...mountedInTitle, ...mountedInProps]);
+
+      if (levering === "In doos" && mounted.size > 0) {
+        name = appendMountedToTitle(name, new Set());
+        const removed = removeMountedFromMontageProperties(properties);
+        properties = removed.cleaned;
+
+        const existingExtras = new Set(
+          next
+            .filter((r) => !r.isFiets)
+            .map((r) => String(r.name ?? "").trim().toLowerCase())
+        );
+        for (const extra of mounted) {
+          if (existingExtras.has(extra)) continue;
+          next.push({
+            _id: genId(),
+            name: extra,
+            price: "0",
+            isFiets: false,
+            properties: [],
+            defaultItems: [],
+          });
+          existingExtras.add(extra);
+        }
+      } else if (levering === "Volledig rijklaar" && mounted.size > 0) {
+        name = appendMountedToTitle(name, mounted);
+      }
+
+      const defaultItems = applyProductDefaultItemsRules(name ?? "", properties, productRules);
+      next[idx] = { ...target, name, properties, defaultItems };
+      return next;
+    });
   }
 
   const rowSum = sumRowPrices(rows);
