@@ -3,7 +3,8 @@
 import type { ProductDefaultItemsRulesV1 } from "@/lib/product-default-items-rules";
 
 function parseLines(text: string): string[] {
-  return text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  // Bewaar invoer exact tijdens typen; opschonen gebeurt pas bij verwerken.
+  return text.split(/\r?\n/);
 }
 
 function joinLines(arr: string[]): string {

@@ -37,6 +37,10 @@ function expandItemTemplates(items: string[], model: string): string[] {
   return items.map((t) => t.replace(/\{model\}/g, model));
 }
 
+function cleanLines(items: string[]): string[] {
+  return items.map((s) => String(s ?? "").trim()).filter(Boolean);
+}
+
 /**
  * Standaard regels (gelijk aan de vroegere hardcoded logica in shopify-order).
  */
@@ -91,11 +95,15 @@ export function applyProductDefaultItemsRules(
 ): string[] {
   const model = extractModelnaamVanProduct(naam);
   const naamLower = naam.toLowerCase();
-  const excluded = rules.excludedBrandKeywords.some((k) =>
+  const excludedKeywords = cleanLines(rules.excludedBrandKeywords);
+  const excluded = excludedKeywords.some((k) =>
     naamLower.includes(k.toLowerCase().trim())
   );
 
-  const items: string[] = expandItemTemplates(rules.always, model);
+  const alwaysItems = cleanLines(rules.always);
+  const vrStandardItems = cleanLines(rules.volledigRijklaar.standardItems);
+  const idStandardItems = cleanLines(rules.inDoos.standardItems);
+  const items: string[] = expandItemTemplates(alwaysItems, model);
 
   const leveringRaw =
     rawProperties.find((p) => p.name?.toLowerCase().trim() === "levering")?.value ?? "";
@@ -103,20 +111,24 @@ export function applyProductDefaultItemsRules(
 
   if (levering === "volledig rijklaar") {
     if (!excluded) {
-      items.push(...rules.volledigRijklaar.standardItems);
+      items.push(...vrStandardItems);
     }
     for (const g of rules.volledigRijklaar.modelExtras) {
-      if (matchesModels(model, g.models)) {
-        items.push(...expandItemTemplates(g.items, model));
+      const models = cleanLines(g.models);
+      const groupItems = cleanLines(g.items);
+      if (matchesModels(model, models)) {
+        items.push(...expandItemTemplates(groupItems, model));
       }
     }
   } else if (levering === "in doos") {
     if (!excluded) {
-      items.push(...rules.inDoos.standardItems);
+      items.push(...idStandardItems);
     }
     for (const g of rules.inDoos.modelExtras) {
-      if (matchesModels(model, g.models)) {
-        items.push(...expandItemTemplates(g.items, model));
+      const models = cleanLines(g.models);
+      const groupItems = cleanLines(g.items);
+      if (matchesModels(model, models)) {
+        items.push(...expandItemTemplates(groupItems, model));
       }
     }
   }
