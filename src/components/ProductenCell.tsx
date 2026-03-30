@@ -2,6 +2,12 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { stripMpDummyPricesFromLineItemsJsonString } from "@/lib/line-items-json-sanitize";
+import {
+  DEFAULT_PRODUCT_RULES_V1,
+  applyProductDefaultItemsRules,
+  isProductDefaultItemsRulesV1,
+  type ProductDefaultItemsRulesV1,
+} from "@/lib/product-default-items-rules";
 
 /** Oude MP-data: fiets op €999 dummy — tonen als €0 tot DB-migratie is gedraaid. */
 function effectiveLineItemsJson(json: string | null | undefined): string | null | undefined {
@@ -36,6 +42,8 @@ interface Props {
   /** Multi-field save: producten + line_items_json + bestelling_totaal_prijs (= som regelprijzen) */
   onSaveMulti?: (fields: Record<string, unknown>) => Promise<void>;
 }
+
+type LeveringOption = "Volledig rijklaar" | "In doos";
 
 let idCounter = 0;
 function genId() { return String(++idCounter); }
@@ -87,6 +95,32 @@ function sumLineItemPrices(items: LineItem[]): number {
   }, 0);
 }
 
+function normalizeLeveringValue(v: string): LeveringOption | null {
+  const n = String(v ?? "").trim().toLowerCase();
+  if (n === "volledig rijklaar" || n === "rijklaar") return "Volledig rijklaar";
+  if (n === "in doos") return "In doos";
+  return null;
+}
+
+function getLeveringValue(properties: { name: string; value: string }[]): LeveringOption | null {
+  const p = properties.find((prop) => String(prop.name ?? "").trim().toLowerCase() === "levering");
+  return normalizeLeveringValue(p?.value ?? "");
+}
+
+function withLeveringProperty(
+  properties: { name: string; value: string }[],
+  levering: LeveringOption
+): { name: string; value: string }[] {
+  let found = false;
+  const next = properties.map((p) => {
+    if (String(p.name ?? "").trim().toLowerCase() !== "levering") return p;
+    found = true;
+    return { ...p, value: levering };
+  });
+  if (!found) next.push({ name: "Levering", value: levering });
+  return next;
+}
+
 export default function ProductenCell({
   value,
   lineItemsJson,
@@ -100,6 +134,7 @@ export default function ProductenCell({
   const [newName, setNewName] = useState("");
   const [newPrice, setNewPrice] = useState("0");
   const [saving, setSaving] = useState(false);
+  const [productRules, setProductRules] = useState<ProductDefaultItemsRulesV1>(DEFAULT_PRODUCT_RULES_V1);
   const ref = useRef<HTMLDivElement>(null);
 
   // Lokale display-state — wordt direct na opslaan bijgewerkt zodat de cel
@@ -122,6 +157,24 @@ export default function ProductenCell({
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [editing]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/product-rules?t=${Date.now()}`, { cache: "no-store" })
+      .then((res) => res.json().catch(() => ({})))
+      .then((data) => {
+        if (cancelled) return;
+        if (isProductDefaultItemsRulesV1(data?.rules)) {
+          setProductRules(data.rules);
+        }
+      })
+      .catch(() => {
+        // Fallback blijft DEFAULT_PRODUCT_RULES_V1.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Lees producten uit JSON/tekst bij openen
   function openPanel() {
@@ -159,6 +212,17 @@ export default function ProductenCell({
     ]);
     setNewName("");
     setNewPrice("0");
+  }
+
+  function updateLevering(id: string, levering: LeveringOption) {
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r._id !== id || !r.isFiets) return r;
+        const properties = withLeveringProperty(r.properties ?? [], levering);
+        const defaultItems = applyProductDefaultItemsRules(r.name ?? "", properties, productRules);
+        return { ...r, properties, defaultItems };
+      })
+    );
   }
 
   const rowSum = sumRowPrices(rows);
@@ -299,6 +363,22 @@ export default function ProductenCell({
                         min="0"
                       />
                     </div>
+                    {row.isFiets && (
+                      <select
+                        value={getLeveringValue(row.properties ?? []) ?? ""}
+                        onChange={(e) => {
+                          const v = normalizeLeveringValue(e.target.value);
+                          if (!v) return;
+                          updateLevering(row._id, v);
+                        }}
+                        className="shrink-0 rounded border border-stone-300 bg-white px-1.5 py-0.5 text-[11px] text-stone-700 focus:border-koopje-orange focus:outline-none"
+                        title="Levering"
+                      >
+                        <option value="">Levering…</option>
+                        <option value="Volledig rijklaar">Volledig rijklaar</option>
+                        <option value="In doos">In doos</option>
+                      </select>
+                    )}
                     <button
                       type="button"
                       onClick={() => removeRow(row._id)}
