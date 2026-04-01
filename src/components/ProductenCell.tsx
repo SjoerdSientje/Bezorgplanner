@@ -45,7 +45,8 @@ interface Props {
 
 type LeveringOption = "Volledig rijklaar" | "In doos";
 type MountedExtra = "achterzitje" | "voorrekje";
-type AccessoryStatus = "geen" | "gemonteerd" | "apart";
+const VOLLEDIG_RIJKLAAR_TOESLAG_NAAM = "Volledig rijklaar";
+const VOLLEDIG_RIJKLAAR_TOESLAG_PRIJS = "50";
 
 let idCounter = 0;
 function genId() { return String(++idCounter); }
@@ -138,8 +139,6 @@ function parseApartExtrasFromText(text: string): Set<MountedExtra> {
   const t = String(text ?? "").toLowerCase();
   if (t.includes("achterzitje apart")) out.add("achterzitje");
   if (t.includes("voorrekje apart")) out.add("voorrekje");
-  if (t.includes("los achterzitje")) out.add("achterzitje");
-  if (t.includes("los voorrekje")) out.add("voorrekje");
   return out;
 }
 
@@ -196,13 +195,6 @@ function parseAccessoryStatesFromProperties(
   return { mounted, apart };
 }
 
-function accessoryFromExtraName(name: string): MountedExtra | null {
-  const n = String(name ?? "").trim().toLowerCase();
-  if (n === "achterzitje" || n === "los achterzitje") return "achterzitje";
-  if (n === "voorrekje" || n === "los voorrekje") return "voorrekje";
-  return null;
-}
-
 function stripManagedTitleSuffix(name: string): string {
   return String(name ?? "")
     .replace(/\s*-\s*volledig rijklaar\s*(?:-\s*.*)?$/i, "")
@@ -225,8 +217,6 @@ function buildBikeTitle(
   if (levering === "Volledig rijklaar") {
     if (mounted.has("achterzitje")) bits.push("achterzitje gemonteerd");
     if (mounted.has("voorrekje")) bits.push("voorrekje gemonteerd");
-    if (apart.has("achterzitje")) bits.push("achterzitje apart");
-    if (apart.has("voorrekje")) bits.push("voorrekje apart");
     return bits.length ? `${base} - volledig rijklaar - ${bits.join(" + ")}` : `${base} - volledig rijklaar`;
   }
   if (apart.has("achterzitje")) bits.push("achterzitje apart");
@@ -280,38 +270,10 @@ function mergeMountedSets(...sets: Set<MountedExtra>[]): Set<MountedExtra> {
   return out;
 }
 
-function statusFromSets(
-  acc: MountedExtra,
-  mounted: Set<MountedExtra>,
-  apart: Set<MountedExtra>
-): AccessoryStatus {
-  if (mounted.has(acc)) return "gemonteerd";
-  if (apart.has(acc)) return "apart";
-  return "geen";
-}
-
-function updateAccessoryProperties(
-  properties: { name: string; value: string }[],
-  levering: LeveringOption,
-  mounted: Set<MountedExtra>,
-  apart: Set<MountedExtra>
-): { name: string; value: string }[] {
-  const base = stripAccessoryProperties(properties).filter(
-    (p) => String(p.name ?? "").trim().toLowerCase() !== "levering"
-  );
-  const next: { name: string; value: string }[] = [
-    { name: "Levering", value: levering.toLowerCase() },
-    ...base,
-  ];
-  const achterzitje = statusFromSets("achterzitje", mounted, apart);
-  const voorrekje = statusFromSets("voorrekje", mounted, apart);
-  if (achterzitje !== "geen") next.push({ name: "Achterzitje", value: achterzitje });
-  if (voorrekje !== "geen") next.push({ name: "Voorrekje", value: voorrekje });
-  const montageBits: string[] = [];
-  if (achterzitje === "gemonteerd") montageBits.push("achterzitje gemonteerd");
-  if (voorrekje === "gemonteerd") montageBits.push("voorrekje gemonteerd");
-  if (montageBits.length > 0) next.push({ name: "Montage", value: montageBits.join(" + ") });
-  return next;
+function isVolledigRijklaarToeslagRow(row: EditRow): boolean {
+  if (row.isFiets) return false;
+  const n = String(row.name ?? "").trim().toLowerCase();
+  return n === "volledig rijklaar" || n === "rijklaar";
 }
 
 function normalizeRowMountedTitle(row: EditRow): EditRow {
@@ -345,8 +307,7 @@ function normalizeRowsForEdit(rows: EditRow[]): EditRow[] {
   const existingExtras = new Set(
     next
       .filter((r) => !r.isFiets)
-      .map((r) => accessoryFromExtraName(r.name))
-      .filter(Boolean) as MountedExtra[]
+      .map((r) => String(r.name ?? "").trim().toLowerCase())
   );
 
   for (const row of next) {
@@ -368,7 +329,7 @@ function normalizeRowsForEdit(rows: EditRow[]): EditRow[] {
       if (!existingExtras.has(extra)) {
         next.push({
           _id: genId(),
-          name: extra === "achterzitje" ? "los achterzitje" : "los voorrekje",
+          name: extra,
           price: "0",
           isFiets: false,
           properties: [],
@@ -498,13 +459,13 @@ export default function ProductenCell({
         genericAccessoryProps.apart
       );
 
-      const existingExtraRows = next
-        .filter((r) => !r.isFiets)
-        .map((r) => ({ name: String(r.name ?? "").trim().toLowerCase(), id: r._id }));
-      for (const e of existingExtraRows) {
-        const acc = accessoryFromExtraName(e.name);
-        if (acc) allDetected.add(acc);
-      }
+      const existingExtras = new Set(
+        next
+          .filter((r) => !r.isFiets)
+          .map((r) => String(r.name ?? "").trim().toLowerCase())
+      );
+      if (existingExtras.has("achterzitje")) allDetected.add("achterzitje");
+      if (existingExtras.has("voorrekje")) allDetected.add("voorrekje");
 
       const removed = removeMountedFromMontageProperties(properties);
       properties = stripAccessoryProperties(removed.cleaned);
@@ -512,48 +473,55 @@ export default function ProductenCell({
       let apart = new Set<MountedExtra>();
 
       if (levering === "In doos") {
-        // In doos kan nooit gemonteerd zijn.
         apart = allDetected;
+        apart.forEach((extra) => {
+          if (!existingExtras.has(extra)) {
+            next.push({
+              _id: genId(),
+              name: extra,
+              price: "0",
+              isFiets: false,
+              properties: [],
+              defaultItems: [],
+            });
+            existingExtras.add(extra);
+          }
+        });
+        // In doos: geen "Volledig rijklaar" toeslagregel.
+        for (let i = next.length - 1; i >= 0; i -= 1) {
+          if (i === idx) continue;
+          if (isVolledigRijklaarToeslagRow(next[i])) next.splice(i, 1);
+        }
       } else {
-        // Bij switch naar rijklaar: vraag voor aanwezige accessoires los of gemonteerd.
-        if (allDetected.has("achterzitje")) {
-          const m = window.confirm("Achterzitje aanwezig. Gemonteerd? (OK = gemonteerd, Annuleren = apart)");
-          if (m) mounted.add("achterzitje");
-          else apart.add("achterzitje");
-        }
-        if (allDetected.has("voorrekje")) {
-          const m = window.confirm("Voorrekje aanwezig. Gemonteerd? (OK = gemonteerd, Annuleren = apart)");
-          if (m) mounted.add("voorrekje");
-          else apart.add("voorrekje");
-        }
-      }
-
-      const name = buildBikeTitle(target.name, levering, mounted, apart);
-      properties = updateAccessoryProperties(properties, levering, mounted, apart);
-
-      // Accessoire-extra regels exact syncen met 'apart' status.
-      for (let i = next.length - 1; i >= 0; i -= 1) {
-        if (i === idx || next[i].isFiets) continue;
-        const acc = accessoryFromExtraName(next[i].name);
-        if (!acc) continue;
-        if (!apart.has(acc)) next.splice(i, 1);
-      }
-      apart.forEach((acc) => {
-        const exists = next.some(
-          (r, i) => i !== idx && !r.isFiets && accessoryFromExtraName(r.name) === acc
-        );
-        if (!exists) {
+        mounted = allDetected;
+        mounted.forEach((extra) => {
+          const removeIdx = next.findIndex(
+            (r, i) => i !== idx && !r.isFiets && String(r.name ?? "").trim().toLowerCase() === extra
+          );
+          if (removeIdx >= 0) next.splice(removeIdx, 1);
+        });
+        // Volledig rijklaar: zorg dat toeslagregel aanwezig is op €50.
+        const vrIdx = next.findIndex((r, i) => i !== idx && isVolledigRijklaarToeslagRow(r));
+        if (vrIdx >= 0) {
+          next[vrIdx] = {
+            ...next[vrIdx],
+            name: VOLLEDIG_RIJKLAAR_TOESLAG_NAAM,
+            price: VOLLEDIG_RIJKLAAR_TOESLAG_PRIJS,
+            isFiets: false,
+          };
+        } else {
           next.push({
             _id: genId(),
-            name: acc === "achterzitje" ? "los achterzitje" : "los voorrekje",
-            price: "0",
+            name: VOLLEDIG_RIJKLAAR_TOESLAG_NAAM,
+            price: VOLLEDIG_RIJKLAAR_TOESLAG_PRIJS,
             isFiets: false,
             properties: [],
             defaultItems: [],
           });
         }
-      });
+      }
 
+      const name = buildBikeTitle(target.name, levering, mounted, apart);
       const defaultItems = applyProductDefaultItemsRules(name ?? "", properties, productRules);
       next[idx] = { ...target, name, properties, defaultItems };
       return next;
