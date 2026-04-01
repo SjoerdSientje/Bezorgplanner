@@ -5,6 +5,7 @@ import Link from "next/link";
 import Header from "@/components/Header";
 import ProductenCell from "@/components/ProductenCell";
 import OpmerkingKlantCell from "@/components/OpmerkingKlantCell";
+import AankoopbewijsCell from "@/components/AankoopbewijsCell";
 
 const PLANNING_HEADERS = [
   "Order nummer",
@@ -90,11 +91,13 @@ function PlanningTabel({
   label,
   labelColor,
   onDeleteSlot,
+  onUpdateAankoopbewijs,
 }: {
   rows: PlanningRow[];
   label: string;
   labelColor: string;
   onDeleteSlot: (slotId: string, orderNummer: string) => void;
+  onUpdateAankoopbewijs: (orderId: string, next: { link: string; email: string }) => void;
 }) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const tableRef = useRef<HTMLTableElement | null>(null);
@@ -344,17 +347,16 @@ function PlanningTabel({
 
                           // Link Aankoopbewijs is the last column in the "Rest" array
                           const isLinkCol = i === 10;
-                          const href = isLinkCol ? String(v ?? "").trim() : "";
-                          if (isLinkCol && href) {
+                          if (isLinkCol) {
                             return (
-                              <a
-                                href={href}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-koopje-orange underline underline-offset-2 hover:text-koopje-orange/80"
-                              >
-                                Bekijk PDF
-                              </a>
+                              <AankoopbewijsCell
+                                orderId={String(row.order_id ?? "")}
+                                link={String(v ?? "")}
+                                email={row.email}
+                                onUpdated={(next) =>
+                                  onUpdateAankoopbewijs(String(row.order_id ?? ""), next)
+                                }
+                              />
                             );
                           }
                           return formatCell(v);
@@ -415,6 +417,19 @@ export default function PlanningPage() {
       }
     },
     [fetchPlanning]
+  );
+
+  const updateAankoopbewijs = useCallback(
+    (orderId: string, next: { link: string; email: string }) => {
+      setRows((prev) =>
+        prev.map((r) =>
+          String(r.order_id) === String(orderId)
+            ? { ...r, link_aankoopbewijs: next.link, email: next.email }
+            : r
+        )
+      );
+    },
+    []
   );
 
   useEffect(() => {
@@ -480,6 +495,7 @@ export default function PlanningPage() {
                   idx === 0 ? "text-koopje-black" : "text-koopje-orange"
                 }
                 onDeleteSlot={deleteSlot}
+                onUpdateAankoopbewijs={updateAankoopbewijs}
               />
             ))
           )}

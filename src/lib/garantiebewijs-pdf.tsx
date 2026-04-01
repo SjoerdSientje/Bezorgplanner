@@ -4,23 +4,19 @@ import { Document, Page, Text, View, StyleSheet, renderToBuffer } from "@react-p
 const ORANJE = "#F7941D";
 
 const s = StyleSheet.create({
-  page: { fontFamily: "Helvetica", fontSize: 10, padding: "2cm 2cm 2cm 2cm", color: "#222" },
-  bedrijf: { fontSize: 9, marginBottom: 16, lineHeight: 1.45 },
-  bedrijfNaam: { fontFamily: "Helvetica-Bold", fontSize: 10 },
+  page: { fontFamily: "Helvetica", fontSize: 10, padding: "2cm 2cm 2cm 2cm", color: "#222", textAlign: "center" },
+  bedrijf: { fontSize: 9, marginBottom: 16, lineHeight: 1.45, textAlign: "center" },
+  bedrijfNaam: { fontFamily: "Helvetica-Bold", fontSize: 10, textAlign: "center" },
   h1: { fontFamily: "Helvetica-Bold", fontSize: 15, textAlign: "center", marginBottom: 2 },
   h2: { fontFamily: "Helvetica-Bold", fontSize: 12, textAlign: "center", color: ORANJE, marginBottom: 14 },
-  intro: { marginBottom: 10, lineHeight: 1.45 },
-  letOpLabel: { fontFamily: "Helvetica-Bold", marginBottom: 3 },
-  letOpTekst: { marginBottom: 14, lineHeight: 1.45 },
-  sectLabel: { fontFamily: "Helvetica-Bold", marginBottom: 6 },
-  bullet: { flexDirection: "row", marginBottom: 5, paddingLeft: 4 },
-  bulletPunt: { width: 14 },
-  bulletTekst: { flex: 1, lineHeight: 1.4 },
-  dataBlok: { marginTop: 20, lineHeight: 1.7 },
-  dataRij: { flexDirection: "row" },
-  dataLabel: { width: 130 },
-  dataWaarde: { flex: 1 },
-  snummer: { marginTop: 2 },
+  intro: { marginBottom: 10, lineHeight: 1.45, textAlign: "center" },
+  letOpLabel: { fontFamily: "Helvetica-Bold", marginBottom: 3, textAlign: "center" },
+  letOpTekst: { marginBottom: 14, lineHeight: 1.45, textAlign: "center" },
+  sectLabel: { fontFamily: "Helvetica-Bold", marginBottom: 6, textAlign: "center" },
+  bullet: { marginBottom: 5, textAlign: "center", lineHeight: 1.4 },
+  dataBlok: { marginTop: 20, lineHeight: 1.7, textAlign: "center" },
+  dataRij: { marginBottom: 2, textAlign: "center" },
+  snummer: { marginTop: 2, textAlign: "center" },
 });
 
 export interface GarantiePdfData {
@@ -63,36 +59,23 @@ function Doc({ d }: { d: GarantiePdfData }) {
 
         {/* Wat houdt garantie in */}
         <Text style={s.sectLabel}>Wat houdt onze garantie in?</Text>
-        <View style={s.bullet}>
-          <Text style={s.bulletPunt}>●</Text>
-          <Text style={s.bulletTekst}>U kunt met uw Fatbike altijd langskomen bij onze winkel-werkplaats. Wij herstellen het probleem dan kosteloos voor u.</Text>
-        </View>
-        <View style={s.bullet}>
-          <Text style={s.bulletPunt}>●</Text>
-          <Text style={s.bulletTekst}>Woont u niet in de buurt? Dan kunnen wij de benodigde onderdelen naar u opsturen.</Text>
-        </View>
-        <View style={s.bullet}>
-          <Text style={s.bulletPunt}>●</Text>
-          <Text style={s.bulletTekst}>U kunt ook gebruikmaken van onze Haal & Breng-service of Reparatie aan Huis-service. Hieraan zijn uitsluitend de voorrijkosten verbonden.</Text>
-        </View>
+        <Text style={s.bullet}>● U kunt met uw Fatbike altijd langskomen bij onze winkel-werkplaats. Wij herstellen het probleem dan kosteloos voor u.</Text>
+        <Text style={s.bullet}>● Woont u niet in de buurt? Dan kunnen wij de benodigde onderdelen naar u opsturen.</Text>
+        <Text style={s.bullet}>● U kunt ook gebruikmaken van onze Haal & Breng-service of Reparatie aan Huis-service. Hieraan zijn uitsluitend de voorrijkosten verbonden.</Text>
 
         {/* Klantgegevens */}
         <View style={s.dataBlok}>
           <View style={s.dataRij}>
-            <Text style={s.dataLabel}>Naam:</Text>
-            <Text style={s.dataWaarde}>{d.naam}</Text>
+            <Text>Naam: {d.naam}</Text>
           </View>
           <View style={s.dataRij}>
-            <Text style={s.dataLabel}>Datum:</Text>
-            <Text style={s.dataWaarde}>{d.datum}</Text>
+            <Text>Datum: {d.datum}</Text>
           </View>
           <View style={s.dataRij}>
-            <Text style={s.dataLabel}>Bestelde Fatbike(s):</Text>
-            <Text style={s.dataWaarde}>{d.fiets}</Text>
+            <Text>Bestelde Fatbike(s): {d.fiets}</Text>
           </View>
           <View style={s.dataRij}>
-            <Text style={s.dataLabel}>Totaalprijs:</Text>
-            <Text style={s.dataWaarde}>{d.prijs}</Text>
+            <Text>Totaalprijs: {d.prijs}</Text>
           </View>
           {d.serienummer ? (
             <Text style={s.snummer}>{d.serienummer}</Text>

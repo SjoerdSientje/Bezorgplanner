@@ -2,6 +2,12 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { stripMpDummyPricesFromLineItemsJsonString } from "@/lib/line-items-json-sanitize";
+import {
+  DEFAULT_PRODUCT_RULES_V1,
+  applyProductDefaultItemsRules,
+  isProductDefaultItemsRulesV1,
+  type ProductDefaultItemsRulesV1,
+} from "@/lib/product-default-items-rules";
 
 /** Oude MP-data: fiets op €999 dummy — tonen als €0 tot DB-migratie is gedraaid. */
 function effectiveLineItemsJson(json: string | null | undefined): string | null | undefined {
@@ -37,6 +43,9 @@ interface Props {
   onSaveMulti?: (fields: Record<string, unknown>) => Promise<void>;
 }
 
+type LeveringOption = "Volledig rijklaar" | "In doos";
+type MountedExtra = "achterzitje" | "voorrekje";
+
 let idCounter = 0;
 function genId() { return String(++idCounter); }
 
@@ -45,14 +54,16 @@ function parseToEditRows(lineItemsJson: string | null | undefined, fallbackText:
     try {
       const raw = effectiveLineItemsJson(lineItemsJson) ?? lineItemsJson;
       const items = JSON.parse(raw) as LineItem[];
-      return items.map((item) => ({
-        _id: genId(),
-        name: item.name ?? "",
-        price: item.price != null ? String(item.price) : "0",
-        isFiets: item.isFiets ?? false,
-        properties: item.properties ?? [],
-        defaultItems: item.defaultItems ?? [],
-      }));
+      return normalizeRowsForEdit(items
+        .map((item) => ({
+          _id: genId(),
+          name: item.name ?? "",
+          price: item.price != null ? String(item.price) : "0",
+          isFiets: item.isFiets ?? false,
+          properties: item.properties ?? [],
+          defaultItems: item.defaultItems ?? [],
+        }))
+        .map(normalizeRowMountedTitle));
     } catch { /* fall through */ }
   }
   if (fallbackText) {
@@ -87,6 +98,148 @@ function sumLineItemPrices(items: LineItem[]): number {
   }, 0);
 }
 
+function normalizeLeveringValue(v: string): LeveringOption | null {
+  const n = String(v ?? "").trim().toLowerCase();
+  if (n === "volledig rijklaar" || n === "rijklaar") return "Volledig rijklaar";
+  if (n === "in doos") return "In doos";
+  return null;
+}
+
+function getLeveringValue(properties: { name: string; value: string }[]): LeveringOption | null {
+  const p = properties.find((prop) => String(prop.name ?? "").trim().toLowerCase() === "levering");
+  return normalizeLeveringValue(p?.value ?? "");
+}
+
+function withLeveringProperty(
+  properties: { name: string; value: string }[],
+  levering: LeveringOption
+): { name: string; value: string }[] {
+  let found = false;
+  const next = properties.map((p) => {
+    if (String(p.name ?? "").trim().toLowerCase() !== "levering") return p;
+    found = true;
+    return { ...p, value: levering };
+  });
+  if (!found) next.push({ name: "Levering", value: levering });
+  return next;
+}
+
+function parseMountedExtrasFromText(text: string): Set<MountedExtra> {
+  const out = new Set<MountedExtra>();
+  const t = String(text ?? "").toLowerCase();
+  if (t.includes("achterzitje gemonteerd")) out.add("achterzitje");
+  if (t.includes("voorrekje gemonteerd")) out.add("voorrekje");
+  return out;
+}
+
+function parseMountedExtrasFromProperties(
+  properties: { name: string; value: string }[]
+): Set<MountedExtra> {
+  const out = new Set<MountedExtra>();
+  for (const p of properties ?? []) {
+    if (String(p.name ?? "").trim().toLowerCase() !== "montage") continue;
+    const found = parseMountedExtrasFromText(String(p.value ?? ""));
+    found.forEach((x) => out.add(x));
+  }
+  return out;
+}
+
+function appendMountedToTitle(baseName: string, mounted: Set<MountedExtra>): string {
+  const cleanBase = String(baseName ?? "")
+    .replace(/\s*\+\s*achterzitje\s+gemonteerd/gi, "")
+    .replace(/\s*\+\s*voorrekje\s+gemonteerd/gi, "")
+    .trim();
+  const suffix: string[] = [];
+  if (mounted.has("achterzitje")) suffix.push("achterzitje gemonteerd");
+  if (mounted.has("voorrekje")) suffix.push("voorrekje gemonteerd");
+  if (suffix.length === 0) return cleanBase;
+  return `${cleanBase} + ${suffix.join(" + ")}`;
+}
+
+function removeMountedFromMontageProperties(
+  properties: { name: string; value: string }[]
+): { cleaned: { name: string; value: string }[]; mounted: Set<MountedExtra> } {
+  const mounted = new Set<MountedExtra>();
+  const cleaned: { name: string; value: string }[] = [];
+  for (const p of properties ?? []) {
+    if (String(p.name ?? "").trim().toLowerCase() !== "montage") {
+      cleaned.push(p);
+      continue;
+    }
+    const raw = String(p.value ?? "");
+    const found = parseMountedExtrasFromText(raw);
+    found.forEach((x) => mounted.add(x));
+    const nextValue = raw
+      .replace(/(^|\+)\s*achterzitje\s+gemonteerd\s*(?=\+|$)/gi, "")
+      .replace(/(^|\+)\s*voorrekje\s+gemonteerd\s*(?=\+|$)/gi, "")
+      .replace(/\+\s*\+/g, "+")
+      .replace(/^\s*\+\s*|\s*\+\s*$/g, "")
+      .trim();
+    if (nextValue) cleaned.push({ ...p, value: nextValue });
+  }
+  return { cleaned, mounted };
+}
+
+function mergeMountedSets(...sets: Set<MountedExtra>[]): Set<MountedExtra> {
+  const out = new Set<MountedExtra>();
+  for (const s of sets) {
+    s.forEach((v) => out.add(v));
+  }
+  return out;
+}
+
+function normalizeRowMountedTitle(row: EditRow): EditRow {
+  if (!row.isFiets) return row;
+  const levering = getLeveringValue(row.properties ?? []);
+  const fromTitle = parseMountedExtrasFromText(row.name);
+  const fromProps = parseMountedExtrasFromProperties(row.properties ?? []);
+  const mounted = mergeMountedSets(fromTitle, fromProps);
+  if (mounted.size === 0) return row;
+  if (levering === "In doos") {
+    return { ...row, name: appendMountedToTitle(row.name, new Set()) };
+  }
+  return { ...row, name: appendMountedToTitle(row.name, mounted) };
+}
+
+function normalizeRowsForEdit(rows: EditRow[]): EditRow[] {
+  const next = rows.map((r) => normalizeRowMountedTitle({ ...r }));
+  const existingExtras = new Set(
+    next
+      .filter((r) => !r.isFiets)
+      .map((r) => String(r.name ?? "").trim().toLowerCase())
+  );
+
+  for (const row of next) {
+    if (!row.isFiets) continue;
+    const levering = getLeveringValue(row.properties ?? []);
+    if (levering !== "In doos") continue;
+
+    const mountedInTitle = parseMountedExtrasFromText(row.name);
+    const removed = removeMountedFromMontageProperties(row.properties ?? []);
+    const mounted = mergeMountedSets(mountedInTitle, removed.mounted);
+    if (mounted.size === 0) continue;
+
+    row.name = appendMountedToTitle(row.name, new Set());
+    row.properties = removed.cleaned;
+
+    mounted.forEach((extra) => {
+      if (!existingExtras.has(extra)) {
+        next.push({
+          _id: genId(),
+          name: extra,
+          price: "0",
+          isFiets: false,
+          properties: [],
+          defaultItems: [],
+        });
+        existingExtras.add(extra);
+      }
+    });
+  }
+
+  return next;
+}
+
 export default function ProductenCell({
   value,
   lineItemsJson,
@@ -100,6 +253,7 @@ export default function ProductenCell({
   const [newName, setNewName] = useState("");
   const [newPrice, setNewPrice] = useState("0");
   const [saving, setSaving] = useState(false);
+  const [productRules, setProductRules] = useState<ProductDefaultItemsRulesV1>(DEFAULT_PRODUCT_RULES_V1);
   const ref = useRef<HTMLDivElement>(null);
 
   // Lokale display-state — wordt direct na opslaan bijgewerkt zodat de cel
@@ -123,15 +277,33 @@ export default function ProductenCell({
     return () => document.removeEventListener("mousedown", handler);
   }, [editing]);
 
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/product-rules?t=${Date.now()}`, { cache: "no-store" })
+      .then((res) => res.json().catch(() => ({})))
+      .then((data) => {
+        if (cancelled) return;
+        if (isProductDefaultItemsRulesV1(data?.rules)) {
+          setProductRules(data.rules);
+        }
+      })
+      .catch(() => {
+        // Fallback blijft DEFAULT_PRODUCT_RULES_V1.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Lees producten uit JSON/tekst bij openen
   function openPanel() {
-    setRows(parseToEditRows(localLineItemsJson, localValue));
+    setRows(normalizeRowsForEdit(parseToEditRows(localLineItemsJson, localValue)));
     setEditing(false);
     setPanelOpen(true);
   }
 
   function startEditing() {
-    setRows(parseToEditRows(localLineItemsJson, localValue));
+    setRows(normalizeRowsForEdit(parseToEditRows(localLineItemsJson, localValue)));
     setNewName("");
     setNewPrice("0");
     setEditing(true);
@@ -139,7 +311,7 @@ export default function ProductenCell({
 
   function cancelEditing() {
     setEditing(false);
-    setRows(parseToEditRows(localLineItemsJson, localValue));
+    setRows(normalizeRowsForEdit(parseToEditRows(localLineItemsJson, localValue)));
   }
 
   function updateRow(id: string, patch: Partial<EditRow>) {
@@ -159,6 +331,53 @@ export default function ProductenCell({
     ]);
     setNewName("");
     setNewPrice("0");
+  }
+
+  function updateLevering(id: string, levering: LeveringOption) {
+    setRows((prev) => {
+      const next = prev.map((r) => ({ ...r }));
+      const idx = next.findIndex((r) => r._id === id);
+      if (idx < 0) return prev;
+      const target = next[idx];
+      if (!target.isFiets) return prev;
+
+      let properties = withLeveringProperty(target.properties ?? [], levering);
+      let name = target.name;
+      const mountedInTitle = parseMountedExtrasFromText(name);
+      const mountedInProps = parseMountedExtrasFromProperties(properties);
+      const mounted = mergeMountedSets(mountedInTitle, mountedInProps);
+
+      if (levering === "In doos" && mounted.size > 0) {
+        name = appendMountedToTitle(name, new Set());
+        const removed = removeMountedFromMontageProperties(properties);
+        properties = removed.cleaned;
+
+        const existingExtras = new Set(
+          next
+            .filter((r) => !r.isFiets)
+            .map((r) => String(r.name ?? "").trim().toLowerCase())
+        );
+        mounted.forEach((extra) => {
+          if (!existingExtras.has(extra)) {
+            next.push({
+              _id: genId(),
+              name: extra,
+              price: "0",
+              isFiets: false,
+              properties: [],
+              defaultItems: [],
+            });
+            existingExtras.add(extra);
+          }
+        });
+      } else if (levering === "Volledig rijklaar" && mounted.size > 0) {
+        name = appendMountedToTitle(name, mounted);
+      }
+
+      const defaultItems = applyProductDefaultItemsRules(name ?? "", properties, productRules);
+      next[idx] = { ...target, name, properties, defaultItems };
+      return next;
+    });
   }
 
   const rowSum = sumRowPrices(rows);
@@ -299,6 +518,22 @@ export default function ProductenCell({
                         min="0"
                       />
                     </div>
+                    {row.isFiets && (
+                      <select
+                        value={getLeveringValue(row.properties ?? []) ?? ""}
+                        onChange={(e) => {
+                          const v = normalizeLeveringValue(e.target.value);
+                          if (!v) return;
+                          updateLevering(row._id, v);
+                        }}
+                        className="shrink-0 rounded border border-stone-300 bg-white px-1.5 py-0.5 text-[11px] text-stone-700 focus:border-koopje-orange focus:outline-none"
+                        title="Levering"
+                      >
+                        <option value="">Levering…</option>
+                        <option value="Volledig rijklaar">Volledig rijklaar</option>
+                        <option value="In doos">In doos</option>
+                      </select>
+                    )}
                     <button
                       type="button"
                       onClick={() => removeRow(row._id)}

@@ -4,6 +4,7 @@ import { useEffect, useCallback, useState, useMemo } from "react";
 import Link from "next/link";
 import Header from "@/components/Header";
 import EditableSheetTable from "@/components/EditableSheetTable";
+import AankoopbewijsCell from "@/components/AankoopbewijsCell";
 
 const HEADERS = [
   "Order Nummer",
@@ -100,22 +101,26 @@ export default function MPOrdersPage() {
 
   const cellRenderers = useMemo(
     () => ({
-      "Link Aankoopbewijs": (_rowIndex: number, value: string) => {
-        const href = String(value ?? "").trim();
-        if (!href) return <span className="block px-2 py-1.5 text-sm text-stone-300">—</span>;
+      "Link Aankoopbewijs": (rowIndex: number) => {
+        const order = orders[rowIndex];
+        if (!order?.id) return <span className="block px-2 py-1.5 text-sm text-stone-300">—</span>;
         return (
-          <a
-            href={href}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="block truncate px-2 py-1.5 text-sm text-koopje-orange underline underline-offset-2 hover:text-koopje-orange/80"
-          >
-            Bekijk PDF
-          </a>
+          <AankoopbewijsCell
+            orderId={order.id}
+            link={order.link_aankoopbewijs}
+            email={order.email}
+            onUpdated={({ link, email }) => {
+              setOrders((prev) =>
+                prev.map((o, i) =>
+                  i === rowIndex ? { ...o, link_aankoopbewijs: link, email } : o
+                )
+              );
+            }}
+          />
         );
       },
     }),
-    []
+    [orders]
   );
 
   return (

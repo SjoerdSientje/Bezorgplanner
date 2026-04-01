@@ -29,6 +29,15 @@ interface ProductRegel {
   voorrekjeGemonteerd?: "ja" | "nee" | null;
 }
 
+function buildMpFietsNaamMetMontage(p: ProductRegel): string {
+  const suffix: string[] = [];
+  if (p.achterzitje === "ja" && p.achterzitjeGemonteerd === "ja") suffix.push("achterzitje gemonteerd");
+  if (p.voorrekje === "ja" && p.voorrekjeGemonteerd === "ja") suffix.push("voorrekje gemonteerd");
+  const base = String(p.naam ?? "").trim();
+  if (!base) return base;
+  return suffix.length > 0 ? `${base} + ${suffix.join(" + ")}` : base;
+}
+
 /**
  * Bouw line_items_json vanuit de MP producten-lijst.
  * Fietsen: prijs 0 + property Levering — fietsdetectie gaat via Levering (zie shopify-order).
@@ -75,7 +84,7 @@ function buildMpLineItemsJson(
           ? [{ name: "Montage opmerking", value: p.montageOpmerking.trim() }]
           : []),
       ];
-      lineItems.push({ name: p.naam, price: 0, properties: props });
+      lineItems.push({ name: buildMpFietsNaamMetMontage(p), price: 0, properties: props });
 
       // Losse extra's als aparte line items na de fiets
       for (const extra of losseExtras) {
@@ -173,7 +182,16 @@ export async function POST(request: NextRequest) {
 
     // Producten-tekst: namen van alle producten, newline-separated
     const productenTekst = productenLijst.length
-      ? productenLijst.map((p) => p.naam).filter(Boolean).join("\n")
+      ? productenLijst
+          .flatMap((p) => {
+            if (p.type !== "fiets") return [String(p.naam ?? "").trim()];
+            const lines = [buildMpFietsNaamMetMontage(p)];
+            if (p.achterzitje === "ja" && p.achterzitjeGemonteerd === "nee") lines.push("achterzitje");
+            if (p.voorrekje === "ja" && p.voorrekjeGemonteerd === "nee") lines.push("voorrekje");
+            return lines;
+          })
+          .filter(Boolean)
+          .join("\n")
       : ((body.producten ?? "").trim() || null);
 
     // Fallback voor oud formaat (zonder producten_lijst)
