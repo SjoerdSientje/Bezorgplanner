@@ -207,14 +207,10 @@ function stripManagedTitleSuffix(name: string): string {
   return String(name ?? "")
     .replace(/\s*-\s*volledig rijklaar\s*(?:-\s*.*)?$/i, "")
     .replace(/\s*-\s*in doos\s*(?:-\s*.*)?$/i, "")
-    .replace(/\bvolledig\s+rijklaar\b/gi, "")
-    .replace(/\bin\s+doos\b/gi, "")
     .replace(/\s*\+\s*achterzitje\s+gemonteerd/gi, "")
     .replace(/\s*\+\s*voorrekje\s+gemonteerd/gi, "")
     .replace(/\s*\+\s*achterzitje\s+apart/gi, "")
     .replace(/\s*\+\s*voorrekje\s+apart/gi, "")
-    .replace(/\s*-\s*$/g, "")
-    .replace(/\+\s*\+/g, "+")
     .trim();
 }
 
@@ -345,9 +341,7 @@ function normalizeRowMountedTitle(row: EditRow): EditRow {
 }
 
 function normalizeRowsForEdit(rows: EditRow[]): EditRow[] {
-  const next = rows
-    .map((r) => normalizeRowMountedTitle({ ...r }))
-    .filter((r) => !(r.isFiets === false && String(r.name ?? "").trim().toLowerCase() === "volledig rijklaar"));
+  const next = rows.map((r) => normalizeRowMountedTitle({ ...r }));
   const existingExtras = new Set(
     next
       .filter((r) => !r.isFiets)
@@ -368,7 +362,7 @@ function normalizeRowsForEdit(rows: EditRow[]): EditRow[] {
 
     const apart = mergeMountedSets(apartInTitle, mounted);
     row.name = buildBikeTitle(row.name, "In doos", new Set<MountedExtra>(), apart);
-    row.properties = updateAccessoryProperties(removed.cleaned, "In doos", new Set<MountedExtra>(), apart);
+    row.properties = removed.cleaned;
 
     mounted.forEach((extra) => {
       if (!existingExtras.has(extra)) {
@@ -536,14 +530,6 @@ export default function ProductenCell({
 
       const name = buildBikeTitle(target.name, levering, mounted, apart);
       properties = updateAccessoryProperties(properties, levering, mounted, apart);
-
-      // "Volledig rijklaar" mag nooit als los extra product bestaan.
-      for (let i = next.length - 1; i >= 0; i -= 1) {
-        if (i === idx || next[i].isFiets) continue;
-        if (String(next[i].name ?? "").trim().toLowerCase() === "volledig rijklaar") {
-          next.splice(i, 1);
-        }
-      }
 
       // Accessoire-extra regels exact syncen met 'apart' status.
       for (let i = next.length - 1; i >= 0; i -= 1) {
