@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { sendWhatsAppByEvent } from "@/lib/whatsapp";
 import { requireAccountEmail } from "@/lib/account";
+import { verwerkGarantiebewijs } from "@/lib/garantiebewijs";
 
 export const dynamic = "force-dynamic";
 
@@ -63,7 +64,7 @@ export async function POST(request: NextRequest) {
     // Haal order op om MP-tag te bepalen
     const { data: order, error: orderErr } = await supabase
       .from("orders")
-      .select("id, source, mp_tags, order_nummer, naam, aankomsttijd_slot, bestelling_totaal_prijs, telefoon_e164, telefoon_nummer, type, betaald, datum, opmerkingen_klant, bezorgtijd_voorkeur")
+      .select("id, source, mp_tags, order_nummer, naam, aankomsttijd_slot, bestelling_totaal_prijs, telefoon_e164, telefoon_nummer, type, betaald, datum, opmerkingen_klant, bezorgtijd_voorkeur, email, producten, serienummer, aantal_fietsen, link_aankoopbewijs")
       .eq("owner_email", ownerEmail)
       .eq("id", orderId)
       .maybeSingle();
@@ -77,6 +78,34 @@ export async function POST(request: NextRequest) {
 
     const toMpOrders = isMpTagged(order.mp_tags);
     const nextStatus = toMpOrders ? "mp_orders" : "bezorgd";
+
+    // Safety net: MP-orders altijd met aankoopbewijs-link afsluiten.
+    if (toMpOrders && String((order as any).link_aankoopbewijs ?? "").trim() === "") {
+      try {
+        const link = await verwerkGarantiebewijs(
+          {
+            order_id: String((order as any).id),
+            order_nummer: (order as any).order_nummer ?? null,
+            naam: (order as any).naam ?? null,
+            email: (order as any).email ?? null,
+            producten: (order as any).producten ?? null,
+            serienummer: (order as any).serienummer ?? null,
+            totaal_prijs:
+              (order as any).bestelling_totaal_prijs != null
+                ? Number((order as any).bestelling_totaal_prijs)
+                : null,
+            aantal_fietsen:
+              (order as any).aantal_fietsen != null ? Number((order as any).aantal_fietsen) : null,
+            datum: new Date().toLocaleDateString("nl-NL"),
+          },
+          supabase as any,
+          { skipEmail: true }
+        );
+        (order as any).link_aankoopbewijs = link;
+      } catch (e) {
+        console.error("[api/afronden] aankoopbewijs fallback mislukt", e);
+      }
+    }
 
     // Update order afrond-info + status
     const updatePayload: Record<string, unknown> = {

@@ -89,20 +89,23 @@ export default function MPOrdersPage() {
 
   useEffect(() => { fetchOrders(); }, [fetchOrders]);
 
-  const tableRows = useMemo(() => {
-    const sortedOrders = [...orders].sort((a, b) => {
+  const sortedOrders = useMemo(() => {
+    return [...orders].sort((a, b) => {
       const aTime = a.datum ? new Date(`${a.datum}T00:00:00`).getTime() : 0;
       const bTime = b.datum ? new Date(`${b.datum}T00:00:00`).getTime() : 0;
       return bTime - aTime;
     });
-
-    return sortedOrders.map((o) => HEADERS.map((h) => cel(o, h)));
   }, [orders]);
+
+  const tableRows = useMemo(
+    () => sortedOrders.map((o) => HEADERS.map((h) => cel(o, h))),
+    [sortedOrders]
+  );
 
   const cellRenderers = useMemo(
     () => ({
       "Link Aankoopbewijs": (rowIndex: number) => {
-        const order = orders[rowIndex];
+        const order = sortedOrders[rowIndex];
         if (!order?.id) return <span className="block px-2 py-1.5 text-sm text-stone-300">—</span>;
         return (
           <AankoopbewijsCell
@@ -111,8 +114,8 @@ export default function MPOrdersPage() {
             email={order.email}
             onUpdated={({ link, email }) => {
               setOrders((prev) =>
-                prev.map((o, i) =>
-                  i === rowIndex ? { ...o, link_aankoopbewijs: link, email } : o
+                prev.map((o) =>
+                  o.id === order.id ? { ...o, link_aankoopbewijs: link, email } : o
                 )
               );
             }}
@@ -120,7 +123,7 @@ export default function MPOrdersPage() {
         );
       },
     }),
-    [orders]
+    [sortedOrders]
   );
 
   return (
