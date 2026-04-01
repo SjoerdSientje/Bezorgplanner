@@ -132,6 +132,14 @@ function parseMountedExtrasFromText(text: string): Set<MountedExtra> {
   return out;
 }
 
+function parseApartExtrasFromText(text: string): Set<MountedExtra> {
+  const out = new Set<MountedExtra>();
+  const t = String(text ?? "").toLowerCase();
+  if (t.includes("achterzitje apart")) out.add("achterzitje");
+  if (t.includes("voorrekje apart")) out.add("voorrekje");
+  return out;
+}
+
 function parseMountedExtrasFromProperties(
   properties: { name: string; value: string }[]
 ): Set<MountedExtra> {
@@ -144,16 +152,33 @@ function parseMountedExtrasFromProperties(
   return out;
 }
 
-function appendMountedToTitle(baseName: string, mounted: Set<MountedExtra>): string {
-  const cleanBase = String(baseName ?? "")
+function stripManagedTitleSuffix(name: string): string {
+  return String(name ?? "")
+    .replace(/\s*-\s*volledig rijklaar\s*(?:-\s*.*)?$/i, "")
+    .replace(/\s*-\s*in doos\s*(?:-\s*.*)?$/i, "")
     .replace(/\s*\+\s*achterzitje\s+gemonteerd/gi, "")
     .replace(/\s*\+\s*voorrekje\s+gemonteerd/gi, "")
+    .replace(/\s*\+\s*achterzitje\s+apart/gi, "")
+    .replace(/\s*\+\s*voorrekje\s+apart/gi, "")
     .trim();
-  const suffix: string[] = [];
-  if (mounted.has("achterzitje")) suffix.push("achterzitje gemonteerd");
-  if (mounted.has("voorrekje")) suffix.push("voorrekje gemonteerd");
-  if (suffix.length === 0) return cleanBase;
-  return `${cleanBase} + ${suffix.join(" + ")}`;
+}
+
+function buildBikeTitle(
+  rawName: string,
+  levering: LeveringOption,
+  mounted: Set<MountedExtra>,
+  apart: Set<MountedExtra>
+): string {
+  const base = stripManagedTitleSuffix(rawName);
+  const bits: string[] = [];
+  if (levering === "Volledig rijklaar") {
+    if (mounted.has("achterzitje")) bits.push("achterzitje gemonteerd");
+    if (mounted.has("voorrekje")) bits.push("voorrekje gemonteerd");
+    return bits.length ? `${base} - volledig rijklaar - ${bits.join(" + ")}` : `${base} - volledig rijklaar`;
+  }
+  if (apart.has("achterzitje")) bits.push("achterzitje apart");
+  if (apart.has("voorrekje")) bits.push("voorrekje apart");
+  return bits.length ? `${base} - in doos - ${bits.join(" + ")}` : `${base} - in doos`;
 }
 
 function removeMountedFromMontageProperties(
@@ -191,14 +216,16 @@ function mergeMountedSets(...sets: Set<MountedExtra>[]): Set<MountedExtra> {
 function normalizeRowMountedTitle(row: EditRow): EditRow {
   if (!row.isFiets) return row;
   const levering = getLeveringValue(row.properties ?? []);
+  if (!levering) return row;
   const fromTitle = parseMountedExtrasFromText(row.name);
+  const apartFromTitle = parseApartExtrasFromText(row.name);
   const fromProps = parseMountedExtrasFromProperties(row.properties ?? []);
   const mounted = mergeMountedSets(fromTitle, fromProps);
-  if (mounted.size === 0) return row;
   if (levering === "In doos") {
-    return { ...row, name: appendMountedToTitle(row.name, new Set()) };
+    const apart = mergeMountedSets(apartFromTitle, mounted);
+    return { ...row, name: buildBikeTitle(row.name, levering, new Set<MountedExtra>(), apart) };
   }
-  return { ...row, name: appendMountedToTitle(row.name, mounted) };
+  return { ...row, name: buildBikeTitle(row.name, levering, mounted, new Set<MountedExtra>()) };
 }
 
 function normalizeRowsForEdit(rows: EditRow[]): EditRow[] {
@@ -215,11 +242,13 @@ function normalizeRowsForEdit(rows: EditRow[]): EditRow[] {
     if (levering !== "In doos") continue;
 
     const mountedInTitle = parseMountedExtrasFromText(row.name);
+    const apartInTitle = parseApartExtrasFromText(row.name);
     const removed = removeMountedFromMontageProperties(row.properties ?? []);
     const mounted = mergeMountedSets(mountedInTitle, removed.mounted);
     if (mounted.size === 0) continue;
 
-    row.name = appendMountedToTitle(row.name, new Set());
+    const apart = mergeMountedSets(apartInTitle, mounted);
+    row.name = buildBikeTitle(row.name, "In doos", new Set<MountedExtra>(), apart);
     row.properties = removed.cleaned;
 
     mounted.forEach((extra) => {
@@ -342,22 +371,27 @@ export default function ProductenCell({
       if (!target.isFiets) return prev;
 
       let properties = withLeveringProperty(target.properties ?? [], levering);
-      let name = target.name;
-      const mountedInTitle = parseMountedExtrasFromText(name);
+      const mountedInTitle = parseMountedExtrasFromText(target.name);
+      const apartInTitle = parseApartExtrasFromText(target.name);
       const mountedInProps = parseMountedExtrasFromProperties(properties);
-      const mounted = mergeMountedSets(mountedInTitle, mountedInProps);
+      const allDetected = mergeMountedSets(mountedInTitle, apartInTitle, mountedInProps);
 
-      if (levering === "In doos" && mounted.size > 0) {
-        name = appendMountedToTitle(name, new Set());
-        const removed = removeMountedFromMontageProperties(properties);
-        properties = removed.cleaned;
+      const existingExtras = new Set(
+        next
+          .filter((r) => !r.isFiets)
+          .map((r) => String(r.name ?? "").trim().toLowerCase())
+      );
+      if (existingExtras.has("achterzitje")) allDetected.add("achterzitje");
+      if (existingExtras.has("voorrekje")) allDetected.add("voorrekje");
 
-        const existingExtras = new Set(
-          next
-            .filter((r) => !r.isFiets)
-            .map((r) => String(r.name ?? "").trim().toLowerCase())
-        );
-        mounted.forEach((extra) => {
+      const removed = removeMountedFromMontageProperties(properties);
+      properties = removed.cleaned;
+      let mounted = new Set<MountedExtra>();
+      let apart = new Set<MountedExtra>();
+
+      if (levering === "In doos") {
+        apart = allDetected;
+        apart.forEach((extra) => {
           if (!existingExtras.has(extra)) {
             next.push({
               _id: genId(),
@@ -370,10 +404,17 @@ export default function ProductenCell({
             existingExtras.add(extra);
           }
         });
-      } else if (levering === "Volledig rijklaar" && mounted.size > 0) {
-        name = appendMountedToTitle(name, mounted);
+      } else {
+        mounted = allDetected;
+        mounted.forEach((extra) => {
+          const removeIdx = next.findIndex(
+            (r, i) => i !== idx && !r.isFiets && String(r.name ?? "").trim().toLowerCase() === extra
+          );
+          if (removeIdx >= 0) next.splice(removeIdx, 1);
+        });
       }
 
+      const name = buildBikeTitle(target.name, levering, mounted, apart);
       const defaultItems = applyProductDefaultItemsRules(name ?? "", properties, productRules);
       next[idx] = { ...target, name, properties, defaultItems };
       return next;
