@@ -154,47 +154,6 @@ function parseMountedExtrasFromProperties(
   return out;
 }
 
-function parseApartExtrasFromProperties(
-  properties: { name: string; value: string }[]
-): Set<MountedExtra> {
-  const out = new Set<MountedExtra>();
-  for (const p of properties ?? []) {
-    const name = String(p.name ?? "").toLowerCase();
-    const value = String(p.value ?? "").toLowerCase();
-    const text = `${name} ${value}`;
-    const hasApart = text.includes("apart") || text.includes("los");
-    if (!hasApart) continue;
-    if (text.includes("achterzitje")) out.add("achterzitje");
-    if (text.includes("voorrekje")) out.add("voorrekje");
-  }
-  return out;
-}
-
-function parseAccessoryStatesFromProperties(
-  properties: { name: string; value: string }[]
-): { mounted: Set<MountedExtra>; apart: Set<MountedExtra> } {
-  const mounted = new Set<MountedExtra>();
-  const apart = new Set<MountedExtra>();
-  for (const p of properties ?? []) {
-    const name = String(p.name ?? "").toLowerCase();
-    const value = String(p.value ?? "").toLowerCase();
-    const text = `${name} ${value}`;
-    const isAccessory = text.includes("achterzitje") || text.includes("voorrekje");
-    if (!isAccessory) continue;
-    const isMounted = text.includes("gemonteerd");
-    const isApart = text.includes("apart") || text.includes("los");
-    if (text.includes("achterzitje")) {
-      if (isMounted) mounted.add("achterzitje");
-      if (isApart) apart.add("achterzitje");
-    }
-    if (text.includes("voorrekje")) {
-      if (isMounted) mounted.add("voorrekje");
-      if (isApart) apart.add("voorrekje");
-    }
-  }
-  return { mounted, apart };
-}
-
 function stripManagedTitleSuffix(name: string): string {
   return String(name ?? "")
     .replace(/\s*-\s*volledig rijklaar\s*(?:-\s*.*)?$/i, "")
@@ -248,20 +207,6 @@ function removeMountedFromMontageProperties(
   return { cleaned, mounted };
 }
 
-function stripAccessoryProperties(
-  properties: { name: string; value: string }[]
-): { name: string; value: string }[] {
-  return (properties ?? []).filter((p) => {
-    const name = String(p.name ?? "").toLowerCase();
-    const value = String(p.value ?? "").toLowerCase();
-    const text = `${name} ${value}`;
-    if (name === "montage") return true;
-    if (text.includes("achterzitje")) return false;
-    if (text.includes("voorrekje")) return false;
-    return true;
-  });
-}
-
 function mergeMountedSets(...sets: Set<MountedExtra>[]): Set<MountedExtra> {
   const out = new Set<MountedExtra>();
   for (const s of sets) {
@@ -283,23 +228,12 @@ function normalizeRowMountedTitle(row: EditRow): EditRow {
   const fromTitle = parseMountedExtrasFromText(row.name);
   const apartFromTitle = parseApartExtrasFromText(row.name);
   const fromProps = parseMountedExtrasFromProperties(row.properties ?? []);
-  const apartFromProps = parseApartExtrasFromProperties(row.properties ?? []);
   const mounted = mergeMountedSets(fromTitle, fromProps);
-  const apart = mergeMountedSets(apartFromTitle, apartFromProps);
-  const cleanedProps = stripAccessoryProperties(row.properties ?? []);
   if (levering === "In doos") {
-    const mergedApart = mergeMountedSets(apart, mounted);
-    return {
-      ...row,
-      name: buildBikeTitle(row.name, levering, new Set<MountedExtra>(), mergedApart),
-      properties: cleanedProps,
-    };
+    const apart = mergeMountedSets(apartFromTitle, mounted);
+    return { ...row, name: buildBikeTitle(row.name, levering, new Set<MountedExtra>(), apart) };
   }
-  return {
-    ...row,
-    name: buildBikeTitle(row.name, levering, mounted, new Set<MountedExtra>()),
-    properties: cleanedProps,
-  };
+  return { ...row, name: buildBikeTitle(row.name, levering, mounted, new Set<MountedExtra>()) };
 }
 
 function normalizeRowsForEdit(rows: EditRow[]): EditRow[] {
@@ -448,16 +382,7 @@ export default function ProductenCell({
       const mountedInTitle = parseMountedExtrasFromText(target.name);
       const apartInTitle = parseApartExtrasFromText(target.name);
       const mountedInProps = parseMountedExtrasFromProperties(properties);
-      const apartInProps = parseApartExtrasFromProperties(properties);
-      const genericAccessoryProps = parseAccessoryStatesFromProperties(properties);
-      const allDetected = mergeMountedSets(
-        mountedInTitle,
-        apartInTitle,
-        mountedInProps,
-        apartInProps,
-        genericAccessoryProps.mounted,
-        genericAccessoryProps.apart
-      );
+      const allDetected = mergeMountedSets(mountedInTitle, apartInTitle, mountedInProps);
 
       const existingExtras = new Set(
         next
@@ -468,7 +393,7 @@ export default function ProductenCell({
       if (existingExtras.has("voorrekje")) allDetected.add("voorrekje");
 
       const removed = removeMountedFromMontageProperties(properties);
-      properties = stripAccessoryProperties(removed.cleaned);
+      properties = removed.cleaned;
       let mounted = new Set<MountedExtra>();
       let apart = new Set<MountedExtra>();
 
