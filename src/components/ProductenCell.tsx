@@ -45,8 +45,6 @@ interface Props {
 
 type LeveringOption = "Volledig rijklaar" | "In doos";
 type MountedExtra = "achterzitje" | "voorrekje";
-const VOLLEDIG_RIJKLAAR_TOESLAG_NAAM = "Volledig rijklaar";
-const VOLLEDIG_RIJKLAAR_TOESLAG_PRIJS = "50";
 
 let idCounter = 0;
 function genId() { return String(++idCounter); }
@@ -213,12 +211,6 @@ function mergeMountedSets(...sets: Set<MountedExtra>[]): Set<MountedExtra> {
     s.forEach((v) => out.add(v));
   }
   return out;
-}
-
-function isVolledigRijklaarToeslagRow(row: EditRow): boolean {
-  if (row.isFiets) return false;
-  const n = String(row.name ?? "").trim().toLowerCase();
-  return n === "volledig rijklaar" || n === "rijklaar";
 }
 
 function normalizeRowMountedTitle(row: EditRow): EditRow {
@@ -412,11 +404,6 @@ export default function ProductenCell({
             existingExtras.add(extra);
           }
         });
-        // In doos: geen "Volledig rijklaar" toeslagregel.
-        for (let i = next.length - 1; i >= 0; i -= 1) {
-          if (i === idx) continue;
-          if (isVolledigRijklaarToeslagRow(next[i])) next.splice(i, 1);
-        }
       } else {
         mounted = allDetected;
         mounted.forEach((extra) => {
@@ -425,25 +412,6 @@ export default function ProductenCell({
           );
           if (removeIdx >= 0) next.splice(removeIdx, 1);
         });
-        // Volledig rijklaar: zorg dat toeslagregel aanwezig is op €50.
-        const vrIdx = next.findIndex((r, i) => i !== idx && isVolledigRijklaarToeslagRow(r));
-        if (vrIdx >= 0) {
-          next[vrIdx] = {
-            ...next[vrIdx],
-            name: VOLLEDIG_RIJKLAAR_TOESLAG_NAAM,
-            price: VOLLEDIG_RIJKLAAR_TOESLAG_PRIJS,
-            isFiets: false,
-          };
-        } else {
-          next.push({
-            _id: genId(),
-            name: VOLLEDIG_RIJKLAAR_TOESLAG_NAAM,
-            price: VOLLEDIG_RIJKLAAR_TOESLAG_PRIJS,
-            isFiets: false,
-            properties: [],
-            defaultItems: [],
-          });
-        }
       }
 
       const name = buildBikeTitle(target.name, levering, mounted, apart);
