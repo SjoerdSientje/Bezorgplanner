@@ -13,11 +13,73 @@ type OrderForAankoopbewijs = {
   serienummer: string | null;
   bestelling_totaal_prijs: number | null;
   aantal_fietsen: number | null;
+  link_aankoopbewijs: string | null;
 };
 
 function isLikelyEmail(v: string): boolean {
   const s = String(v ?? "").trim();
   return s.includes("@") && s.includes(".");
+}
+
+function extractModelnaam(producten: string | null): string {
+  if (!producten) return "";
+  const match = producten.match(/^(.+?)\s+fatbike/i);
+  return match ? match[1].trim() : String(producten).trim();
+}
+
+function toPdfDraft(order: OrderForAankoopbewijs) {
+  const d = new Date();
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  return {
+    naam: String(order.naam ?? ""),
+    datum: `${dd}-${mm}-${yyyy}`,
+    fiets: extractModelnaam(order.producten),
+    prijs:
+      order.bestelling_totaal_prijs != null
+        ? `€ ${Number(order.bestelling_totaal_prijs).toFixed(2)}`
+        : "",
+    serienummer: String(order.serienummer ?? ""),
+  };
+}
+
+export async function GET(
+  request: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const ownerEmail = requireAccountEmail(request);
+    const orderId = String(params.id ?? "").trim();
+    if (!orderId) {
+      return NextResponse.json({ error: "Order ID ontbreekt." }, { status: 400 });
+    }
+
+    const supabase = createServerSupabaseClient();
+    const { data: order, error: readErr } = await supabase
+      .from("orders")
+      .select(
+        "id, owner_email, order_nummer, naam, email, producten, serienummer, bestelling_totaal_prijs, aantal_fietsen, link_aankoopbewijs"
+      )
+      .eq("id", orderId)
+      .eq("owner_email", ownerEmail)
+      .maybeSingle<OrderForAankoopbewijs>();
+
+    if (readErr) return NextResponse.json({ error: readErr.message }, { status: 500 });
+    if (!order) return NextResponse.json({ error: "Order niet gevonden." }, { status: 404 });
+
+    return NextResponse.json({
+      ok: true,
+      email: String(order.email ?? ""),
+      link_aankoopbewijs: String(order.link_aankoopbewijs ?? ""),
+      pdf: toPdfDraft(order),
+    });
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "Unknown error" },
+      { status: 500 }
+    );
+  }
 }
 
 export async function POST(
@@ -41,7 +103,7 @@ export async function POST(
     const { data: order, error: readErr } = await supabase
       .from("orders")
       .select(
-        "id, owner_email, order_nummer, naam, email, producten, serienummer, bestelling_totaal_prijs, aantal_fietsen"
+        "id, owner_email, order_nummer, naam, email, producten, serienummer, bestelling_totaal_prijs, aantal_fietsen, link_aankoopbewijs"
       )
       .eq("id", orderId)
       .eq("owner_email", ownerEmail)
@@ -66,7 +128,16 @@ export async function POST(
         aantal_fietsen: order.aantal_fietsen,
         datum: new Date().toLocaleDateString("nl-NL"),
       },
-      supabase
+      supabase,
+      {
+        pdfOverrides: {
+          naam: body?.pdf?.naam ?? null,
+          datum: body?.pdf?.datum ?? null,
+          fiets: body?.pdf?.fiets ?? null,
+          prijs: body?.pdf?.prijs ?? null,
+          serienummer: body?.pdf?.serienummer ?? null,
+        },
+      }
     );
 
     const { error: updateErr } = await supabase

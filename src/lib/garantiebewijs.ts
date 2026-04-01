@@ -19,6 +19,14 @@ export interface GarantieData {
   datum: string;
 }
 
+export interface GarantiePdfOverrides {
+  naam?: string | null;
+  datum?: string | null;
+  fiets?: string | null;
+  prijs?: string | null;
+  serienummer?: string | null;
+}
+
 function extractModelnaam(producten: string | null): string {
   if (!producten) return "";
   const match = producten.match(/^(.+?)\s+fatbike/i);
@@ -50,15 +58,16 @@ const BUCKET = "garantiebewijzen";
 export async function verwerkGarantiebewijs(
   data: GarantieData,
   supabase: SupabaseClient,
-  options?: { skipEmail?: boolean }
+  options?: { skipEmail?: boolean; pdfOverrides?: GarantiePdfOverrides }
 ): Promise<string> {
   const datumStr = formatDatum(new Date());
+  const o = options?.pdfOverrides;
   const pdfData = {
-    naam: data.naam ?? "",
-    datum: datumStr,
-    fiets: extractModelnaam(data.producten),
-    prijs: data.totaal_prijs != null ? `€ ${data.totaal_prijs.toFixed(2)}` : "",
-    serienummer: data.serienummer ?? "",
+    naam: String(o?.naam ?? data.naam ?? ""),
+    datum: String(o?.datum ?? datumStr),
+    fiets: String(o?.fiets ?? extractModelnaam(data.producten)),
+    prijs: String(o?.prijs ?? (data.totaal_prijs != null ? `€ ${data.totaal_prijs.toFixed(2)}` : "")),
+    serienummer: String(o?.serienummer ?? data.serienummer ?? ""),
   };
 
   const pdfBuffer = await genereerGarantiePdf(pdfData);
