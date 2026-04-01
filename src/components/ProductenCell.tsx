@@ -54,7 +54,7 @@ function parseToEditRows(lineItemsJson: string | null | undefined, fallbackText:
     try {
       const raw = effectiveLineItemsJson(lineItemsJson) ?? lineItemsJson;
       const items = JSON.parse(raw) as LineItem[];
-      return normalizeRowsForEdit(items
+      return items
         .map((item) => ({
           _id: genId(),
           name: item.name ?? "",
@@ -63,7 +63,7 @@ function parseToEditRows(lineItemsJson: string | null | undefined, fallbackText:
           properties: item.properties ?? [],
           defaultItems: item.defaultItems ?? [],
         }))
-        .map(normalizeRowMountedTitle));
+        .map(normalizeRowMountedTitle);
     } catch { /* fall through */ }
   }
   if (fallbackText) {
@@ -180,64 +180,13 @@ function removeMountedFromMontageProperties(
   return { cleaned, mounted };
 }
 
-function mergeMountedSets(...sets: Set<MountedExtra>[]): Set<MountedExtra> {
-  const out = new Set<MountedExtra>();
-  for (const s of sets) {
-    s.forEach((v) => out.add(v));
-  }
-  return out;
-}
-
 function normalizeRowMountedTitle(row: EditRow): EditRow {
   if (!row.isFiets) return row;
-  const levering = getLeveringValue(row.properties ?? []);
   const fromTitle = parseMountedExtrasFromText(row.name);
   const fromProps = parseMountedExtrasFromProperties(row.properties ?? []);
-  const mounted = mergeMountedSets(fromTitle, fromProps);
+  const mounted = new Set<MountedExtra>([...fromTitle, ...fromProps]);
   if (mounted.size === 0) return row;
-  if (levering === "In doos") {
-    return { ...row, name: appendMountedToTitle(row.name, new Set()) };
-  }
   return { ...row, name: appendMountedToTitle(row.name, mounted) };
-}
-
-function normalizeRowsForEdit(rows: EditRow[]): EditRow[] {
-  const next = rows.map((r) => normalizeRowMountedTitle({ ...r }));
-  const existingExtras = new Set(
-    next
-      .filter((r) => !r.isFiets)
-      .map((r) => String(r.name ?? "").trim().toLowerCase())
-  );
-
-  for (const row of next) {
-    if (!row.isFiets) continue;
-    const levering = getLeveringValue(row.properties ?? []);
-    if (levering !== "In doos") continue;
-
-    const mountedInTitle = parseMountedExtrasFromText(row.name);
-    const removed = removeMountedFromMontageProperties(row.properties ?? []);
-    const mounted = mergeMountedSets(mountedInTitle, removed.mounted);
-    if (mounted.size === 0) continue;
-
-    row.name = appendMountedToTitle(row.name, new Set());
-    row.properties = removed.cleaned;
-
-    mounted.forEach((extra) => {
-      if (!existingExtras.has(extra)) {
-        next.push({
-          _id: genId(),
-          name: extra,
-          price: "0",
-          isFiets: false,
-          properties: [],
-          defaultItems: [],
-        });
-        existingExtras.add(extra);
-      }
-    });
-  }
-
-  return next;
 }
 
 export default function ProductenCell({
@@ -297,13 +246,13 @@ export default function ProductenCell({
 
   // Lees producten uit JSON/tekst bij openen
   function openPanel() {
-    setRows(normalizeRowsForEdit(parseToEditRows(localLineItemsJson, localValue)));
+    setRows(parseToEditRows(localLineItemsJson, localValue));
     setEditing(false);
     setPanelOpen(true);
   }
 
   function startEditing() {
-    setRows(normalizeRowsForEdit(parseToEditRows(localLineItemsJson, localValue)));
+    setRows(parseToEditRows(localLineItemsJson, localValue));
     setNewName("");
     setNewPrice("0");
     setEditing(true);
@@ -311,7 +260,7 @@ export default function ProductenCell({
 
   function cancelEditing() {
     setEditing(false);
-    setRows(normalizeRowsForEdit(parseToEditRows(localLineItemsJson, localValue)));
+    setRows(parseToEditRows(localLineItemsJson, localValue));
   }
 
   function updateRow(id: string, patch: Partial<EditRow>) {
@@ -345,7 +294,7 @@ export default function ProductenCell({
       let name = target.name;
       const mountedInTitle = parseMountedExtrasFromText(name);
       const mountedInProps = parseMountedExtrasFromProperties(properties);
-      const mounted = mergeMountedSets(mountedInTitle, mountedInProps);
+      const mounted = new Set<MountedExtra>([...mountedInTitle, ...mountedInProps]);
 
       if (levering === "In doos" && mounted.size > 0) {
         name = appendMountedToTitle(name, new Set());
@@ -357,19 +306,18 @@ export default function ProductenCell({
             .filter((r) => !r.isFiets)
             .map((r) => String(r.name ?? "").trim().toLowerCase())
         );
-        mounted.forEach((extra) => {
-          if (!existingExtras.has(extra)) {
-            next.push({
-              _id: genId(),
-              name: extra,
-              price: "0",
-              isFiets: false,
-              properties: [],
-              defaultItems: [],
-            });
-            existingExtras.add(extra);
-          }
-        });
+        for (const extra of mounted) {
+          if (existingExtras.has(extra)) continue;
+          next.push({
+            _id: genId(),
+            name: extra,
+            price: "0",
+            isFiets: false,
+            properties: [],
+            defaultItems: [],
+          });
+          existingExtras.add(extra);
+        }
       } else if (levering === "Volledig rijklaar" && mounted.size > 0) {
         name = appendMountedToTitle(name, mounted);
       }
