@@ -229,13 +229,26 @@ function buildBikeTitle(
   if (levering === "Volledig rijklaar") {
     if (mounted.has("achterzitje")) bits.push("achterzitje gemonteerd");
     if (mounted.has("voorrekje")) bits.push("voorrekje gemonteerd");
-    if (apart.has("achterzitje")) bits.push("achterzitje apart");
-    if (apart.has("voorrekje")) bits.push("voorrekje apart");
     return bits.length ? `${base} - volledig rijklaar - ${bits.join(" + ")}` : `${base} - volledig rijklaar`;
   }
-  if (apart.has("achterzitje")) bits.push("achterzitje apart");
-  if (apart.has("voorrekje")) bits.push("voorrekje apart");
-  return bits.length ? `${base} - in doos - ${bits.join(" + ")}` : `${base} - in doos`;
+  return `${base} - in doos`;
+}
+
+function splitLegacyBikeTitle(name: string): { base: string; extras: string[] } {
+  const parts = String(name ?? "")
+    .split("+")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length <= 1) return { base: String(name ?? "").trim(), extras: [] };
+  const base = parts[0];
+  const extras = parts.slice(1).filter((p) => {
+    const t = p.toLowerCase();
+    if (t.includes("gemonteerd")) return false;
+    if (t.includes("apart") || t.includes("los")) return false;
+    if (t === "volledig rijklaar" || t === "in doos" || t === "rijklaar") return false;
+    return true;
+  });
+  return { base, extras };
 }
 
 function removeMountedFromMontageProperties(
@@ -351,12 +364,29 @@ function normalizeRowsForEdit(rows: EditRow[]): EditRow[] {
   const existingExtras = new Set(
     next
       .filter((r) => !r.isFiets)
-      .map((r) => accessoryFromExtraName(r.name))
-      .filter(Boolean) as MountedExtra[]
+      .map((r) => String(r.name ?? "").trim().toLowerCase())
+      .filter(Boolean)
   );
 
   for (const row of next) {
     if (!row.isFiets) continue;
+    const legacy = splitLegacyBikeTitle(row.name);
+    row.name = legacy.base;
+    for (const ex of legacy.extras) {
+      const key = String(ex ?? "").trim().toLowerCase();
+      if (!key) continue;
+      if (!existingExtras.has(key)) {
+        next.push({
+          _id: genId(),
+          name: ex,
+          price: "0",
+          isFiets: false,
+          properties: [],
+          defaultItems: [],
+        });
+        existingExtras.add(key);
+      }
+    }
     const levering = getLeveringValue(row.properties ?? []);
     if (levering !== "In doos") continue;
 
@@ -371,16 +401,17 @@ function normalizeRowsForEdit(rows: EditRow[]): EditRow[] {
     row.properties = updateAccessoryProperties(removed.cleaned, "In doos", new Set<MountedExtra>(), apart);
 
     mounted.forEach((extra) => {
-      if (!existingExtras.has(extra)) {
+      const extraName = extra === "achterzitje" ? "los achterzitje" : "los voorrekje";
+      if (!existingExtras.has(extraName)) {
         next.push({
           _id: genId(),
-          name: extra === "achterzitje" ? "los achterzitje" : "los voorrekje",
+          name: extraName,
           price: "0",
           isFiets: false,
           properties: [],
           defaultItems: [],
         });
-        existingExtras.add(extra);
+        existingExtras.add(extraName);
       }
     });
   }
@@ -622,14 +653,15 @@ export default function ProductenCell({
 
   // Platte weergavetekst — gebruikt lokale state zodat wijzigingen direct zichtbaar zijn
   let displayItems: LineItem[] = [];
-  if (localLineItemsJson) {
-    try {
-      const raw = effectiveLineItemsJson(localLineItemsJson) ?? localLineItemsJson;
-      displayItems = JSON.parse(raw) as LineItem[];
-    } catch { /* ignore */ }
-  }
+  const displayRows = normalizeRowsForEdit(parseToEditRows(localLineItemsJson, localValue));
+  displayItems = displayRows.map(({ _id: _, ...r }) => ({
+    ...r,
+    price: parseFloat(r.price) || 0,
+  }));
   const hasStructured = displayItems.length > 0;
-  const displayText = localValue || "—";
+  const displayText = hasStructured
+    ? displayRows.map((r) => String(r.name ?? "").trim()).filter(Boolean).join(" | ")
+    : (localValue || "—");
   /** Onderaan de popup: altijd de som van de regelprijzen (zelfde als bij opslaan in bestelling_totaal_prijs). */
   const displaySum = sumLineItemPrices(displayItems);
 
