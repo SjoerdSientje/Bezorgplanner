@@ -5,8 +5,8 @@ const ORANJE = "#F7941D";
 
 const s = StyleSheet.create({
   page: { fontFamily: "Helvetica", fontSize: 10, padding: "2cm 2cm 2cm 2cm", color: "#222", textAlign: "center" },
-  bedrijf: { fontSize: 9, marginBottom: 16, lineHeight: 1.45, textAlign: "center" },
-  bedrijfNaam: { fontFamily: "Helvetica-Bold", fontSize: 10, textAlign: "center" },
+  bedrijf: { fontSize: 9, marginBottom: 16, lineHeight: 1.45, textAlign: "left" },
+  bedrijfNaam: { fontFamily: "Helvetica-Bold", fontSize: 10, textAlign: "left" },
   h1: { fontFamily: "Helvetica-Bold", fontSize: 15, textAlign: "center", marginBottom: 2 },
   h2: { fontFamily: "Helvetica-Bold", fontSize: 12, textAlign: "center", color: ORANJE, marginBottom: 14 },
   intro: { marginBottom: 10, lineHeight: 1.45, textAlign: "center" },
@@ -14,8 +14,8 @@ const s = StyleSheet.create({
   letOpTekst: { marginBottom: 14, lineHeight: 1.45, textAlign: "center" },
   sectLabel: { fontFamily: "Helvetica-Bold", marginBottom: 6, textAlign: "center" },
   bullet: { marginBottom: 5, textAlign: "center", lineHeight: 1.4 },
-  dataBlok: { marginTop: 20, lineHeight: 1.7, textAlign: "center" },
-  dataRij: { marginBottom: 2, textAlign: "center" },
+  dataBlok: { marginTop: 30, lineHeight: 1.85, textAlign: "center" },
+  dataRij: { marginBottom: 4, textAlign: "center", fontFamily: "Helvetica-Bold", fontSize: 11 },
   snummer: { marginTop: 2, textAlign: "center" },
 });
 
