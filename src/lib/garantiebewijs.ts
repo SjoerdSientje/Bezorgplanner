@@ -72,7 +72,8 @@ export async function verwerkGarantiebewijs(
 
   const pdfBuffer = await genereerGarantiePdf(pdfData);
   const fileName = `garantiebewijs-${data.order_nummer ?? data.order_id}.pdf`;
-  const path = `${data.order_id}.pdf`;
+  // Nieuwe verzending = nieuw bestandspad, zodat de link daadwerkelijk wijzigt.
+  const path = `${data.order_id}-${Date.now()}.pdf`;
 
   // Zorg dat de bucket bestaat (negeer fout als hij al bestaat)
   await supabase.storage.createBucket(BUCKET, { public: true }).catch(() => {});
