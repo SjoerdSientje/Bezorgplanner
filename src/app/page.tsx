@@ -48,7 +48,7 @@ export default function Home() {
 
             <li>
               <Link
-                href="/paklijst"
+                href="/paklijst-keuze"
                 className="group flex flex-col rounded-xl border border-koopje-black/10 bg-white p-6 shadow-sm transition hover:border-koopje-orange hover:shadow-md focus:outline-none focus:ring-2 focus:ring-koopje-orange focus:ring-offset-2"
               >
                 <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-koopje-orange-light text-koopje-orange transition group-hover:bg-koopje-orange group-hover:text-white">
