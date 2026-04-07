@@ -62,6 +62,8 @@ export interface ShopifyOrder {
   tags?: string | null;
   note?: string | null;
   financial_status?: string | null;
+  fulfillment_status?: string | null;
+  cancelled_at?: string | null;
   created_at?: string | null;
   email?: string | null;
   contact_email?: string | null;
@@ -87,19 +89,58 @@ function isFietsShopifyLineItem(item: ShopifyLineItem): boolean {
 
 const SHIPPING_EXCLUDE_MATCH = "koopjefatbike showroom";
 
+/** Shipping line = showroom-afhalen → niet naar Ritjes / pakketjes. */
+export function isShowroomShippingOrder(order: ShopifyOrder): boolean {
+  const shippingLines = order.shipping_lines ?? [];
+  return shippingLines.some((line) => {
+    const title = String(line.title ?? "").trim().toLowerCase();
+    const code = String(line.code ?? "").trim().toLowerCase();
+    return title.includes(SHIPPING_EXCLUDE_MATCH) || code.includes(SHIPPING_EXCLUDE_MATCH);
+  });
+}
+
+const PAKKETJES_MAX_PRIJS = 500;
+
+/**
+ * Pakketjes-wachtrij: totaal &lt; €500, niet geannuleerd, nog niet volledig verzonden.
+ * (Webhook; zelfde showroom-uitsluiting als Ritjes.)
+ */
+export function qualifiesForPakketjes(order: ShopifyOrder): boolean {
+  if (isShowroomShippingOrder(order)) return false;
+  const total = parseFloat(String(order.total_price ?? 0));
+  if (!(total > 0 && total < PAKKETJES_MAX_PRIJS)) return false;
+  if (order.cancelled_at) return false;
+  const fs = String(order.fulfillment_status ?? "").toLowerCase();
+  if (fs === "fulfilled") return false;
+  return true;
+}
+
+export function pakketjesCustomerName(order: ShopifyOrder): string {
+  const fn = String(order.customer?.first_name ?? "").trim();
+  const ln = String(order.customer?.last_name ?? "").trim();
+  return [fn, ln].filter(Boolean).join(" ").trim();
+}
+
+/** Tijdstip orderaanmaak in Shopify (voor pakketjes-cutoff na "afgerond"). */
+export function shopifyOrderCreatedAt(order: ShopifyOrder): Date {
+  const t = order.created_at ? Date.parse(String(order.created_at)) : NaN;
+  return Number.isFinite(t) ? new Date(t) : new Date(0);
+}
+
+export function extractPakketjesLineItems(order: ShopifyOrder): { name: string; quantity: number }[] {
+  const out: { name: string; quantity: number }[] = [];
+  for (const li of order.line_items ?? []) {
+    const name = String(li.name ?? "").trim();
+    if (!name) continue;
+    const qty = Math.max(1, Number(li.quantity ?? 1) || 1);
+    out.push({ name, quantity: qty });
+  }
+  return out;
+}
+
 /** Order komt alleen in Ritjes voor vandaag als hij door dit filter gaat */
 export function passesRitjesFilter(order: ShopifyOrder): boolean {
-  // Uitsluiten: shipping line title/code bevat "koopjefatbike showroom" (case insensitive),
-  // dus ook varianten zoals "Koopjefatbike Showroom De Bilt".
-  const shippingLines = order.shipping_lines ?? [];
-  const isShowroom = shippingLines.some(
-    (line) => {
-      const title = String(line.title ?? "").trim().toLowerCase();
-      const code = String(line.code ?? "").trim().toLowerCase();
-      return title.includes(SHIPPING_EXCLUDE_MATCH) || code.includes(SHIPPING_EXCLUDE_MATCH);
-    }
-  );
-  if (isShowroom) return false;
+  if (isShowroomShippingOrder(order)) return false;
 
   const totalPrice = parseFloat(String(order.total_price ?? 0));
   const tags = (order.tags ?? "").toLowerCase();
@@ -207,6 +248,11 @@ function getVolledigAdres(order: ShopifyOrder): string {
     getShippingOrBilling(order, "city"),
   ].filter(Boolean);
   return parts.join(", ");
+}
+
+/** Adresregel(s) voor pakketjes-kaart (straat, postcode, plaats). */
+export function shopifyOrderDisplayAdres(order: ShopifyOrder): string {
+  return getVolledigAdres(order);
 }
 
 function buildAdresUrl(volledigAdres: string): string {

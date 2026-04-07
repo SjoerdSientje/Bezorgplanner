@@ -3,6 +3,11 @@ import { createClient } from "@supabase/supabase-js";
 import {
   passesRitjesFilter,
   mapShopifyOrderToRitjesRow,
+  qualifiesForPakketjes,
+  pakketjesCustomerName,
+  extractPakketjesLineItems,
+  shopifyOrderDisplayAdres,
+  shopifyOrderCreatedAt,
   type ShopifyOrder,
 } from "@/lib/shopify-order";
 import { allAccountEmails, shopifyWebhookOrderAppliesToOwner } from "@/lib/account";
@@ -16,11 +21,76 @@ export async function POST(request: NextRequest) {
     const raw = await request.text();
     const order = JSON.parse(raw) as ShopifyOrder;
 
-    if (!passesRitjesFilter(order)) {
-      return NextResponse.json({ ok: true, skipped: "filter" }, { status: 200 });
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+    const { data: cutoffRows } = await supabase
+      .from("pakketjes_owner_cutoff")
+      .select("owner_email, ignore_shopify_created_before");
+    const cutoffByOwner = new Map(
+      (cutoffRows ?? []).map((r: { owner_email: string; ignore_shopify_created_before: string }) => [
+        r.owner_email,
+        r.ignore_shopify_created_before,
+      ])
+    );
+
+    const shopifyOrderId = String(order.id ?? "").trim();
+    const orderCreatedMs = shopifyOrderCreatedAt(order).getTime();
+
+    if (shopifyOrderId) {
+      for (const ownerEmail of allAccountEmails()) {
+        if (!shopifyWebhookOrderAppliesToOwner(ownerEmail, order.note)) {
+          await supabase
+            .from("pakketjes_orders")
+            .delete()
+            .eq("owner_email", ownerEmail)
+            .eq("shopify_order_id", shopifyOrderId);
+          continue;
+        }
+
+        const cutoffIso = cutoffByOwner.get(ownerEmail);
+        if (cutoffIso) {
+          const cutoffMs = new Date(cutoffIso).getTime();
+          if (orderCreatedMs < cutoffMs) {
+            await supabase
+              .from("pakketjes_orders")
+              .delete()
+              .eq("owner_email", ownerEmail)
+              .eq("shopify_order_id", shopifyOrderId);
+            continue;
+          }
+        }
+
+        if (qualifiesForPakketjes(order)) {
+          const total = parseFloat(String(order.total_price ?? 0));
+          const row = {
+            owner_email: ownerEmail,
+            shopify_order_id: shopifyOrderId,
+            order_nummer: String(order.name ?? ""),
+            naam: pakketjesCustomerName(order),
+            adres: shopifyOrderDisplayAdres(order),
+            items: extractPakketjesLineItems(order),
+            totaal_prijs: total,
+            fulfillment_status: order.fulfillment_status ?? null,
+          };
+          const { error: pErr } = await supabase.from("pakketjes_orders").upsert(row, {
+            onConflict: "owner_email,shopify_order_id",
+          });
+          if (pErr) {
+            console.error("[webhooks/shopify] pakketjes upsert:", pErr.message);
+          }
+        } else {
+          await supabase
+            .from("pakketjes_orders")
+            .delete()
+            .eq("owner_email", ownerEmail)
+            .eq("shopify_order_id", shopifyOrderId);
+        }
+      }
     }
 
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    if (!passesRitjesFilter(order)) {
+      return NextResponse.json({ ok: true, skipped: "ritjes_filter" }, { status: 200 });
+    }
 
     const insertedOrUpdatedIds: string[] = [];
     for (const ownerEmail of allAccountEmails()) {

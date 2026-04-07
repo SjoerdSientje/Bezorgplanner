@@ -1,126 +1,65 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireAccountEmail, shopifyWebhookOrderAppliesToOwner } from "@/lib/account";
+import { createServerSupabaseClient } from "@/lib/supabase";
+import { requireAccountEmail } from "@/lib/account";
 
 export const dynamic = "force-dynamic";
 
-type ShopifyAddress = {
-  address1?: string | null;
-  address2?: string | null;
-  zip?: string | null;
-  city?: string | null;
+type PakketjesItem = { name: string; quantity: number };
+
+type PakketjesRow = {
+  id: string;
+  shopify_order_id: string;
+  order_nummer: string | null;
+  naam: string | null;
+  adres: string | null;
+  items: unknown;
+  totaal_prijs: number;
+  fulfillment_status: string | null;
+  created_at: string;
 };
 
-type ShopifyLineItem = {
-  name?: string | null;
-  quantity?: number | null;
-};
-
-type ShopifyOrder = {
-  id?: number | string;
-  name?: string | null;
-  note?: string | null;
-  total_price?: string | number | null;
-  fulfillment_status?: string | null;
-  customer?: { first_name?: string | null; last_name?: string | null } | null;
-  shipping_address?: ShopifyAddress | null;
-  billing_address?: ShopifyAddress | null;
-  line_items?: ShopifyLineItem[] | null;
-};
-
-function env(name: string): string {
-  return String(process.env[name] ?? "").trim();
-}
-
-function parseMoney(v: unknown): number {
-  const n = typeof v === "string" ? parseFloat(v) : Number(v);
-  return Number.isFinite(n) ? n : 0;
-}
-
-function fullName(order: ShopifyOrder): string {
-  const fn = String(order.customer?.first_name ?? "").trim();
-  const ln = String(order.customer?.last_name ?? "").trim();
-  return [fn, ln].filter(Boolean).join(" ").trim();
-}
-
-function fullAddress(order: ShopifyOrder): string {
-  const a = order.shipping_address ?? order.billing_address ?? {};
-  return [a.address1, a.address2, a.zip, a.city]
-    .map((s) => String(s ?? "").trim())
-    .filter(Boolean)
-    .join(", ");
-}
-
-function parseLinkHeader(header: string | null): string | null {
-  if (!header) return null;
-  const parts = header.split(",");
-  for (const p of parts) {
-    const section = p.trim();
-    if (!section.includes('rel="next"')) continue;
-    const m = section.match(/<([^>]+)>/);
-    if (m?.[1]) return m[1];
+function normalizeItems(raw: unknown): PakketjesItem[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PakketjesItem[] = [];
+  for (const x of raw) {
+    if (!x || typeof x !== "object") continue;
+    const o = x as Record<string, unknown>;
+    const name = String(o.name ?? "").trim();
+    if (!name) continue;
+    const quantity = Math.max(1, Number(o.quantity ?? 1) || 1);
+    out.push({ name, quantity });
   }
-  return null;
-}
-
-async function fetchAllOpenOrdersFromShopify(): Promise<ShopifyOrder[]> {
-  const shop = env("SHOPIFY_STORE_DOMAIN");
-  const token = env("SHOPIFY_ADMIN_API_ACCESS_TOKEN");
-  const version = env("SHOPIFY_API_VERSION") || "2024-10";
-  if (!shop || !token) {
-    throw new Error("SHOPIFY_STORE_DOMAIN of SHOPIFY_ADMIN_API_ACCESS_TOKEN ontbreekt.");
-  }
-
-  const orders: ShopifyOrder[] = [];
-  let nextUrl: string | null =
-    `https://${shop}/admin/api/${version}/orders.json` +
-    `?status=open&fulfillment_status=unfulfilled&limit=250&fields=id,name,note,total_price,fulfillment_status,customer,shipping_address,billing_address,line_items`;
-
-  while (nextUrl) {
-    const res = await fetch(nextUrl, {
-      headers: {
-        "X-Shopify-Access-Token": token,
-        "Content-Type": "application/json",
-      },
-      cache: "no-store",
-    });
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(json?.errors ? JSON.stringify(json.errors) : `Shopify fout (${res.status})`);
-    }
-    const batch = Array.isArray(json?.orders) ? (json.orders as ShopifyOrder[]) : [];
-    orders.push(...batch);
-    nextUrl = parseLinkHeader(res.headers.get("link"));
-  }
-
-  return orders;
+  return out;
 }
 
 export async function GET(request: NextRequest) {
   try {
     const ownerEmail = requireAccountEmail(request);
-    const allOpenOrders = await fetchAllOpenOrdersFromShopify();
+    const supabase = createServerSupabaseClient();
 
-    const selected = allOpenOrders.filter((o) => {
-      if (!shopifyWebhookOrderAppliesToOwner(ownerEmail, o.note)) return false;
-      const total = parseMoney(o.total_price);
-      return total > 0 && total < 500;
-    });
+    const { data: rows, error } = await supabase
+      .from("pakketjes_orders")
+      .select(
+        "id, shopify_order_id, order_nummer, naam, adres, items, totaal_prijs, fulfillment_status, created_at"
+      )
+      .eq("owner_email", ownerEmail)
+      .order("created_at", { ascending: true });
 
-    const orders = selected.map((o) => {
-      const items = (o.line_items ?? [])
-        .flatMap((li) => {
-          const name = String(li.name ?? "").trim();
-          if (!name) return [];
-          const qty = Math.max(1, Number(li.quantity ?? 1) || 1);
-          return [{ name, quantity: qty }];
-        });
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    const list = (rows ?? []) as PakketjesRow[];
+    const orders = list.map((r) => {
+      const items = normalizeItems(r.items);
       return {
-        id: String(o.id ?? ""),
-        order_nummer: String(o.name ?? ""),
-        naam: fullName(o),
-        adres: fullAddress(o),
-        totaal_prijs: parseMoney(o.total_price),
-        fulfillment_status: String(o.fulfillment_status ?? ""),
+        id: r.id,
+        shopify_order_id: r.shopify_order_id,
+        order_nummer: String(r.order_nummer ?? ""),
+        naam: String(r.naam ?? ""),
+        adres: String(r.adres ?? ""),
+        totaal_prijs: Number(r.totaal_prijs ?? 0),
+        fulfillment_status: r.fulfillment_status ?? "",
         items,
       };
     });
@@ -146,9 +85,8 @@ export async function GET(request: NextRequest) {
     );
   } catch (e) {
     return NextResponse.json(
-      { error: e instanceof Error ? e.message : "Pakketjes paklijst genereren mislukt." },
+      { error: e instanceof Error ? e.message : "Pakketjes laden mislukt." },
       { status: 500 }
     );
   }
 }
-
