@@ -45,6 +45,8 @@ interface Props {
 
 type LeveringOption = "Volledig rijklaar" | "In doos";
 type MountedExtra = "achterzitje" | "voorrekje";
+const RIJKLAAR_SURCHARGE_NAME = "Volledig rijklaar";
+const RIJKLAAR_SURCHARGE_PRICE = "50";
 
 let idCounter = 0;
 function genId() { return String(++idCounter); }
@@ -376,6 +378,31 @@ export default function ProductenCell({
 
       const defaultItems = applyProductDefaultItemsRules(name ?? "", properties, productRules);
       next[idx] = { ...target, name, properties, defaultItems };
+
+      // Levering-tarief als losse productregel synchroniseren met de gekozen levering.
+      const isRijklaarSurcharge = (r: EditRow) =>
+        !r.isFiets &&
+        String(r.name ?? "").trim().toLowerCase() === RIJKLAAR_SURCHARGE_NAME.toLowerCase();
+
+      if (levering === "Volledig rijklaar") {
+        const hasSurcharge = next.some(isRijklaarSurcharge);
+        if (!hasSurcharge) {
+          next.push({
+            _id: genId(),
+            name: RIJKLAAR_SURCHARGE_NAME,
+            price: RIJKLAAR_SURCHARGE_PRICE,
+            isFiets: false,
+            properties: [],
+            defaultItems: [],
+          });
+        }
+      } else if (levering === "In doos") {
+        // Bij terugzetten naar In doos hoort dit losse rijklaar-product niet meer.
+        for (let i = next.length - 1; i >= 0; i -= 1) {
+          if (isRijklaarSurcharge(next[i])) next.splice(i, 1);
+        }
+      }
+
       return next;
     });
   }
