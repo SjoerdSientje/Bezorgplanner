@@ -173,7 +173,19 @@ export function phoneToE164(phone: string | null | undefined): string {
   return "+" + n;
 }
 
-/** Parsed notitie: Tijd / Datum / Opmerking */
+/** Regel hoort bij Tijd/Bezorgtijd (zelfde herkenning als extract hieronder). */
+function isNoteTijdLine(line: string): boolean {
+  return /^\s*(?:bezorgtijd\s*voorkeur|bezorgtijd|tijd)\s*[:\-]?\s*/i.test(line.trim());
+}
+
+/** Regel hoort bij Datum (niet Geboortedatum). */
+function isNoteDatumLine(line: string): boolean {
+  const t = line.trim();
+  if (/^\s*geboortedatum/i.test(t)) return false;
+  return /^\s*datum\s*[:\-]?\s*/i.test(t);
+}
+
+/** Parsed notitie: Tijd / Datum in vaste kolommen; overige notitietekst → opmerkingen klant. */
 export function parseNote(note: string | null | undefined): {
   bezorgtijdVoorkeur: string;
   datumOpmerking: string;
@@ -212,9 +224,18 @@ export function parseNote(note: string | null | undefined): {
     if (match) out.datumOpmerking = match[1].trim() || def.datumOpmerking;
   }
   {
-    // Alleen als er echt een regel begint met "Opmerking"
-    const match = text.match(/^\s*opmerking\s*[:\-]?\s*([^\n]+)/im);
-    if (match) out.opmerkingenKlant = match[1].trim() || def.opmerkingenKlant;
+    // Alles uit de notitie behalve regels die bij Tijd of Datum horen (niet alleen "Opmerking:")
+    const lines = text.split(/\r?\n/);
+    const rest: string[] = [];
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      if (isNoteTijdLine(line)) continue;
+      if (isNoteDatumLine(line)) continue;
+      rest.push(trimmed);
+    }
+    const joined = rest.join("\n").trim();
+    out.opmerkingenKlant = joined || def.opmerkingenKlant;
   }
 
   return out;
