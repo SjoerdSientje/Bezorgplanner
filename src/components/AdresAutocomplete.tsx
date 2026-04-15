@@ -40,7 +40,7 @@ function formatPostcode(raw: string | undefined): string {
 
 const DEBOUNCE_MS = 280;
 const MIN_QUERY_LEN = 3;
-const PDOK_URL = "https://api.pdok.nl/bzk/locatieserver/search/v3_1/suggest";
+const PDOK_URL = "https://api.pdok.nl/bzk/locatieserver/search/v3_1/free";
 
 export default function AdresAutocomplete({ velden, onChange }: Props) {
   const [suggestions, setSuggestions] = useState<PdokDoc[]>([]);
