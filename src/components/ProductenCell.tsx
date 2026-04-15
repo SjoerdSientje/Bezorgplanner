@@ -412,8 +412,17 @@ export default function ProductenCell({
   const saveEdits = useCallback(async () => {
     setSaving(true);
     try {
-      const newLineItemsJson = buildLineItemsJsonFromRows(rows);
-      const newProductenText = rows.map((r) => r.name).filter(Boolean).join("\n");
+      // Als er nog een product in het invoerveld staat, neem het mee zonder dat de + nodig was.
+      const pendingName = newName.trim();
+      const finalRows = pendingName
+        ? [...rows, { _id: genId(), name: pendingName, price: newPrice || "0", isFiets: false as const, properties: [] as { name: string; value: string }[], defaultItems: [] as string[] }]
+        : rows;
+      if (pendingName) {
+        setNewName("");
+        setNewPrice("0");
+      }
+      const newLineItemsJson = buildLineItemsJsonFromRows(finalRows);
+      const newProductenText = finalRows.map((r) => r.name).filter(Boolean).join("\n");
       const hasUsableLineItemsJson = (() => {
         if (!localLineItemsJson) return false;
         try {
@@ -424,14 +433,15 @@ export default function ProductenCell({
           return false;
         }
       })();
+      const finalRowSum = sumRowPrices(finalRows);
       const existingTotal =
         typeof bestellingTotaalPrijs === "number" && Number.isFinite(bestellingTotaalPrijs)
           ? bestellingTotaalPrijs
           : 0;
       const totalForSave =
-        !hasUsableLineItemsJson && rowSum === 0 && existingTotal > 0
+        !hasUsableLineItemsJson && finalRowSum === 0 && existingTotal > 0
           ? existingTotal
-          : rowSum;
+          : finalRowSum;
 
       // Meteen de lokale display bijwerken — cel toont nieuwe producten direct.
       setLocalValue(newProductenText);
@@ -451,7 +461,7 @@ export default function ProductenCell({
     } finally {
       setSaving(false);
     }
-  }, [rows, rowSum, onSaveMulti, onSave, localLineItemsJson, bestellingTotaalPrijs]);
+  }, [rows, newName, newPrice, onSaveMulti, onSave, localLineItemsJson, bestellingTotaalPrijs]);
 
   // Platte weergavetekst — gebruikt lokale state zodat wijzigingen direct zichtbaar zijn
   let displayItems: LineItem[] = [];
@@ -594,16 +604,6 @@ export default function ProductenCell({
                       min="0"
                     />
                   </div>
-                  <button
-                    type="button"
-                    onClick={addProduct}
-                    disabled={!newName.trim()}
-                    className="shrink-0 rounded p-0.5 text-stone-300 hover:bg-green-50 hover:text-green-600 disabled:opacity-30"
-                  >
-                    <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                    </svg>
-                  </button>
                 </div>
 
                 {/* Zelfde bedrag als bestelling_totaal_prijs na opslaan */}
