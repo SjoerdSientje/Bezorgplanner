@@ -144,12 +144,16 @@ export function buildRoutificPayload(
   const visits: RoutificPayload["visits"] = {};
   const sanitizeId = (id: string) => id.replace(/[.$]/g, "_");
 
+  // Als er ook maar 1 grote fiets in de batch zit, tellen ALLE fietsen als load 2.
+  // Reden: naast een grote fiets past maar 1 andere fiets (groot of normaal).
+  // Met alle load=2 en capacity=4 past er altijd precies max 2 fietsen per rit.
+  const heeftGroteFiets =
+    busType === "klein" && orders.some((o) => isGroteFiets(o.producten));
+
   for (const o of orders) {
     const address = (o.volledig_adres || "").trim() || "Onbekend adres";
     const baseFietsen = Math.max(1, Number(o.aantal_fietsen) || 1);
-    // Grote fiets (GT2000 / Engwe E26 / Qibbel / family / kinderzitje) telt als 2 laadeenheden
-    // zodat Routific bij kleine bus automatisch max 2 van zulke fietsen per rit plant.
-    const unitSize = busType === "klein" && isGroteFiets(o.producten) ? 2 : 1;
+    const unitSize = heeftGroteFiets ? 2 : 1;
     const load = baseFietsen * unitSize;
     const window = parseBezorgtijdVoorkeur(o.bezorgtijd_voorkeur);
     const start = window ? window.start : vertrekTijd;
@@ -168,10 +172,10 @@ export function buildRoutificPayload(
   const fleet: Record<string, VehicleConfig> = {};
 
   if (busType === "klein") {
-    // Aantal trips = ceil(totaal load / 4); grote fietsen tellen als 2 laadeenheden
+    // Totale load bepaalt het aantal benodigde ritten
     const totalLoad = orders.reduce((sum, o) => {
       const baseFietsen = Math.max(1, Number(o.aantal_fietsen) || 1);
-      const unitSize = isGroteFiets(o.producten) ? 2 : 1;
+      const unitSize = heeftGroteFiets ? 2 : 1;
       return sum + baseFietsen * unitSize;
     }, 0);
     const numberOfTrips = Math.max(1, Math.ceil(totalLoad / FLEET_CAPACITY_KLEIN));
