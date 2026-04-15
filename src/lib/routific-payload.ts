@@ -16,6 +16,21 @@ export interface OrderForRoute {
   volledig_adres: string | null;
   aantal_fietsen: number | null;
   bezorgtijd_voorkeur: string | null;
+  producten: string | null;
+}
+
+/** GT2000, Engwe E26 en Qibbel/family/kinderzitje zijn breder/groter; kleine bus max 2 per rit. */
+const GROTE_FIETS_PATTERNS = [
+  /gt\s*2000/i,
+  /engwe\s*e26/i,
+  /qibbel/i,
+  /family/i,
+  /kinderzitje/i,
+];
+
+function isGroteFiets(producten: string | null | undefined): boolean {
+  const text = String(producten ?? "");
+  return GROTE_FIETS_PATTERNS.some((p) => p.test(text));
 }
 
 export type Tijdvenster =
@@ -131,7 +146,11 @@ export function buildRoutificPayload(
 
   for (const o of orders) {
     const address = (o.volledig_adres || "").trim() || "Onbekend adres";
-    const load = Math.max(1, Number(o.aantal_fietsen) || 1);
+    const baseFietsen = Math.max(1, Number(o.aantal_fietsen) || 1);
+    // Grote fiets (GT2000 / Engwe E26 / Qibbel / family / kinderzitje) telt als 2 laadeenheden
+    // zodat Routific bij kleine bus automatisch max 2 van zulke fietsen per rit plant.
+    const unitSize = busType === "klein" && isGroteFiets(o.producten) ? 2 : 1;
+    const load = baseFietsen * unitSize;
     const window = parseBezorgtijdVoorkeur(o.bezorgtijd_voorkeur);
     const start = window ? window.start : vertrekTijd;
     const end = window && window.end !== null ? window.end : DEFAULT_SHIFT_END;
@@ -149,12 +168,13 @@ export function buildRoutificPayload(
   const fleet: Record<string, VehicleConfig> = {};
 
   if (busType === "klein") {
-    // Aantal trips = ceil(totaal fietsen / 4)
-    const totalBikes = orders.reduce(
-      (sum, o) => sum + Math.max(1, Number(o.aantal_fietsen) || 1),
-      0
-    );
-    const numberOfTrips = Math.max(1, Math.ceil(totalBikes / FLEET_CAPACITY_KLEIN));
+    // Aantal trips = ceil(totaal load / 4); grote fietsen tellen als 2 laadeenheden
+    const totalLoad = orders.reduce((sum, o) => {
+      const baseFietsen = Math.max(1, Number(o.aantal_fietsen) || 1);
+      const unitSize = isGroteFiets(o.producten) ? 2 : 1;
+      return sum + baseFietsen * unitSize;
+    }, 0);
+    const numberOfTrips = Math.max(1, Math.ceil(totalLoad / FLEET_CAPACITY_KLEIN));
 
     for (let i = 1; i <= numberOfTrips; i++) {
       fleet[`vehicle_${i}`] = {
