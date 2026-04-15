@@ -99,7 +99,13 @@ export function isShowroomShippingOrder(order: ShopifyOrder): boolean {
   });
 }
 
-const PAKKETJES_MAX_PRIJS = 500;
+const PAKKETJES_MAX_PRIJS = 450;
+
+function parseSpecialServiceProductFromNote(note: string | null | undefined): string {
+  const text = String(note ?? "");
+  const match = text.match(/^\s*(?:naleveren|garantie)\s*:\s*([^\n\r]+)/im);
+  return String(match?.[1] ?? "").trim();
+}
 
 /**
  * Pakketjes-wachtrij: totaal &lt; €500, niet geannuleerd, nog niet volledig verzonden.
@@ -108,7 +114,10 @@ const PAKKETJES_MAX_PRIJS = 500;
 export function qualifiesForPakketjes(order: ShopifyOrder): boolean {
   if (isShowroomShippingOrder(order)) return false;
   const total = parseFloat(String(order.total_price ?? 0));
-  if (!(total > 0 && total < PAKKETJES_MAX_PRIJS)) return false;
+  const hasSpecialServiceItem = Boolean(parseSpecialServiceProductFromNote(order.note));
+  const qualifiesByTotal = total > 0 && total < PAKKETJES_MAX_PRIJS;
+  const qualifiesBySpecialService = total === 0 && hasSpecialServiceItem;
+  if (!qualifiesByTotal && !qualifiesBySpecialService) return false;
   if (order.cancelled_at) return false;
   const fs = String(order.fulfillment_status ?? "").toLowerCase();
   if (fs === "fulfilled") return false;
@@ -134,6 +143,12 @@ export function extractPakketjesLineItems(order: ShopifyOrder): { name: string; 
     if (!name) continue;
     const qty = Math.max(1, Number(li.quantity ?? 1) || 1);
     out.push({ name, quantity: qty });
+  }
+  if (out.length === 0) {
+    const specialServiceProduct = parseSpecialServiceProductFromNote(order.note);
+    if (specialServiceProduct) {
+      out.push({ name: specialServiceProduct, quantity: 1 });
+    }
   }
   return out;
 }
