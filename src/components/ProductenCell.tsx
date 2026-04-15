@@ -305,7 +305,23 @@ export default function ProductenCell({
   }
 
   function startEditing() {
-    setRows(normalizeRowsForEdit(parseToEditRows(localLineItemsJson, localValue)));
+    const parsed = normalizeRowsForEdit(parseToEditRows(localLineItemsJson, localValue));
+
+    // Retroactieve fix: als alle items €0 zijn maar bestelling_totaal_prijs wel gevuld is,
+    // zet het totaal op de eerste fiets zodat de editor direct een zinnige waarde toont.
+    const allZero = parsed.length > 0 && parsed.every((r) => parseFloat(r.price) === 0);
+    const hasTotal =
+      typeof bestellingTotaalPrijs === "number" &&
+      Number.isFinite(bestellingTotaalPrijs) &&
+      bestellingTotaalPrijs > 0;
+
+    if (allZero && hasTotal) {
+      const fietsIdx = parsed.findIndex((r) => r.isFiets);
+      const targetIdx = fietsIdx >= 0 ? fietsIdx : 0;
+      parsed[targetIdx] = { ...parsed[targetIdx], price: String(bestellingTotaalPrijs) };
+    }
+
+    setRows(parsed);
     setNewName("");
     setNewPrice("0");
     setEditing(true);
