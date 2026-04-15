@@ -84,6 +84,17 @@ export function parseBezorgtijdVoorkeur(
   return null;
 }
 
+type VehicleConfig = {
+  start_location: { address: string };
+  end_location: { address: string };
+  shift_start: string;
+  shift_end: string;
+  capacity: number;
+  strict_start: boolean;
+  /** Herlaadtijd bij depotterugkeer in minuten (klein bus, multi-trip) */
+  reload_service_time?: number;
+};
+
 export interface RoutificPayload {
   visits: Record<
     string,
@@ -95,25 +106,18 @@ export interface RoutificPayload {
       end?: string; // weglaten = "anytime after start"
     }
   >;
-  fleet: {
-    vehicle_1: {
-      start_location: { address: string };
-      end_location: { address: string };
-      shift_start: string;
-      shift_end: string;
-      capacity: number;
-      strict_start: boolean;
-      /** Herlaadtijd bij depotterugkeer (minuten) — alleen kleine bus */
-      reload_service_time?: number;
-    };
-  };
+  fleet: Record<string, VehicleConfig>;
 }
 
 /**
  * Bouwt de Routific-input uit orders en vertrektijd.
- * Visit-ID = order id (geen punten of $ vanwege Routific-eis).
- * busType "klein" = max 4 fietsen per lading (Routific plant retours naar depot);
- * busType "groot" = standaard capaciteit 11.
+ *
+ * Grote bus (default): 1 voertuig, capaciteit 11 fietsen.
+ *
+ * Kleine bus: meerdere voertuigen met elk capaciteit 4. Het aantal voertuigen
+ * is ceil(totaal_fietsen / 4). Routific verdeelt de orders optimaal over de
+ * voertuigen; wij verwerken de resultaten als opeenvolgende ritten (trip 1,
+ * terug depot + 30 min herladen, trip 2, ...).
  */
 export function buildRoutificPayload(
   orders: OrderForRoute[],
@@ -121,6 +125,7 @@ export function buildRoutificPayload(
   busType: "klein" | "groot" = "groot"
 ): RoutificPayload {
   const capacity = busType === "klein" ? FLEET_CAPACITY_KLEIN : FLEET_CAPACITY_GROOT;
+
   const visits: RoutificPayload["visits"] = {};
   const sanitizeId = (id: string) => id.replace(/[.$]/g, "_");
 
@@ -132,7 +137,6 @@ export function buildRoutificPayload(
     const end = window && window.end !== null ? window.end : DEFAULT_SHIFT_END;
 
     const visitId = sanitizeId(o.id);
-    // Geen eindtijd opgegeven ("na X") → standaard 23:59
     visits[visitId] = {
       location: { address },
       load,
@@ -142,18 +146,37 @@ export function buildRoutificPayload(
     };
   }
 
-  return {
-    visits,
-    fleet: {
-      vehicle_1: {
+  const fleet: Record<string, VehicleConfig> = {};
+
+  if (busType === "klein") {
+    // Aantal trips = ceil(totaal fietsen / 4)
+    const totalBikes = orders.reduce(
+      (sum, o) => sum + Math.max(1, Number(o.aantal_fietsen) || 1),
+      0
+    );
+    const numberOfTrips = Math.max(1, Math.ceil(totalBikes / FLEET_CAPACITY_KLEIN));
+
+    for (let i = 1; i <= numberOfTrips; i++) {
+      fleet[`vehicle_${i}`] = {
         start_location: { address: DEPOT_ADDRESS },
         end_location: { address: DEPOT_ADDRESS },
         shift_start: vertrekTijd,
         shift_end: DEFAULT_SHIFT_END,
         capacity,
-        strict_start: true,
-        ...(busType === "klein" ? { reload_service_time: RELOAD_TIME_KLEIN_MINUTEN } : {}),
-      },
-    },
-  };
+        strict_start: i === 1,
+        reload_service_time: RELOAD_TIME_KLEIN_MINUTEN,
+      };
+    }
+  } else {
+    fleet["vehicle_1"] = {
+      start_location: { address: DEPOT_ADDRESS },
+      end_location: { address: DEPOT_ADDRESS },
+      shift_start: vertrekTijd,
+      shift_end: DEFAULT_SHIFT_END,
+      capacity,
+      strict_start: true,
+    };
+  }
+
+  return { visits, fleet };
 }

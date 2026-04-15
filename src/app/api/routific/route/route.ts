@@ -118,7 +118,6 @@ export async function POST(request: NextRequest) {
     }
 
     const solution = output?.solution as Record<string, Array<{ location_id?: string; arrival_time?: string }>> | undefined;
-    const vehicleStops = solution?.vehicle_1;
     const sanitizeId = (id: string) => id.replace(/[.$]/g, "_");
     const orderByVisitId = new Map<string, OrderForRoute>();
     for (const o of rows) {
@@ -126,10 +125,22 @@ export async function POST(request: NextRequest) {
       orderByVisitId.set(sanitizeId(o.id), o);
     }
 
-    if (vehicleStops?.length) {
-      const slotsToInsert: { order_id: string; volgorde: number; aankomsttijd: string; tijd_opmerking: string }[] = [];
-      let volgorde = 0;
-      for (const stop of vehicleStops) {
+    // Verwerk alle voertuigen op volgorde: vehicle_1, vehicle_2, ...
+    // Bij kleine bus = meerdere trips; bij grote bus = 1 voertuig.
+    const vehicleKeys = Object.keys(solution ?? {})
+      .filter((k) => k.startsWith("vehicle_"))
+      .sort((a, b) => {
+        const numA = parseInt(a.split("_")[1] ?? "0", 10);
+        const numB = parseInt(b.split("_")[1] ?? "0", 10);
+        return numA - numB;
+      });
+
+    const slotsToInsert: { order_id: string; volgorde: number; aankomsttijd: string; tijd_opmerking: string }[] = [];
+    let volgorde = 0;
+
+    for (const vehicleKey of vehicleKeys) {
+      const stops = solution?.[vehicleKey] ?? [];
+      for (const stop of stops) {
         const locId = stop.location_id ?? "";
         if (locId === "depot") continue;
         const order = orderByVisitId.get(locId);
@@ -145,18 +156,18 @@ export async function POST(request: NextRequest) {
           tijd_opmerking: arrivalTime,
         });
       }
+    }
 
-      if (slotsToInsert.length > 0) {
-        // Schrijf alleen aankomsttijd_slot terug op elke order zodat die zichtbaar
-        // is in de "Ritjes voor vandaag" tabel. planning_slots worden pas aangemaakt
-        // bij "Planning goedkeuren" — zo verschijnen ze niet vroegtijdig in Planning.
-        for (const s of slotsToInsert) {
-          await supabase
-            .from("orders")
-            .update({ aankomsttijd_slot: s.aankomsttijd })
-            .eq("owner_email", ownerEmail)
-            .eq("id", s.order_id);
-        }
+    if (slotsToInsert.length > 0) {
+      // Schrijf alleen aankomsttijd_slot terug op elke order zodat die zichtbaar
+      // is in de "Ritjes voor vandaag" tabel. planning_slots worden pas aangemaakt
+      // bij "Planning goedkeuren" — zo verschijnen ze niet vroegtijdig in Planning.
+      for (const s of slotsToInsert) {
+        await supabase
+          .from("orders")
+          .update({ aankomsttijd_slot: s.aankomsttijd })
+          .eq("owner_email", ownerEmail)
+          .eq("id", s.order_id);
       }
     }
 
