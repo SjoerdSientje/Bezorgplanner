@@ -33,6 +33,7 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+    const busType: "klein" | "groot" = body.busType === "klein" ? "klein" : "groot";
 
     const token = process.env.ROUTIFIC_API_TOKEN;
     if (!token) {
@@ -76,7 +77,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const payload = buildRoutificPayload(rows, vertrektijd);
+    const payload = buildRoutificPayload(rows, vertrektijd, busType);
 
     const res = await fetch(ROUTIFIC_VRP_URL, {
       method: "POST",

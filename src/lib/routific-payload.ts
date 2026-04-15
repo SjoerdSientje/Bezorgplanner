@@ -6,7 +6,9 @@
 const DEPOT_ADDRESS = "Kapelweg 2, 3732 GS, De Bilt, Netherlands";
 const DEFAULT_DURATION = 20;
 const DEFAULT_SHIFT_END = "23:59";
-const FLEET_CAPACITY = 11;
+const FLEET_CAPACITY_GROOT = 11;
+const FLEET_CAPACITY_KLEIN = 4;
+const RELOAD_TIME_KLEIN_MINUTEN = 30;
 
 export interface OrderForRoute {
   id: string;
@@ -101,6 +103,8 @@ export interface RoutificPayload {
       shift_end: string;
       capacity: number;
       strict_start: boolean;
+      /** Herlaadtijd bij depotterugkeer (minuten) — alleen kleine bus */
+      reload_service_time?: number;
     };
   };
 }
@@ -108,11 +112,15 @@ export interface RoutificPayload {
 /**
  * Bouwt de Routific-input uit orders en vertrektijd.
  * Visit-ID = order id (geen punten of $ vanwege Routific-eis).
+ * busType "klein" = max 4 fietsen per lading (Routific plant retours naar depot);
+ * busType "groot" = standaard capaciteit 11.
  */
 export function buildRoutificPayload(
   orders: OrderForRoute[],
-  vertrekTijd: string
+  vertrekTijd: string,
+  busType: "klein" | "groot" = "groot"
 ): RoutificPayload {
+  const capacity = busType === "klein" ? FLEET_CAPACITY_KLEIN : FLEET_CAPACITY_GROOT;
   const visits: RoutificPayload["visits"] = {};
   const sanitizeId = (id: string) => id.replace(/[.$]/g, "_");
 
@@ -142,8 +150,9 @@ export function buildRoutificPayload(
         end_location: { address: DEPOT_ADDRESS },
         shift_start: vertrekTijd,
         shift_end: DEFAULT_SHIFT_END,
-        capacity: FLEET_CAPACITY,
+        capacity,
         strict_start: true,
+        ...(busType === "klein" ? { reload_service_time: RELOAD_TIME_KLEIN_MINUTEN } : {}),
       },
     },
   };

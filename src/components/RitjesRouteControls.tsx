@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 
 type GoedkeurenMode = "replace" | "morgen";
+type BusType = "klein" | "groot";
 
 const TIJDOPTIES: string[] = [];
 for (let h = 7; h <= 15; h++) {
@@ -76,20 +77,22 @@ export default function RitjesRouteControls({
 }: Props) {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: "ok" | "error"; text: string } | null>(null);
+  const [showBusDialog, setShowBusDialog] = useState(false);
 
   // Planning goedkeuren
   const [showDialog, setShowDialog] = useState(false);
   const [goedkeurenLoading, setGoedkeurenLoading] = useState(false);
   const [goedkeurenMessage, setGoedkeurenMessage] = useState<{ type: "ok" | "error"; text: string } | null>(null);
 
-  async function handleRouteGenereren() {
+  async function handleRouteGenereren(busType: BusType) {
+    setShowBusDialog(false);
     setLoading(true);
     setMessage(null);
     try {
       const res = await fetch("/api/routific/route", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ vertrektijd }),
+        body: JSON.stringify({ vertrektijd, busType }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -161,7 +164,7 @@ export default function RitjesRouteControls({
           </div>
           <button
             type="button"
-            onClick={handleRouteGenereren}
+            onClick={() => { setShowBusDialog(true); setMessage(null); }}
             disabled={loading}
             className="rounded-lg bg-koopje-orange px-4 py-2 text-sm font-medium text-white transition hover:bg-koopje-orange-dark disabled:opacity-50"
           >
@@ -190,6 +193,55 @@ export default function RitjesRouteControls({
           )}
         </div>
       </div>
+
+      {showBusDialog && (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-koopje-black/40"
+            aria-hidden
+            onClick={() => setShowBusDialog(false)}
+          />
+          <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+            <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl">
+              <h2 className="mb-2 text-base font-semibold text-koopje-black">
+                Welke bus gebruik je?
+              </h2>
+              <p className="mb-5 text-sm text-koopje-black/70">
+                Kies het type bus. Bij de kleine bus wordt na elke 4 fietsen terugereden naar Kapelweg 2 om opnieuw in te laden.
+              </p>
+              <div className="flex flex-col gap-3">
+                <button
+                  type="button"
+                  onClick={() => handleRouteGenereren("klein")}
+                  className="w-full rounded-xl bg-koopje-orange px-4 py-3 text-left text-sm font-medium text-white transition hover:bg-koopje-orange-dark"
+                >
+                  <span className="block font-semibold">Kleine bus</span>
+                  <span className="block text-xs font-normal text-white/80">
+                    Max. 4 fietsen per lading — route berekent retours naar depot.
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleRouteGenereren("groot")}
+                  className="w-full rounded-xl border border-koopje-orange px-4 py-3 text-left text-sm font-medium text-koopje-orange transition hover:bg-koopje-orange-light"
+                >
+                  <span className="block font-semibold">Grote bus</span>
+                  <span className="block text-xs font-normal text-koopje-black/60">
+                    Standaard capaciteit — één rit voor alle fietsen.
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowBusDialog(false)}
+                  className="w-full rounded-xl px-4 py-2 text-sm text-koopje-black/60 transition hover:text-koopje-black"
+                >
+                  Annuleren
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
 
       {showDialog && (
         <>
