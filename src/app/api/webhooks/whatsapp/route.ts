@@ -126,7 +126,7 @@ export async function POST(request: NextRequest) {
 
   const replyText =
     env("WHATSAPP_INBOUND_AUTO_REPLY_TEXT") ||
-    "Goedendag,\n\nHelaas kunnen er naar dit nummer geen appjes worden gestuurd. Als u contact met ons wilt opnemen kunt u ons bellen of een appje sturen naar +31687139057. Bedankt!\n\nMet vriendelijke groet,\n\nTeam Koopjefatbike";
+    "Goedendag,\n\nDit nummer kan helaas geen whatsapp berichten ontvangen. Wil je toch contact met ons opnemen? Bel ons op +31854016006, of stuur ons een whatsapp bericht op +31687139057. Bedankt!\n\nMet vriendelijke groet,\nTeam Koopjefatbike";
 
   const messages = extractIncomingMessages(payload);
   let sent = 0;
