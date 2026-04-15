@@ -135,10 +135,19 @@ export async function POST(request: NextRequest) {
         return numA - numB;
       });
 
-    const slotsToInsert: { order_id: string; volgorde: number; aankomsttijd: string; tijd_opmerking: string }[] = [];
+    const slotsToInsert: {
+      order_id: string;
+      volgorde: number;
+      aankomsttijd: string;
+      tijd_opmerking: string;
+      rit_nummer: number | null;
+    }[] = [];
     let volgorde = 0;
+    const meerdereRitten = busType === "klein" && vehicleKeys.length > 1;
 
-    for (const vehicleKey of vehicleKeys) {
+    for (let vi = 0; vi < vehicleKeys.length; vi++) {
+      const vehicleKey = vehicleKeys[vi];
+      const ritNummer = meerdereRitten ? vi + 1 : null;
       const stops = solution?.[vehicleKey] ?? [];
       for (const stop of stops) {
         const locId = stop.location_id ?? "";
@@ -154,20 +163,31 @@ export async function POST(request: NextRequest) {
           volgorde,
           aankomsttijd: slotStr,
           tijd_opmerking: arrivalTime,
+          rit_nummer: ritNummer,
         });
       }
     }
 
     if (slotsToInsert.length > 0) {
-      // Schrijf alleen aankomsttijd_slot terug op elke order zodat die zichtbaar
-      // is in de "Ritjes voor vandaag" tabel. planning_slots worden pas aangemaakt
-      // bij "Planning goedkeuren" — zo verschijnen ze niet vroegtijdig in Planning.
+      // Schrijf aankomsttijd_slot en rit_nummer terug op elke order.
+      // planning_slots worden pas aangemaakt bij "Planning goedkeuren".
       for (const s of slotsToInsert) {
         await supabase
           .from("orders")
-          .update({ aankomsttijd_slot: s.aankomsttijd })
+          .update({ aankomsttijd_slot: s.aankomsttijd, rit_nummer: s.rit_nummer })
           .eq("owner_email", ownerEmail)
           .eq("id", s.order_id);
+      }
+    }
+
+    // Bij grote bus of één rit: wis rit_nummer voor alle betrokken orders
+    if (!meerdereRitten) {
+      for (const o of rows) {
+        await supabase
+          .from("orders")
+          .update({ rit_nummer: null })
+          .eq("owner_email", ownerEmail)
+          .eq("id", o.id);
       }
     }
 

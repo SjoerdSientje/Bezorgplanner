@@ -17,6 +17,8 @@ interface EditableSheetTableProps {
   readOnly?: boolean;
   /** Toon rijnummers links (sticky) en maak cellen keyboard-navigable. */
   showRowNumbers?: boolean;
+  /** Optionele achtergrondkleur per data-rij (Tailwind-klasse, bijv. "bg-green-50"). */
+  rowColorClass?: (rowIndex: number) => string | undefined;
   /**
    * Verhoog deze waarde wanneer je de tabel geforceerd wilt resetten vanuit initialData
    * (bijv. na een echte server-fetch). Celwijzigingen mogen deze NIET verhogen.
@@ -52,6 +54,7 @@ export default function EditableSheetTable({
   readOnly = false,
   showRowNumbers = false,
   resetKey = 0,
+  rowColorClass,
 }: EditableSheetTableProps) {
   const colCount = (headers as string[]).length;
   const totalDataRows = dataRowCount ?? initialData?.length ?? 0;
@@ -206,10 +209,11 @@ export default function EditableSheetTable({
           <tbody>
             {values.map((row, i) => {
               const isDataRow = i < totalDataRows;
+              const colorCls = isDataRow ? (rowColorClass?.(i) ?? "") : "";
               return (
-                <tr key={i}>
+                <tr key={i} className={colorCls}>
                   {showRowNumbers && (
-                    <td className="sticky left-0 z-30 w-8 border border-stone-300 bg-white px-1 py-1 text-center text-xs text-stone-700">
+                    <td className={`sticky left-0 z-30 w-8 border border-stone-300 px-1 py-1 text-center text-xs text-stone-700 ${colorCls || "bg-white"}`}>
                       {isDataRow ? i + 1 : ""}
                     </td>
                   )}

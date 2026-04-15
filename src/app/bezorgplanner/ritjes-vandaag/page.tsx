@@ -92,6 +92,23 @@ export default function RitjesVandaagPage() {
 
   const tableRows = useMemo(() => ordersToTableRows(orders), [orders]);
 
+  const RIT_COLORS: Record<number, string> = {
+    1: "bg-green-50",
+    2: "bg-red-50",
+    3: "bg-blue-50",
+  };
+
+  const rowColorClass = useCallback(
+    (rowIndex: number): string | undefined => {
+      const order = orders[rowIndex];
+      if (!order) return undefined;
+      const rit = (order as any).rit_nummer as number | null | undefined;
+      if (!rit) return undefined;
+      return RIT_COLORS[rit] ?? "bg-purple-50";
+    },
+    [orders]
+  );
+
   const deleteOrder = useCallback(
     async (rowIndex: number) => {
       if (rowIndex < 0 || rowIndex >= orders.length) return;
@@ -310,6 +327,7 @@ export default function RitjesVandaagPage() {
               cellRenderers={cellRenderers}
               resetKey={tableResetKey}
               showRowNumbers
+              rowColorClass={rowColorClass}
             />
           )}
         </div>
