@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import type { RitjesOrderFromApi } from "@/lib/ritjes-mapping";
 
 // Browser SpeechRecognition type (niet in standaard TS lib)
@@ -254,7 +255,7 @@ export default function SparrenMetSientje({
         </button>
       </div>
 
-      {open && (
+      {open && typeof document !== "undefined" && createPortal(
         <>
           <div
             className="fixed inset-0 z-40 bg-koopje-black/40"
@@ -384,7 +385,8 @@ export default function SparrenMetSientje({
               </div>
             </form>
           </div>
-        </>
+        </>,
+        document.body
       )}
     </>
   );

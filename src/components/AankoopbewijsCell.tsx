@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { createPortal } from "react-dom";
 
 type Props = {
   orderId: string;
@@ -108,7 +109,7 @@ export default function AankoopbewijsCell({ orderId, link, email, onUpdated }: P
         <span className="text-stone-300">—</span>
       )}
 
-      {open && (
+      {open && typeof document !== "undefined" && createPortal(
         <div className="fixed inset-0 z-[120] flex items-start justify-center overflow-y-auto bg-black/50 p-4 pt-[env(safe-area-inset-top,1rem)]">
           <div className="my-auto w-full max-w-4xl rounded-xl bg-white p-4">
             <div className="mb-3 flex items-center justify-between">
@@ -150,7 +151,8 @@ export default function AankoopbewijsCell({ orderId, link, email, onUpdated }: P
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
