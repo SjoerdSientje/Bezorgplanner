@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Header from "@/components/Header";
+import AdresAutocomplete from "@/components/AdresAutocomplete";
 
 type Soort = "bezorging" | "afhaal";
 type ProductType = "fiets" | "extra";
@@ -268,14 +269,21 @@ export default function NieuweMarktplaatsOrderPage() {
                   <Field label="Serienummer" id="serienummer" value={form.serienummer} onChange={setField} placeholder="bijv. XYZ123456" />
                 )}
                 <Field label="Naam klant" id="naam" value={form.naam} onChange={setField} placeholder="Voor- en achternaam" required />
-                <div className="grid grid-cols-[1fr_6rem] gap-3">
-                  <Field label="Straatnaam" id="straatnaam" value={form.straatnaam} onChange={setField} placeholder="Hoofdstraat" />
-                  <Field label="Huisnummer" id="huisnummer" value={form.huisnummer} onChange={setField} placeholder="12B" />
-                </div>
-                <div className="grid grid-cols-[7rem_1fr] gap-3">
-                  <Field label="Postcode" id="postcode" value={form.postcode} onChange={setField} placeholder="1234 AB" />
-                  <Field label="Woonplaats" id="woonplaats" value={form.woonplaats} onChange={setField} placeholder="Amsterdam" />
-                </div>
+                <AdresAutocomplete
+                  velden={{
+                    straatnaam: form.straatnaam,
+                    huisnummer: form.huisnummer,
+                    postcode: form.postcode,
+                    woonplaats: form.woonplaats,
+                  }}
+                  onChange={(v) => setForm((prev) => ({
+                    ...prev,
+                    straatnaam: v.straatnaam,
+                    huisnummer: v.huisnummer,
+                    postcode: v.postcode,
+                    woonplaats: v.woonplaats,
+                  }))}
+                />
                 <Field label="Telefoonnummer" id="telefoonnummer" type="tel" value={form.telefoonnummer} onChange={setField} placeholder="06 12345678" />
                 <Field label="Email" id="email" type="email" value={form.email} onChange={setField} placeholder="klant@email.nl" />
               </div>
