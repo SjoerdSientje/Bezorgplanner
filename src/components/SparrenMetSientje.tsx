@@ -261,7 +261,7 @@ export default function SparrenMetSientje({
             aria-hidden
             onClick={() => setOpen(false)}
           />
-          <div className="fixed bottom-0 right-0 left-0 z-50 flex max-h-[85vh] flex-col rounded-t-2xl border border-koopje-black/10 bg-white shadow-xl sm:left-auto sm:right-4 sm:bottom-4 sm:max-h-[calc(100vh-8rem)] sm:w-[420px] sm:rounded-2xl">
+          <div className="fixed bottom-0 right-0 left-0 z-50 flex max-h-[85svh] flex-col rounded-t-2xl border border-koopje-black/10 bg-white pb-[env(safe-area-inset-bottom)] shadow-xl sm:bottom-4 sm:left-auto sm:right-4 sm:max-h-[calc(100svh-8rem)] sm:w-[420px] sm:rounded-2xl sm:pb-0">
             <div className="flex items-center gap-3 border-b border-koopje-black/10 px-4 py-3">
               <SientjeAvatar />
               <div className="min-w-0 flex-1">

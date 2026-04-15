@@ -109,8 +109,8 @@ export default function AankoopbewijsCell({ orderId, link, email, onUpdated }: P
       )}
 
       {open && (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/50 p-4">
-          <div className="max-h-[90vh] w-full max-w-4xl overflow-auto rounded-xl bg-white p-4">
+        <div className="fixed inset-0 z-[120] flex items-start justify-center overflow-y-auto bg-black/50 p-4 pt-[env(safe-area-inset-top,1rem)]">
+          <div className="my-auto w-full max-w-4xl rounded-xl bg-white p-4">
             <div className="mb-3 flex items-center justify-between">
               <h3 className="text-base font-semibold text-koopje-black">Aankoopbewijs bewerken en verzenden</h3>
               <button
@@ -126,7 +126,7 @@ export default function AankoopbewijsCell({ orderId, link, email, onUpdated }: P
               <iframe
                 src={href}
                 title="Aankoopbewijs PDF"
-                className="h-[420px] w-full"
+                className="h-[200px] w-full sm:h-[420px]"
               />
             </div>
 
