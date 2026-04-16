@@ -10,7 +10,6 @@ export const RITJES_HEADERS = [
   "Aankomsttijd (HH:MM - HH:MM)",
   "Bezorgtijd voorkeur (opmerkingen van Sjoerd)",
   "Meenemen in planning (anders veranderen naar nee)",
-  "Nieuw appje sturen?",
   "Datum opmerking",
   "Opmerkingen klant",
   "Product(en)",
@@ -36,7 +35,6 @@ export const RITJES_HEADER_TO_FIELD: Record<string, string> = {
   "Aankomsttijd (HH:MM - HH:MM)": "aankomsttijd_slot",
   "Bezorgtijd voorkeur (opmerkingen van Sjoerd)": "bezorgtijd_voorkeur",
   "Meenemen in planning (anders veranderen naar nee)": "meenemen_in_planning",
-  "Nieuw appje sturen?": "nieuw_appje_sturen",
   "Datum opmerking": "datum_opmerking",
   "Opmerkingen klant": "opmerkingen_klant",
   "Product(en)": "producten",
@@ -94,7 +92,6 @@ export function sortRitjesOrdersNewestFirst<T extends RitjesOrderFromApi>(orders
 /** Boolean-kolommen in de ritjes-tabel */
 const RITJES_BOOLEAN_FIELDS = new Set([
   "meenemen_in_planning",
-  "nieuw_appje_sturen",
   "betaald",
 ]);
 

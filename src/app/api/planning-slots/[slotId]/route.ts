@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { requireAccountEmail } from "@/lib/account";
+import { promoteRitjesVoorMorgen } from "@/lib/planning-promote";
 
 export const dynamic = "force-dynamic";
 
@@ -40,20 +41,19 @@ export async function DELETE(
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // If user deletes from Planning, clear stale timeslot/send-flag on the order
-    // so it does not keep reappearing in "Stuur appjes" unexpectedly.
+    // Clear stale timeslot on the order so it doesn't linger in ritjes-vandaag.
     const { error: orderUpdateErr } = await supabase
       .from("orders")
-      .update({
-        aankomsttijd_slot: null,
-        nieuw_appje_sturen: false,
-      })
+      .update({ aankomsttijd_slot: null })
       .eq("owner_email", ownerEmail)
       .eq("id", String(slot.order_id));
     if (orderUpdateErr) {
       console.error("[api/planning-slots DELETE] order update", orderUpdateErr);
       return NextResponse.json({ error: orderUpdateErr.message }, { status: 500 });
     }
+
+    // Als de planning nu leeg is, promoot ritjes voor morgen naar vandaag.
+    await promoteRitjesVoorMorgen(ownerEmail, supabase as any);
 
     return NextResponse.json({ ok: true }, { headers: { "Cache-Control": "no-store" } });
   } catch (e) {

@@ -3,6 +3,7 @@ import { createServerSupabaseClient } from "@/lib/supabase";
 import { sendWhatsAppByEvent } from "@/lib/whatsapp";
 import { requireAccountEmail } from "@/lib/account";
 import { verwerkGarantiebewijs } from "@/lib/garantiebewijs";
+import { promoteRitjesVoorMorgen } from "@/lib/planning-promote";
 
 export const dynamic = "force-dynamic";
 
@@ -156,6 +157,9 @@ export async function POST(request: NextRequest) {
     if (delErr) {
       console.error("[api/afronden] delete planning_slots fout:", delErr);
     }
+
+    // Als planning nu leeg is, promoot ritjes voor morgen naar vandaag.
+    await promoteRitjesVoorMorgen(ownerEmail, supabase as any);
 
     const waRes = await sendWhatsAppByEvent(
       "afronden",

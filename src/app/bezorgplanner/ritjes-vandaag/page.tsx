@@ -144,9 +144,6 @@ export default function RitjesVandaagPage() {
       "Meenemen in planning (anders veranderen naar nee)": (rowIndex: number, value: string, onSave: (v: string) => void) => (
         <JaNeeCell value={value} onSave={onSave} isDataRow={rowIndex < orders.length} />
       ),
-      "Nieuw appje sturen?": (rowIndex: number, value: string, onSave: (v: string) => void) => (
-        <JaNeeCell value={value} onSave={onSave} isDataRow={rowIndex < orders.length} />
-      ),
       "Betaald?": (rowIndex: number, value: string, onSave: (v: string) => void) => (
         <JaNeeCell value={value} onSave={onSave} isDataRow={rowIndex < orders.length} />
       ),
