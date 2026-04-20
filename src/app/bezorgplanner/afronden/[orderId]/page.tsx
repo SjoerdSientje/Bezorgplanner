@@ -173,7 +173,7 @@ export default function AfrondenVragenlijstPage({
     } finally {
       setSaving(false);
     }
-  }, [order, bezorgerNaam, betaalOptie, betaalAnders, betaalBedrag, router]);
+  }, [order, bezorgerNaam, betaalOptie, betaalAnders, betaalBedrag, serienummer, isMpOrder, needsBedrag]);
 
   return (
     <>

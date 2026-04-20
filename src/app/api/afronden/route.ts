@@ -78,7 +78,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Order niet gevonden." }, { status: 404 });
     }
 
-    const toMpOrders = isMpTagged(order.mp_tags);
+    const toMpOrders =
+      isMpTagged(order.mp_tags) ||
+      String((order as any).source ?? "").toLowerCase() === "mp" ||
+      isMpOrderNummer((order as any).order_nummer);
     const nextStatus = toMpOrders ? "mp_orders" : "bezorgd";
 
     // MP-orders: verstuur aankoopbewijs na afronden met het opgegeven serienummer.
