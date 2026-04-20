@@ -15,6 +15,7 @@ interface ProductRegel {
   id: number;
   type: ProductType;
   naam: string;
+  prijs: string;
   levering: Levering;
   montageOpmerking: string;
   achterzitje: JaNee;
@@ -35,7 +36,6 @@ interface FormData {
   bezorgtijd_voorkeur: string;
   datum_voorkeur: string;
   opmerking: string;
-  totaal_prijs: string;
 }
 
 const EMPTY: FormData = {
@@ -50,7 +50,6 @@ const EMPTY: FormData = {
   bezorgtijd_voorkeur: "",
   datum_voorkeur: "",
   opmerking: "",
-  totaal_prijs: "",
 };
 
 let nextId = 1;
@@ -58,7 +57,8 @@ function mkId() { return nextId++; }
 
 function defaultProduct(): ProductRegel {
   return {
-    id: mkId(), type: "fiets", naam: "", levering: "Volledig rijklaar", montageOpmerking: "",
+    id: mkId(), type: "fiets", naam: "", prijs: "", levering: "Volledig rijklaar",
+    montageOpmerking: "",
     achterzitje: null, achterzitjeGemonteerd: null,
     voorrekje: null, voorrekjeGemonteerd: null,
   };
@@ -182,10 +182,17 @@ export default function NieuweMarktplaatsOrderPage() {
     setGarantieWarning(null);
 
     try {
+      const totaalPrijsBerekend = producten
+        .reduce((sum, p) => sum + (parseFloat(p.prijs.replace(",", ".")) || 0), 0);
       const res = await fetch("/api/mp-order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ soort, ...form, producten_lijst: producten }),
+        body: JSON.stringify({
+          soort,
+          ...form,
+          totaal_prijs: String(totaalPrijsBerekend),
+          producten_lijst: producten,
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setError(data.error ?? "Opslaan mislukt."); return; }
@@ -349,19 +356,38 @@ export default function NieuweMarktplaatsOrderPage() {
                         )}
                       </div>
 
-                      {/* Naam */}
-                      <div className="mb-3">
-                        <label className="mb-1 block text-sm font-medium text-koopje-black">
-                          {product.type === "fiets" ? "Fietsnaam" : "Productnaam"}
-                          <span className="ml-1 text-koopje-orange">*</span>
-                        </label>
-                        <input
-                          type="text"
-                          value={product.naam}
-                          onChange={(e) => updateProduct(product.id, { naam: e.target.value })}
-                          placeholder={product.type === "fiets" ? "bijv. V20 PRO Fatbike 2026" : "bijv. telefoonhouder"}
-                          className="w-full rounded-xl border border-koopje-black/20 px-3 py-2.5 text-sm text-koopje-black placeholder:text-koopje-black/30 focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
-                        />
+                      {/* Naam + Prijs */}
+                      <div className="mb-3 flex gap-3">
+                        <div className="flex-1">
+                          <label className="mb-1 block text-sm font-medium text-koopje-black">
+                            {product.type === "fiets" ? "Fietsnaam" : "Productnaam"}
+                            <span className="ml-1 text-koopje-orange">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={product.naam}
+                            onChange={(e) => updateProduct(product.id, { naam: e.target.value })}
+                            placeholder={product.type === "fiets" ? "bijv. V20 PRO Fatbike 2026" : "bijv. telefoonhouder"}
+                            className="w-full rounded-xl border border-koopje-black/20 px-3 py-2.5 text-sm text-koopje-black placeholder:text-koopje-black/30 focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
+                          />
+                        </div>
+                        <div className="w-28 shrink-0">
+                          <label className="mb-1 block text-sm font-medium text-koopje-black">
+                            Prijs (€)
+                          </label>
+                          <div className="relative">
+                            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-koopje-black/40">€</span>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={product.prijs}
+                              onChange={(e) => updateProduct(product.id, { prijs: e.target.value })}
+                              placeholder="0"
+                              className="w-full rounded-xl border border-koopje-black/20 py-2.5 pl-7 pr-2 text-sm text-koopje-black placeholder:text-koopje-black/30 focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
+                            />
+                          </div>
+                        </div>
                       </div>
 
                       {/* Levering — alleen voor fietsen */}
@@ -463,19 +489,20 @@ export default function NieuweMarktplaatsOrderPage() {
                   Product toevoegen
                 </button>
 
-                {/* Totaal prijs */}
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-koopje-black">
-                    Totaal prijs (€)<span className="ml-1 text-koopje-orange">*</span>
-                  </label>
-                  <input
-                    type="number"
-                    value={form.totaal_prijs}
-                    onChange={(e) => setField("totaal_prijs", e.target.value)}
-                    placeholder="850"
-                    className="w-full rounded-xl border border-koopje-black/20 px-3 py-2.5 text-sm text-koopje-black placeholder:text-koopje-black/30 focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
-                  />
-                </div>
+                {/* Berekend totaal */}
+                {(() => {
+                  const totaal = producten.reduce(
+                    (sum, p) => sum + (parseFloat(p.prijs.replace(",", ".")) || 0), 0
+                  );
+                  return (
+                    <div className="flex items-center justify-between rounded-xl border border-koopje-black/10 bg-white px-4 py-3">
+                      <span className="text-sm font-medium text-koopje-black">Totaal</span>
+                      <span className="text-base font-semibold text-koopje-black">
+                        € {totaal.toLocaleString("nl-NL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                  );
+                })()}
               </div>
 
               {error && (

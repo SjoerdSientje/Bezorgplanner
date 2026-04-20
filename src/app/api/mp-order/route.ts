@@ -22,6 +22,7 @@ function extractModel(producten: string | null): string | null {
 interface ProductRegel {
   type: "fiets" | "extra";
   naam: string;
+  prijs?: string | number | null;
   levering: "Volledig rijklaar" | "In doos";
   montageOpmerking: string;
   achterzitje?: "ja" | "nee" | null;
@@ -47,20 +48,23 @@ function buildMpFietsNaamMetMontage(p: ProductRegel): string {
  * - gemonteerd=ja → extra property op de fiets (verschijnt alleen in producten-dropdown)
  * - gemonteerd=nee → los extra product (paklijst + afronden checklist)
  */
+function parsePrijs(v: string | number | null | undefined): number {
+  if (v == null || v === "") return 0;
+  const n = typeof v === "number" ? v : parseFloat(String(v).replace(",", "."));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
 function buildMpLineItemsJson(
   productenLijst: ProductRegel[],
-  rules: ProductDefaultItemsRulesV1,
-  totaalPrijs: number | null
+  rules: ProductDefaultItemsRulesV1
 ): string | null {
   if (!productenLijst?.length) return null;
 
   const lineItems: ShopifyLineItem[] = [];
-  // De totaalprijs gaat naar de eerste fiets; losse extra's blijven op €0
-  // (split per product is onbekend bij MP-orders die alleen een totaal opgeven).
-  let fietsPrice = totaalPrijs != null && totaalPrijs > 0 ? totaalPrijs : 0;
-  let firstFietsUsed = false;
 
   for (const p of productenLijst) {
+    const productPrijs = parsePrijs(p.prijs);
+
     if (p.type === "fiets") {
       const montageProps: { name: string; value: string }[] = [];
       const losseExtras: string[] = [];
@@ -91,18 +95,14 @@ function buildMpLineItemsJson(
           : []),
       ];
 
-      // Eerste fiets krijgt het totale bedrag; volgende fietsen blijven op €0
-      const price = !firstFietsUsed ? fietsPrice : 0;
-      firstFietsUsed = true;
+      lineItems.push({ name: buildMpFietsNaamMetMontage(p), price: productPrijs, properties: props });
 
-      lineItems.push({ name: buildMpFietsNaamMetMontage(p), price, properties: props });
-
-      // Losse extra's als aparte line items na de fiets
+      // Losse extra's als aparte line items na de fiets (prijs €0, horen bij de fiets)
       for (const extra of losseExtras) {
         lineItems.push({ name: extra, price: 0, properties: [] });
       }
     } else {
-      lineItems.push({ name: p.naam, price: 0, properties: [] });
+      lineItems.push({ name: p.naam, price: productPrijs, properties: [] });
     }
   }
 
@@ -184,12 +184,17 @@ export async function POST(request: NextRequest) {
       orderNummer = `#MPB${isNaN(prev) ? 1025 : prev + 1}`;
     }
 
-    const totaalPrijs = body.totaal_prijs ? parseFloat(String(body.totaal_prijs)) : null;
-
-    // Nieuwe producten-lijst van form (bevat fiets/extra + levering + montage)
+    // Nieuwe producten-lijst van form (bevat fiets/extra + levering + montage + prijs)
     const productenLijst: ProductRegel[] = Array.isArray(body.producten_lijst)
       ? body.producten_lijst
       : [];
+
+    // Totaalprijs: som van product-prijzen (of fallback op handmatig ingevoerd totaal_prijs)
+    const totaalPrijsUitProducten = productenLijst.length
+      ? productenLijst.reduce((sum, p) => sum + parsePrijs(p.prijs), 0)
+      : null;
+    const totaalPrijs = totaalPrijsUitProducten
+      ?? (body.totaal_prijs ? parseFloat(String(body.totaal_prijs)) : null);
 
     // Producten-tekst: namen van alle producten, newline-separated
     const productenTekst = productenLijst.length
@@ -222,7 +227,7 @@ export async function POST(request: NextRequest) {
     const productRules = await loadProductDefaultItemsRules(supabaseTemp, ownerEmail);
     // line_items_json
     const lineItemsJson = productenLijst.length
-      ? buildMpLineItemsJson(productenLijst, productRules, totaalPrijs)
+      ? buildMpLineItemsJson(productenLijst, productRules)
       : null;
 
     // Bereken datum_opmerking van te voren zodat we meenemen_in_planning kunnen bepalen
