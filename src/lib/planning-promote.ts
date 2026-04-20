@@ -21,9 +21,9 @@ function getTomorrowAmsterdam(): string {
 }
 
 /**
- * Returns the target date for new planning slots:
- * - If there are active (non-afgerond) planning slots → tomorrow ("ritjes voor morgen")
- * - If planning is empty → use getPlanningDateForGoedkeuren() (today before 17:00, tomorrow after)
+ * Gebruikt door "Planning goedkeuren":
+ * - Als er actieve planning-slots zijn → morgen (nieuwe batch als "ritjes voor morgen")
+ * - Als planning leeg is → planningDate (vandaag vóór 17:00, morgen erna)
  */
 export async function getTargetPlanningDate(
   ownerEmail: string,
@@ -41,6 +41,32 @@ export async function getTargetPlanningDate(
   }
   const { date } = getPlanningDateForGoedkeuren();
   return { date, isRitjesVoorMorgen: false };
+}
+
+/**
+ * Gebruikt door "Stuur appjes → Nieuwe order":
+ * Voeg toe aan de LAATSTE (meest toekomstige) bestaande planning-batch.
+ * Als er geen actieve slots zijn → planningDate (vandaag/morgen op basis van 17:00).
+ */
+export async function getLatestOrNewPlanningDate(
+  ownerEmail: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: SupabaseClient<any, any, any>
+): Promise<string> {
+  const { data: latestSlot } = await supabase
+    .from("planning_slots")
+    .select("datum")
+    .eq("owner_email", ownerEmail)
+    .neq("status", "afgerond")
+    .order("datum", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (latestSlot?.datum) {
+    return String(latestSlot.datum);
+  }
+  const { date } = getPlanningDateForGoedkeuren();
+  return date;
 }
 
 /**

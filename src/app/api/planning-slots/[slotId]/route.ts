@@ -41,17 +41,6 @@ export async function DELETE(
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // Clear stale timeslot on the order so it doesn't linger in ritjes-vandaag.
-    const { error: orderUpdateErr } = await supabase
-      .from("orders")
-      .update({ aankomsttijd_slot: null })
-      .eq("owner_email", ownerEmail)
-      .eq("id", String(slot.order_id));
-    if (orderUpdateErr) {
-      console.error("[api/planning-slots DELETE] order update", orderUpdateErr);
-      return NextResponse.json({ error: orderUpdateErr.message }, { status: 500 });
-    }
-
     // Als de planning nu leeg is, promoot ritjes voor morgen naar vandaag.
     await promoteRitjesVoorMorgen(ownerEmail, supabase as any);
 

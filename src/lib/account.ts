@@ -65,7 +65,7 @@ export function maySendWhatsAppForOwner(
   if (!ownerEmail || normalizeEmail(ownerEmail) !== normalizeEmail(MALYAR_ACCOUNT)) {
     return { ok: true };
   }
-  const to = normalizePhoneDigitsForCompare(order.telefoon_e164 ?? order.telefoon_nummer ?? "");
+  const to = normalizePhoneDigitsForCompare(order.telefoon_e164 || order.telefoon_nummer || "");
   if (to === MALYAR_WHATSAPP_ALLOWED_RECIPIENT) {
     return { ok: true };
   }

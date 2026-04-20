@@ -386,7 +386,7 @@ export async function sendWhatsAppByEvent(
     return { ok: false, skipped: true, error: gate.error };
   }
 
-  const to = String(order.telefoon_e164 ?? order.telefoon_nummer ?? "");
+  const to = String(order.telefoon_e164 || order.telefoon_nummer || "");
 
   // 0) Vaste businessregels (harde mapping)
   const fixed = resolveFixedBusinessTemplate(event, order);

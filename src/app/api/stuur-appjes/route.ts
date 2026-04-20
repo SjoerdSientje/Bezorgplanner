@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { sendWhatsAppByEvent } from "@/lib/whatsapp";
 import { requireAccountEmail } from "@/lib/account";
-import { getTargetPlanningDate } from "@/lib/planning-promote";
+import { getLatestOrNewPlanningDate } from "@/lib/planning-promote";
 
 /**
  * POST /api/stuur-appjes
@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
     // Voor "nieuwe_order": toevoegen aan planning
     const nieuweOrderOrders = selected.filter((o) => o.section === "nieuwe_order");
     if (nieuweOrderOrders.length > 0) {
-      const { date: targetDate } = await getTargetPlanningDate(ownerEmail, supabase as any);
+      const targetDate = await getLatestOrNewPlanningDate(ownerEmail, supabase as any);
 
       // Bepaal hoogste volgorde voor die datum
       const { data: existingSlots } = await supabase
@@ -86,6 +86,14 @@ export async function POST(request: NextRequest) {
           ? Number((existingSlots[0] as Record<string, unknown>).volgorde ?? 0)
           : 0;
 
+      // Verwijder eventuele bestaande slots voor deze orders op die datum (vermijd duplicaten)
+      await supabase
+        .from("planning_slots")
+        .delete()
+        .eq("owner_email", ownerEmail)
+        .eq("datum", targetDate)
+        .in("order_id", nieuweOrderOrders.map((o) => o.order_id));
+
       const slotsToInsert = nieuweOrderOrders.map((o, i) => ({
         owner_email: ownerEmail,
         datum: targetDate,
@@ -93,13 +101,13 @@ export async function POST(request: NextRequest) {
         volgorde: maxVolgorde + i + 1,
         aankomsttijd: o.aankomsttijd_slot,
         tijd_opmerking: String(
-          metaById.get(o.order_id)?.bezorgtijd_voorkeur ?? o.bezorgtijd_voorkeur ?? ""
+          (metaById.get(o.order_id) as Record<string, unknown> | undefined)?.bezorgtijd_voorkeur ?? o.bezorgtijd_voorkeur ?? ""
         ),
       }));
 
       const { error: insertErr } = await supabase
         .from("planning_slots")
-        .upsert(slotsToInsert, { onConflict: "owner_email,order_id,datum" });
+        .insert(slotsToInsert);
       if (insertErr) {
         console.error("[api/stuur-appjes] planning insert:", insertErr);
       }

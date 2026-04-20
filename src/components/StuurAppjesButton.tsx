@@ -10,8 +10,8 @@ type AppjesOrder = {
   order_nummer: string;
   naam: string;
   aankomsttijd_slot: string;
-  telefoon_e164: string;
-  telefoon_nummer: string;
+  telefoon_e164: string | null;
+  telefoon_nummer: string | null;
   bezorgtijd_voorkeur: string;
 };
 
@@ -165,8 +165,8 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
       order_nummer: String(o.order_nummer ?? ""),
       naam: String(o.naam ?? ""),
       aankomsttijd_slot: String(o.aankomsttijd_slot ?? ""),
-      telefoon_e164: String(o.telefoon_e164 ?? ""),
-      telefoon_nummer: String(o.telefoon_nummer ?? ""),
+      telefoon_e164: o.telefoon_e164 ? String(o.telefoon_e164) : null,
+      telefoon_nummer: o.telefoon_nummer ? String(o.telefoon_nummer) : null,
       bezorgtijd_voorkeur: String(o.bezorgtijd_voorkeur ?? ""),
     };
   }
@@ -182,9 +182,8 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
           : order.aankomsttijd_slot,
       order_nummer: cur.order_nummer != null ? String(cur.order_nummer) : order.order_nummer,
       naam: cur.naam != null ? String(cur.naam) : order.naam,
-      telefoon_e164: cur.telefoon_e164 != null ? String(cur.telefoon_e164) : order.telefoon_e164,
-      telefoon_nummer:
-        cur.telefoon_nummer != null ? String(cur.telefoon_nummer) : order.telefoon_nummer,
+      telefoon_e164: cur.telefoon_e164 ? String(cur.telefoon_e164) : order.telefoon_e164,
+      telefoon_nummer: cur.telefoon_nummer ? String(cur.telefoon_nummer) : order.telefoon_nummer,
       bezorgtijd_voorkeur:
         cur.bezorgtijd_voorkeur != null
           ? String(cur.bezorgtijd_voorkeur)
