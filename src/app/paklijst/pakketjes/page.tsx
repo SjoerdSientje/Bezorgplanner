@@ -88,7 +88,7 @@ export default function PakketjesPaklijstPage() {
               <div>
                 <h1 className="text-xl font-semibold text-koopje-black sm:text-2xl">Paklijst Pakketjes</h1>
                 <p className="text-sm text-koopje-black/60">
-                  Orders onder €500 komen automatisch binnen via de Shopify-webhook
+                  Orders onder €450 komen automatisch binnen via de Shopify-webhook
                 </p>
               </div>
             </div>
@@ -130,7 +130,7 @@ export default function PakketjesPaklijstPage() {
 
               {data.orders.length === 0 ? (
                 <div className="rounded-2xl border-2 border-dashed border-stone-200 py-16 text-center text-sm text-stone-500">
-                  Nog geen pakketjes in de wachtrij. Nieuwe Shopify-orders onder €500 verschijnen hier automatisch.
+                  Nog geen pakketjes in de wachtrij. Nieuwe Shopify-orders onder €450 verschijnen hier automatisch.
                 </div>
               ) : (
                 <div className="space-y-4">

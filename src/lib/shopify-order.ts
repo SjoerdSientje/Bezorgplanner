@@ -104,12 +104,12 @@ const PAKKETJES_MAX_PRIJS = 450;
 
 function parseSpecialServiceProductFromNote(note: string | null | undefined): string {
   const text = String(note ?? "");
-  const match = text.match(/^\s*(?:naleveren|garantie)\s*:\s*([^\n\r]+)/im);
+  const match = text.match(/^\s*(?:nalevering|naleveren|garantie)\s*:\s*([^\n\r]+)/im);
   return String(match?.[1] ?? "").trim();
 }
 
 /**
- * Pakketjes-wachtrij: totaal &lt; €500, niet geannuleerd, nog niet volledig verzonden.
+ * Pakketjes-wachtrij: totaal &lt; €450, niet geannuleerd, nog niet volledig verzonden.
  * (Webhook; zelfde showroom-uitsluiting als Ritjes.)
  */
 export function qualifiesForPakketjes(order: ShopifyOrder): boolean {
@@ -167,7 +167,7 @@ export function passesRitjesFilter(order: ShopifyOrder): boolean {
   const hasProefrit = tags.includes("proefrit");
 
   if (hasTerugbrengen || hasOphalen || hasReparatieAanHuis || hasProefrit) return true;
-  if (totalPrice > 500) return true;
+  if (totalPrice >= 450) return true;
   return false;
 }
 
