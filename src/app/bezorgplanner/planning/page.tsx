@@ -424,13 +424,21 @@ export default function PlanningPage() {
       map.get(key)!.push(r);
     }
 
+    const parseMinutes = (t: string): number => {
+      // Accepteert zowel "9:00" als "9.00"
+      const clean = t.replace(".", ":").trim();
+      const [h, m] = clean.split(":").map(Number);
+      if (!Number.isFinite(h)) return Infinity;
+      return h * 60 + (Number.isFinite(m) ? m : 0);
+    };
+
     const sortByTijd = (a: PlanningRow, b: PlanningRow) => {
       const ta = String(a.aankomsttijd ?? "").split(" - ")[0].trim();
       const tb = String(b.aankomsttijd ?? "").split(" - ")[0].trim();
       if (!ta && !tb) return 0;
       if (!ta) return 1;   // geen tijd → naar achter
       if (!tb) return -1;
-      return ta.localeCompare(tb);
+      return parseMinutes(ta) - parseMinutes(tb);
     };
 
     return Array.from(map.entries())
