@@ -403,7 +403,19 @@ export default function PlanningPage() {
     fetchPlanning();
   }, [fetchPlanning]);
 
-  // Groepeer op datum; eerste (vroegste) datum = vandaag / actief, volgende = morgen
+  // Auto-refresh als de gebruiker terugkeert naar dit tabblad / venster.
+  useEffect(() => {
+    const onFocus = () => fetchPlanning();
+    const onVisible = () => { if (document.visibilityState === "visible") fetchPlanning(); };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [fetchPlanning]);
+
+  // Groepeer op datum; binnen elke datum sorteren op aankomsttijd vroeg→laat.
   const grouped = useMemo(() => {
     const map = new Map<string, PlanningRow[]>();
     for (const r of rows) {
@@ -411,8 +423,19 @@ export default function PlanningPage() {
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(r);
     }
-    const sorted = Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
-    return sorted;
+
+    const sortByTijd = (a: PlanningRow, b: PlanningRow) => {
+      const ta = String(a.aankomsttijd ?? "").split(" - ")[0].trim();
+      const tb = String(b.aankomsttijd ?? "").split(" - ")[0].trim();
+      if (!ta && !tb) return 0;
+      if (!ta) return 1;   // geen tijd → naar achter
+      if (!tb) return -1;
+      return ta.localeCompare(tb);
+    };
+
+    return Array.from(map.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([datum, datumRows]) => [datum, [...datumRows].sort(sortByTijd)] as [string, PlanningRow[]]);
   }, [rows]);
 
   return (
