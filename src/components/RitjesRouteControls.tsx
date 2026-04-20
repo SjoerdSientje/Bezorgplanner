@@ -119,7 +119,18 @@ export default function RitjesRouteControls({
         setGoedkeurenMessage({ type: "error", text: data.error || "Goedkeuren mislukt." });
         return;
       }
-      setGoedkeurenMessage({ type: "ok", text: data.message || "Planning goedgekeurd." });
+      const wa = data?.whatsapp;
+      if (wa && typeof wa.sent === "number") {
+        const suffix = wa.failed > 0
+          ? ` Appjes: ${wa.sent} verzonden, ${wa.failed} mislukt.`
+          : ` Appjes: ${wa.sent} verzonden.`;
+        setGoedkeurenMessage({
+          type: wa.failed > 0 ? "error" : "ok",
+          text: (data.message || "Planning goedgekeurd.") + suffix,
+        });
+      } else {
+        setGoedkeurenMessage({ type: "ok", text: data.message || "Planning goedgekeurd." });
+      }
     } catch {
       setGoedkeurenMessage({ type: "error", text: "Er ging iets mis. Probeer het opnieuw." });
     } finally {

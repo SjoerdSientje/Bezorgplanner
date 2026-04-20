@@ -5,6 +5,7 @@ import {
   isDatumOpmerkingVandaagOfMorgen,
 } from "@/lib/planning-date";
 import { getTargetPlanningDate } from "@/lib/planning-promote";
+import { sendWhatsAppByEvent } from "@/lib/whatsapp";
 import { requireAccountEmail } from "@/lib/account";
 import { verwerkGarantiebewijs } from "@/lib/garantiebewijs";
 
@@ -136,6 +137,40 @@ export async function POST(request: NextRequest) {
       console.error("[api/planning-goedkeuren] update order toggles:", updateOrdersErr);
     }
 
+    // Stuur WhatsApp-bericht per order — altijd de standaard template op basis van ordertype,
+    // nooit nieuw_tijdslot (in_planning_en_ritjes_vandaag = false).
+    const whatsappDetails: string[] = [];
+    let whatsappSent = 0;
+    let whatsappFailed = 0;
+    for (const o of sorted as any[]) {
+      const sendRes = await sendWhatsAppByEvent(
+        "stuur_appjes",
+        {
+          order_nummer: o.order_nummer,
+          naam: o.naam,
+          aankomsttijd_slot: o.aankomsttijd_slot,
+          bestelling_totaal_prijs: o.bestelling_totaal_prijs,
+          telefoon_e164: o.telefoon_e164,
+          telefoon_nummer: o.telefoon_nummer,
+          type: o.type,
+          betaald: o.betaald,
+          mp_tags: o.mp_tags,
+          datum: o.datum ?? targetDate,
+          opmerkingen_klant: o.opmerkingen_klant,
+          bezorgtijd_voorkeur: o.bezorgtijd_voorkeur,
+          in_planning_en_ritjes_vandaag: false,
+        },
+        { ownerEmail }
+      );
+      if (sendRes.ok) {
+        whatsappSent += 1;
+        whatsappDetails.push(`Order ${o.order_nummer}: verzonden`);
+      } else {
+        whatsappFailed += 1;
+        whatsappDetails.push(`Order ${o.order_nummer}: ${sendRes.error ?? "mislukt"}`);
+      }
+    }
+
     return NextResponse.json({
       ok: true,
       message: isRitjesVoorMorgen
@@ -144,6 +179,11 @@ export async function POST(request: NextRequest) {
       count: sorted.length,
       planningDate: targetDate,
       isRitjesVoorMorgen,
+      whatsapp: {
+        sent: whatsappSent,
+        failed: whatsappFailed,
+        details: whatsappDetails,
+      },
     });
   } catch (e) {
     console.error("[api/planning-goedkeuren]", e);
