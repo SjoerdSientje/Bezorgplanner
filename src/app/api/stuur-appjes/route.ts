@@ -112,12 +112,6 @@ export async function POST(request: NextRequest) {
         console.error("[api/stuur-appjes] planning insert:", insertErr);
       }
 
-      // meenemen_in_planning op false zodat ze niet nogmaals via goedkeuren worden meegenomen
-      await supabase
-        .from("orders")
-        .update({ meenemen_in_planning: false })
-        .eq("owner_email", ownerEmail)
-        .in("id", nieuweOrderOrders.map((o) => o.order_id));
     }
 
     // Verstuur WhatsApp per order

@@ -9,6 +9,7 @@ import {
 } from "@/lib/shopify-order";
 import type { ProductDefaultItemsRulesV1 } from "@/lib/product-default-items-rules";
 import { loadProductDefaultItemsRules } from "@/lib/product-rules-server";
+import { isDatumOpmerkingVandaagOfMorgen } from "@/lib/planning-date";
 
 /** Extraheer fietsmodel: 'V20 PRO Fatbike 2026 + ringslot | Combi-Deal 🔥' → 'V20 PRO' */
 function extractModel(producten: string | null): string | null {
@@ -224,6 +225,13 @@ export async function POST(request: NextRequest) {
       ? buildMpLineItemsJson(productenLijst, productRules, totaalPrijs)
       : null;
 
+    // Bereken datum_opmerking van te voren zodat we meenemen_in_planning kunnen bepalen
+    const mpDatumOpmerking = soort === "bezorging"
+      ? (((body.datum_voorkeur ?? "").trim().toLowerCase() === "x")
+          ? "vandaag"
+          : (body.datum_voorkeur ?? "").trim() || null)
+      : null;
+
     const insert = {
       owner_email: ownerEmail,
       source: "mp" as const,
@@ -244,7 +252,9 @@ export async function POST(request: NextRequest) {
       model: soort === "bezorging" ? modelBerekend : null,
       line_items_json: lineItemsJson,
       datum: datumDb,
-      meenemen_in_planning: soort === "bezorging" ? true : false,
+      meenemen_in_planning: soort === "bezorging"
+        ? isDatumOpmerkingVandaagOfMorgen(mpDatumOpmerking)
+        : false,
 
       // Bezorging defaults
       ...(soort === "bezorging" && {
@@ -255,9 +265,7 @@ export async function POST(request: NextRequest) {
         bezorgtijd_voorkeur: ((body.bezorgtijd_voorkeur ?? "").trim().toLowerCase() === "x")
           ? "geen"
           : (body.bezorgtijd_voorkeur ?? "").trim() || null,
-        datum_opmerking: ((body.datum_voorkeur ?? "").trim().toLowerCase() === "x")
-          ? "vandaag"
-          : (body.datum_voorkeur ?? "").trim() || null,
+        datum_opmerking: mpDatumOpmerking,
         opmerkingen_klant: ((body.opmerking ?? "").trim().toLowerCase() === "x")
           ? "geen opmerking"
           : (body.opmerking ?? "").trim() || null,

@@ -9,6 +9,7 @@ import {
   type ProductDefaultItemsRulesV1,
 } from "@/lib/product-default-items-rules";
 import { hasLeveringProperty } from "@/lib/line-items-json-sanitize";
+import { isDatumOpmerkingVandaagOfMorgen } from "@/lib/planning-date";
 
 export { extractModelnaamVanProduct } from "@/lib/bike-model-name";
 export type { ProductDefaultItemsRulesV1 } from "@/lib/product-default-items-rules";
@@ -691,7 +692,7 @@ export function mapShopifyOrderToRitjesRow(
     adres_url: buildAdresUrl(volledigAdres) || null,
     bel_link: buildBelLink(telefoon, firstName) || null,
     bezorgtijd_voorkeur: noteParsed.bezorgtijdVoorkeur || null,
-    meenemen_in_planning: true,
+    meenemen_in_planning: isDatumOpmerkingVandaagOfMorgen(noteParsed.datumOpmerking),
     nieuw_appje_sturen: true,
     datum_opmerking: noteParsed.datumOpmerking || null,
     opmerkingen_klant: noteParsed.opmerkingenKlant || null,

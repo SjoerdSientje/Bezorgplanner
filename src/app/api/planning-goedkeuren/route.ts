@@ -126,16 +126,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Zet meenemen_in_planning op false zodat orders niet nogmaals worden meegenomen.
-    const plannedOrderIds = sorted.map((o) => String(o.id));
-    const { error: updateOrdersErr } = await supabase
-      .from("orders")
-      .update({ meenemen_in_planning: false })
-      .eq("owner_email", ownerEmail)
-      .in("id", plannedOrderIds);
-    if (updateOrdersErr) {
-      console.error("[api/planning-goedkeuren] update order toggles:", updateOrdersErr);
-    }
 
     // Stuur WhatsApp-bericht per order — altijd de standaard template op basis van ordertype,
     // nooit nieuw_tijdslot (in_planning_en_ritjes_vandaag = false).
