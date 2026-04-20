@@ -124,7 +124,7 @@ function resolveFixedBusinessTemplate(
     if (kind === "terugbrengen") return { name: "fatbike_terugbrengen", language: "nl" };
     if (kind === "ophalen") return { name: "fatbike_ophalen", language: "nl" };
     if (kind === "reparatie_aan_huis") {
-      return { name: "bezorgtijd_reparatie_aan_huis", language: "nl" };
+      return { name: "bezorgtijd_reperatie_aan_huis", language: "nl" };
     }
     if (kind === "proefrit") {
       return { name: "bezorgtijd_proefrit_aan_huis", language: "nl" };
