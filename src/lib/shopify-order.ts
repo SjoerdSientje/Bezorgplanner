@@ -312,23 +312,28 @@ function splitBikesOnAmpersand(title: string): string[] {
   return title.split("&").map((s) => s.trim()).filter(Boolean);
 }
 
-function getAantalFietsen(order: ShopifyOrder): number {
+function getAantalFietsen(order: ShopifyOrder): number | null {
   const tags = (order.tags ?? "").toLowerCase();
   const lineItems = order.line_items ?? [];
+
+  // Reparatie aan huis = geen fietsen meenemen in de bus
+  if (tags.includes("reparatie aan huis")) return 0;
+
   const isReparatieType =
     tags.includes("terugbrengen") ||
     tags.includes("ophalen") ||
-    tags.includes("reparatie aan huis") ||
     tags.includes("proefrit");
 
-  if (isReparatieType) return lineItems.length;
-  return lineItems
+  if (isReparatieType) return lineItems.length || null;
+
+  const count = lineItems
     .filter((item) => isFietsShopifyLineItem(item))
     .reduce((sum, item) => {
       // Elke '&' in de titel is een extra fiets
       const bikeCount = splitBikesOnAmpersand(item.name ?? "").length || 1;
       return sum + bikeCount;
     }, 0);
+  return count || null;
 }
 
 function getProducten(order: ShopifyOrder): string {
@@ -697,7 +702,7 @@ export function mapShopifyOrderToRitjesRow(
     telefoon_nummer: telefoon !== "geen nummer" ? telefoon : null,
     order_id: order.id != null ? String(order.id) : null,
     datum: getDatum(order),
-    aantal_fietsen: getAantalFietsen(order) || null,
+    aantal_fietsen: getAantalFietsen(order),
     email: getEmail(order) !== "geen email" ? getEmail(order) : null,
     telefoon_e164: telefoon !== "geen nummer" ? phoneToE164(telefoon) : null,
     model: null,
