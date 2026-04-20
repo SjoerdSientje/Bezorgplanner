@@ -95,7 +95,6 @@ export async function GET(request: NextRequest) {
           volledig_adres: o.volledig_adres ?? "",
           telefoon_nummer: o.telefoon_nummer ?? "",
           email: o.email ?? "",
-          link_aankoopbewijs: o.link_aankoopbewijs ?? "",
         };
       })
       .filter((r) => r != null);

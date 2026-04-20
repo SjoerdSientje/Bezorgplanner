@@ -5,8 +5,6 @@ import Link from "next/link";
 import Header from "@/components/Header";
 import ProductenCell from "@/components/ProductenCell";
 import OpmerkingKlantCell from "@/components/OpmerkingKlantCell";
-import AankoopbewijsCell from "@/components/AankoopbewijsCell";
-
 const PLANNING_HEADERS = [
   "Order nummer",
   "Naam",
@@ -24,7 +22,6 @@ const PLANNING_HEADERS = [
   "Ingevuld Telefoon nummer",
   "Order Nummer",
   "Email",
-  "Link Aankoopbewijs",
 ];
 
 type PlanningRow = {
@@ -47,7 +44,6 @@ type PlanningRow = {
   volledig_adres: string;
   telefoon_nummer: string;
   email: string;
-  link_aankoopbewijs: string;
 };
 
 function formatCell(value: unknown): string {
@@ -91,13 +87,11 @@ function PlanningTabel({
   label,
   labelColor,
   onDeleteSlot,
-  onUpdateAankoopbewijs,
 }: {
   rows: PlanningRow[];
   label: string;
   labelColor: string;
   onDeleteSlot: (slotId: string, orderNummer: string) => void;
-  onUpdateAankoopbewijs: (orderId: string, next: { link: string; email: string }) => void;
 }) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const tableRef = useRef<HTMLTableElement | null>(null);
@@ -317,7 +311,6 @@ function PlanningTabel({
                       row.telefoon_nummer,
                       row.order_nummer,
                       row.email,
-                      row.link_aankoopbewijs,
                     ].map((v, i) => (
                       <td
                         key={i}
@@ -345,20 +338,6 @@ function PlanningTabel({
                             return <OpmerkingKlantCell value={String(row.opmerking_klant ?? "")} />;
                           }
 
-                          // Link Aankoopbewijs is the last column in the "Rest" array
-                          const isLinkCol = i === 10;
-                          if (isLinkCol) {
-                            return (
-                              <AankoopbewijsCell
-                                orderId={String(row.order_id ?? "")}
-                                link={String(v ?? "")}
-                                email={row.email}
-                                onUpdated={(next) =>
-                                  onUpdateAankoopbewijs(String(row.order_id ?? ""), next)
-                                }
-                              />
-                            );
-                          }
                           return formatCell(v);
                         })()}
                       </td>
@@ -419,18 +398,6 @@ export default function PlanningPage() {
     [fetchPlanning]
   );
 
-  const updateAankoopbewijs = useCallback(
-    (orderId: string, next: { link: string; email: string }) => {
-      setRows((prev) =>
-        prev.map((r) =>
-          String(r.order_id) === String(orderId)
-            ? { ...r, link_aankoopbewijs: next.link, email: next.email }
-            : r
-        )
-      );
-    },
-    []
-  );
 
   useEffect(() => {
     fetchPlanning();
@@ -495,7 +462,6 @@ export default function PlanningPage() {
                   idx === 0 ? "text-koopje-black" : "text-koopje-orange"
                 }
                 onDeleteSlot={deleteSlot}
-                onUpdateAankoopbewijs={updateAankoopbewijs}
               />
             ))
           )}
