@@ -16,7 +16,6 @@ const s = StyleSheet.create({
   bullet: { marginBottom: 5, textAlign: "center", lineHeight: 1.4 },
   dataBlok: { marginTop: 30, lineHeight: 1.85, textAlign: "center" },
   dataRij: { marginBottom: 4, textAlign: "center", fontFamily: "Helvetica-Bold", fontSize: 11 },
-  snummer: { marginTop: 2, textAlign: "center" },
 });
 
 export interface GarantiePdfData {
@@ -78,7 +77,9 @@ function Doc({ d }: { d: GarantiePdfData }) {
             <Text>Totaalprijs: {d.prijs}</Text>
           </View>
           {d.serienummer ? (
-            <Text style={s.snummer}>{d.serienummer}</Text>
+            <View style={s.dataRij}>
+              <Text>Serienummer: {d.serienummer}</Text>
+            </View>
           ) : null}
         </View>
 
