@@ -34,6 +34,7 @@ export async function GET(request: NextRequest) {
             naam: String(o.naam ?? "") || null,
             email: String(o.email ?? "") || null,
             producten: String(o.producten ?? "") || null,
+            model: String(o.model ?? "") || null,
             serienummer: String(o.serienummer ?? "") || null,
             totaal_prijs:
               o.bestelling_totaal_prijs != null ? Number(o.bestelling_totaal_prijs) : null,

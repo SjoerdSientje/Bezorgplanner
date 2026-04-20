@@ -13,6 +13,7 @@ export interface GarantieData {
   naam: string | null;
   email: string | null;
   producten: string | null;
+  model?: string | null;
   serienummer: string | null;
   totaal_prijs: number | null;
   aantal_fietsen: number | null;
@@ -66,7 +67,7 @@ export async function verwerkGarantiebewijs(
   const pdfData = {
     naam: String(o?.naam ?? data.naam ?? ""),
     datum: String(o?.datum ?? datumStr),
-    fiets: String(o?.fiets ?? extractModelnaam(data.producten)),
+    fiets: String(o?.fiets ?? data.model ?? extractModelnaam(data.producten)),
     prijs: String(o?.prijs ?? (data.totaal_prijs != null ? `€ ${data.totaal_prijs.toFixed(2)}` : "")),
     serienummer: inDoos ? "zelf invullen" : String(o?.serienummer ?? data.serienummer ?? ""),
   };

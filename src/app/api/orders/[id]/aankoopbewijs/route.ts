@@ -10,6 +10,7 @@ type OrderForAankoopbewijs = {
   naam: string | null;
   email: string | null;
   producten: string | null;
+  model: string | null;
   serienummer: string | null;
   bestelling_totaal_prijs: number | null;
   aantal_fietsen: number | null;
@@ -35,7 +36,7 @@ function toPdfDraft(order: OrderForAankoopbewijs) {
   return {
     naam: String(order.naam ?? ""),
     datum: `${dd}-${mm}-${yyyy}`,
-    fiets: extractModelnaam(order.producten),
+    fiets: String(order.model ?? "") || extractModelnaam(order.producten),
     prijs:
       order.bestelling_totaal_prijs != null
         ? `€ ${Number(order.bestelling_totaal_prijs).toFixed(2)}`
@@ -59,7 +60,7 @@ export async function GET(
     const { data: order, error: readErr } = await supabase
       .from("orders")
       .select(
-        "id, owner_email, order_nummer, naam, email, producten, serienummer, bestelling_totaal_prijs, aantal_fietsen, link_aankoopbewijs"
+        "id, owner_email, order_nummer, naam, email, producten, model, serienummer, bestelling_totaal_prijs, aantal_fietsen, link_aankoopbewijs"
       )
       .eq("id", orderId)
       .eq("owner_email", ownerEmail)
@@ -103,7 +104,7 @@ export async function POST(
     const { data: order, error: readErr } = await supabase
       .from("orders")
       .select(
-        "id, owner_email, order_nummer, naam, email, producten, serienummer, bestelling_totaal_prijs, aantal_fietsen, link_aankoopbewijs"
+        "id, owner_email, order_nummer, naam, email, producten, model, serienummer, bestelling_totaal_prijs, aantal_fietsen, link_aankoopbewijs"
       )
       .eq("id", orderId)
       .eq("owner_email", ownerEmail)
@@ -123,6 +124,7 @@ export async function POST(
         naam: order.naam,
         email: requestedEmail,
         producten: order.producten,
+        model: order.model,
         serienummer: order.serienummer,
         totaal_prijs: order.bestelling_totaal_prijs,
         aantal_fietsen: order.aantal_fietsen,

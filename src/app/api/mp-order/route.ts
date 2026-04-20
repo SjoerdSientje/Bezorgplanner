@@ -314,6 +314,7 @@ export async function POST(request: NextRequest) {
             naam: insert.naam,
             email: insert.email,
             producten: insert.producten,
+            model: insert.model ?? null,
             serienummer: insert.serienummer,
             totaal_prijs: insert.bestelling_totaal_prijs,
             aantal_fietsen: insert.aantal_fietsen,
