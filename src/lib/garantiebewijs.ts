@@ -58,16 +58,17 @@ const BUCKET = "garantiebewijzen";
 export async function verwerkGarantiebewijs(
   data: GarantieData,
   supabase: SupabaseClient,
-  options?: { skipEmail?: boolean; pdfOverrides?: GarantiePdfOverrides }
+  options?: { skipEmail?: boolean; pdfOverrides?: GarantiePdfOverrides; inDoos?: boolean }
 ): Promise<string> {
   const datumStr = formatDatum(new Date());
   const o = options?.pdfOverrides;
+  const inDoos = options?.inDoos === true;
   const pdfData = {
     naam: String(o?.naam ?? data.naam ?? ""),
     datum: String(o?.datum ?? datumStr),
     fiets: String(o?.fiets ?? extractModelnaam(data.producten)),
     prijs: String(o?.prijs ?? (data.totaal_prijs != null ? `€ ${data.totaal_prijs.toFixed(2)}` : "")),
-    serienummer: String(o?.serienummer ?? data.serienummer ?? ""),
+    serienummer: inDoos ? "zelf invullen" : String(o?.serienummer ?? data.serienummer ?? ""),
   };
 
   const pdfBuffer = await genereerGarantiePdf(pdfData);
@@ -93,7 +94,7 @@ export async function verwerkGarantiebewijs(
   const publicUrl = `${supabaseUrl}/storage/v1/object/public/${BUCKET}/${path}`;
 
   if (!options?.skipEmail) {
-    await stuurGarantieEmail(data, publicUrl, pdfBuffer, fileName);
+    await stuurGarantieEmail(data, publicUrl, pdfBuffer, fileName, inDoos);
   }
   return publicUrl;
 }
@@ -102,7 +103,8 @@ async function stuurGarantieEmail(
   data: GarantieData,
   garantieLink: string,
   pdfBuffer: Buffer,
-  pdfFileName: string
+  pdfFileName: string,
+  inDoos = false
 ): Promise<void> {
   const gmailUser = process.env.GMAIL_FROM;
   const gmailPass = process.env.GMAIL_APP_PASSWORD;
@@ -121,6 +123,7 @@ async function stuurGarantieEmail(
 
   const modelnaam = extractModelnaam(data.producten);
   const datumFormatted = formatDatum(new Date());
+  const serienummerDisplay = inDoos ? "zelf invullen" : (data.serienummer ?? "");
   const subject = `Garantiebewijs Koopjefatbike — ${modelnaam || "Fatbike"}`;
   const html = `
     <p>Beste ${data.naam ?? "klant"},</p>
@@ -129,9 +132,10 @@ async function stuurGarantieEmail(
     <p><a href="${garantieLink}" style="color:#F7941D;font-weight:bold;">Bekijk je garantiebewijs online</a></p>
     <p>
       <strong>Product:</strong> ${modelnaam || data.producten || ""}<br>
-      ${data.serienummer ? `<strong>Serienummer:</strong> ${data.serienummer}<br>` : ""}
+      ${serienummerDisplay ? `<strong>Serienummer:</strong> ${serienummerDisplay}<br>` : ""}
       <strong>Datum:</strong> ${datumFormatted}
     </p>
+    ${inDoos ? `<p style="background:#FFF3CD;border-left:4px solid #F7941D;padding:10px 14px;border-radius:4px;"><strong>Let op:</strong> vergeet niet je serienummer in te vullen in het garantiebewijs nadat je de fiets hebt gemonteerd.</p>` : ""}
     <p>Met vriendelijke groet,<br>Koopjefatbike</p>
   `;
 

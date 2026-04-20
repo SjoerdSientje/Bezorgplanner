@@ -23,7 +23,6 @@ export const RITJES_HEADERS = [
   "Email",
   "Nummer in E.164 formaat",
   "Model",
-  "Serienummer",
   "tag",
 ] as const;
 
@@ -48,7 +47,6 @@ export const RITJES_HEADER_TO_FIELD: Record<string, string> = {
   "Email": "email",
   "Nummer in E.164 formaat": "telefoon_e164",
   "Model": "model",
-  "Serienummer": "serienummer",
   "tag": "mp_tags",
 };
 

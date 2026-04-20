@@ -7,8 +7,6 @@ import {
 import { getTargetPlanningDate } from "@/lib/planning-promote";
 import { sendWhatsAppByEvent } from "@/lib/whatsapp";
 import { requireAccountEmail } from "@/lib/account";
-import { verwerkGarantiebewijs } from "@/lib/garantiebewijs";
-
 /**
  * POST /api/planning-goedkeuren
  *
@@ -62,41 +60,6 @@ export async function POST(request: NextRequest) {
       const startB = ((b.aankomsttijd_slot ?? "").toString().split(" - ")[0] ?? "");
       return startA.localeCompare(startB);
     });
-
-    // Zorg dat MP orders een aankoopbewijs-link hebben na goedkeuren.
-    for (const o of sorted as any[]) {
-      const orderNummer = String(o.order_nummer ?? "").trim();
-      const isMp = /^#MP/i.test(orderNummer);
-      const hasLink = String(o.link_aankoopbewijs ?? "").trim() !== "";
-      if (!isMp || hasLink) continue;
-
-      try {
-        const garantieLink = await verwerkGarantiebewijs(
-          {
-            order_id: String(o.id),
-            order_nummer: o.order_nummer ?? null,
-            naam: o.naam ?? null,
-            email: o.email ?? null,
-            producten: o.producten ?? null,
-            serienummer: o.serienummer ?? null,
-            totaal_prijs:
-              o.bestelling_totaal_prijs != null ? Number(o.bestelling_totaal_prijs) : null,
-            aantal_fietsen:
-              o.aantal_fietsen != null ? Number(o.aantal_fietsen) : null,
-            datum: new Date().toLocaleDateString("nl-NL"),
-          },
-          supabase as any
-        );
-
-        await supabase
-          .from("orders")
-          .update({ link_aankoopbewijs: garantieLink })
-          .eq("owner_email", ownerEmail)
-          .eq("id", String(o.id));
-      } catch (err) {
-        console.error("[api/planning-goedkeuren] garantiebewijs fout voor", orderNummer, err);
-      }
-    }
 
     // Bepaal de doeldatum: leeg planning → planningDate; anders → morgen (ritjes voor morgen)
     const { date: targetDate, isRitjesVoorMorgen } = await getTargetPlanningDate(ownerEmail, supabase as any);

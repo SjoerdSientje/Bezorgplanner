@@ -39,7 +39,8 @@ export async function POST(request: NextRequest) {
     const betaalBedragNum =
       betaalBedragRaw === undefined || betaalBedragRaw === null || String(betaalBedragRaw).trim() === ""
         ? null
-        : Number(betaalBedragRaw);
+        : parseFloat(String(betaalBedragRaw).replace(",", "."));
+    const serienummerInput = String(body.serienummer ?? "").trim();
 
     if (!orderId) {
       return NextResponse.json({ error: "Order-id ontbreekt." }, { status: 400 });
@@ -80,8 +81,11 @@ export async function POST(request: NextRequest) {
     const toMpOrders = isMpTagged(order.mp_tags);
     const nextStatus = toMpOrders ? "mp_orders" : "bezorgd";
 
-    // Safety net: MP-orders altijd met aankoopbewijs-link afsluiten.
-    if (toMpOrders && String((order as any).link_aankoopbewijs ?? "").trim() === "") {
+    // MP-orders: verstuur aankoopbewijs na afronden met het opgegeven serienummer.
+    let aankoopbewijsError: string | null = null;
+    if (toMpOrders && serienummerInput) {
+      const inDoos = /^in\s*doos$/i.test(serienummerInput);
+      const serienummerVoorOrder = inDoos ? serienummerInput : serienummerInput;
       try {
         const link = await verwerkGarantiebewijs(
           {
@@ -90,7 +94,7 @@ export async function POST(request: NextRequest) {
             naam: (order as any).naam ?? null,
             email: (order as any).email ?? null,
             producten: (order as any).producten ?? null,
-            serienummer: (order as any).serienummer ?? null,
+            serienummer: inDoos ? null : serienummerInput,
             totaal_prijs:
               (order as any).bestelling_totaal_prijs != null
                 ? Number((order as any).bestelling_totaal_prijs)
@@ -100,11 +104,18 @@ export async function POST(request: NextRequest) {
             datum: new Date().toLocaleDateString("nl-NL"),
           },
           supabase as any,
-          { skipEmail: true }
+          { inDoos }
         );
         (order as any).link_aankoopbewijs = link;
+        // Sla serienummer + link op in de order
+        await supabase
+          .from("orders")
+          .update({ serienummer: serienummerVoorOrder, link_aankoopbewijs: link })
+          .eq("owner_email", ownerEmail)
+          .eq("id", orderId);
       } catch (e) {
-        console.error("[api/afronden] aankoopbewijs fallback mislukt", e);
+        aankoopbewijsError = e instanceof Error ? e.message : String(e);
+        console.error("[api/afronden] aankoopbewijs versturen mislukt", e);
       }
     }
 
@@ -207,6 +218,7 @@ export async function POST(request: NextRequest) {
       {
         ok: true,
         nextStatus,
+        aankoopbewijsError,
         debug: {
           orderId,
           slotsVoorDelete: slotsVoor?.length ?? 0,

@@ -19,6 +19,8 @@ interface LineItemFromJson {
 
 type OrderDetail = {
   id: string;
+  source?: string | null;
+  order_nummer?: string | null;
   volledig_adres?: string | null;
   producten?: string | null;
   line_items_json?: string | null;
@@ -89,6 +91,7 @@ export default function AfrondenVragenlijstPage({
   const [betaalOptie, setBetaalOptie] = useState<PaymentOption | "">("");
   const [betaalAnders, setBetaalAnders] = useState("");
   const [betaalBedrag, setBetaalBedrag] = useState<string>("");
+  const [serienummer, setSerienummer] = useState<string>("");
   const [checked, setChecked] = useState<Record<string, boolean>>({});
 
   const fetchOrder = useCallback(async () => {
@@ -125,12 +128,17 @@ export default function AfrondenVragenlijstPage({
     });
   }, [checklist]);
 
+  const isMpOrder =
+    order?.source === "mp" || /^#mp/i.test(String(order?.order_nummer ?? "").trim());
+
   const allChecked = checklist.every((i) => checked[i.label]);
   const needsBedrag = betaalOptie === "Factuur betaling aan deur" || betaalOptie === "Contant aan deur";
-  const bedragOk = !needsBedrag || (betaalBedrag.trim().length > 0 && !Number.isNaN(Number(betaalBedrag)));
+  const parsedBedrag = parseFloat(betaalBedrag.trim().replace(",", "."));
+  const bedragOk = !needsBedrag || (betaalBedrag.trim().length > 0 && !Number.isNaN(parsedBedrag));
   const paymentOk =
     Boolean(betaalOptie) && (betaalOptie !== "Anders" || betaalAnders.trim().length > 0) && bedragOk;
-  const canSubmit = bezorgerNaam.trim().length > 0 && paymentOk && allChecked && !saving;
+  const serienummerOk = !isMpOrder || serienummer.trim().length > 0;
+  const canSubmit = bezorgerNaam.trim().length > 0 && paymentOk && allChecked && serienummerOk && !saving;
 
   const submit = useCallback(async () => {
     if (!order) return;
@@ -145,7 +153,8 @@ export default function AfrondenVragenlijstPage({
           bezorger_naam: bezorgerNaam,
           betaal_optie: betaalOptie,
           betaal_anders: betaalAnders,
-          betaal_bedrag: needsBedrag ? Number(betaalBedrag) : undefined,
+          betaal_bedrag: needsBedrag ? parseFloat(betaalBedrag.trim().replace(",", ".")) : undefined,
+          serienummer: isMpOrder ? serienummer.trim() : undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -153,10 +162,11 @@ export default function AfrondenVragenlijstPage({
       if (data?.whatsapp?.ok === false) {
         throw new Error(`Order afgerond, maar WhatsApp mislukt: ${data?.whatsapp?.error ?? "onbekende fout"}`);
       }
+      if (data?.aankoopbewijsError) {
+        throw new Error(`Order afgerond, maar aankoopbewijs versturen mislukt: ${data.aankoopbewijsError}`);
+      }
 
       console.log("[afronden] API response debug:", data?.debug);
-      // Hard redirect naar planning zodat de pagina volledig opnieuw laadt
-      // en de afgeronde order zeker niet meer zichtbaar is.
       window.location.href = "/bezorgplanner/planning";
     } catch (e) {
       setError(e instanceof Error ? e.message : "Afronden mislukt");
@@ -292,18 +302,33 @@ export default function AfrondenVragenlijstPage({
                       Bedrag
                     </label>
                     <input
-                      type="number"
+                      type="text"
                       inputMode="decimal"
                       value={betaalBedrag}
                       onChange={(e) => setBetaalBedrag(e.target.value)}
                       className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm text-koopje-black outline-none focus:border-koopje-orange focus:ring-2 focus:ring-koopje-orange/20"
-                      placeholder="Bijv. 850"
-                      min={0}
-                      step={0.01}
+                      placeholder="Bijv. 850 of 849,95"
                     />
                   </div>
                 )}
               </div>
+
+              {isMpOrder && (
+                <div className="rounded-2xl border border-koopje-orange/30 bg-koopje-orange-light/20 p-5 shadow-sm">
+                  <p className="mb-1 text-sm font-semibold text-koopje-black">Serienummer fiets</p>
+                  <p className="mb-3 text-xs text-koopje-black/60">
+                    Het aankoopbewijs wordt na afronden verstuurd met dit serienummer.
+                    Vul <strong>in doos</strong> in als de fiets nog gemonteerd moet worden.
+                  </p>
+                  <input
+                    type="text"
+                    value={serienummer}
+                    onChange={(e) => setSerienummer(e.target.value)}
+                    placeholder="bijv. SN123456789 of in doos"
+                    className="w-full rounded-xl border border-koopje-black/20 px-3 py-2.5 text-sm text-koopje-black placeholder:text-koopje-black/30 outline-none focus:border-koopje-orange focus:ring-2 focus:ring-koopje-orange/20"
+                  />
+                </div>
+              )}
 
               <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
                 <p className="mb-3 text-sm font-semibold text-koopje-black">
