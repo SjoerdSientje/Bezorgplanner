@@ -126,7 +126,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Verwerk alle voertuigen op volgorde: vehicle_1, vehicle_2, ...
-    // Bij kleine bus = meerdere trips; bij grote bus = 1 voertuig.
+    // Kleine bus gebruikt één voertuig met depot-reloads; rit_nummer leiden we af
+    // uit depot-terugkeren in de stop-sequentie.
     const vehicleKeys = Object.keys(solution ?? {})
       .filter((k) => k.startsWith("vehicle_"))
       .sort((a, b) => {
@@ -143,21 +144,30 @@ export async function POST(request: NextRequest) {
       rit_nummer: number | null;
     }[] = [];
     let volgorde = 0;
-    const meerdereRitten = busType === "klein" && vehicleKeys.length > 1;
+    const meerdereRitten = busType === "klein";
 
     for (let vi = 0; vi < vehicleKeys.length; vi++) {
       const vehicleKey = vehicleKeys[vi];
-      const ritNummer = meerdereRitten ? vi + 1 : null;
+      let ritNummer = meerdereRitten ? 1 : null;
+      let hasStopInCurrentRit = false;
       const stops = solution?.[vehicleKey] ?? [];
       for (const stop of stops) {
         const locId = stop.location_id ?? "";
-        if (locId === "depot") continue;
+        if (locId === "depot") {
+          // Depot tussen twee klanten = nieuwe rit (alleen kleine bus)
+          if (meerdereRitten && hasStopInCurrentRit) {
+            ritNummer = (ritNummer ?? 0) + 1;
+            hasStopInCurrentRit = false;
+          }
+          continue;
+        }
         const order = orderByVisitId.get(locId);
         if (!order) continue;
         const arrivalTime = stop.arrival_time ?? "";
         if (!arrivalTime) continue;
         const slotStr = maakTijdslot(arrivalTime, order.bezorgtijd_voorkeur);
         volgorde += 1;
+        hasStopInCurrentRit = true;
         slotsToInsert.push({
           order_id: order.id,
           volgorde,

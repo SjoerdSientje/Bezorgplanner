@@ -129,10 +129,9 @@ export interface RoutificPayload {
  *
  * Grote bus (default): 1 voertuig, capaciteit 11 fietsen.
  *
- * Kleine bus: meerdere voertuigen met elk capaciteit 4. Het aantal voertuigen
- * is ceil(totaal_fietsen / 4). Routific verdeelt de orders optimaal over de
- * voertuigen; wij verwerken de resultaten als opeenvolgende ritten (trip 1,
- * terug depot + 30 min herladen, trip 2, ...).
+ * Kleine bus: één voertuig met capaciteit 4 en herlaadtijd op depot.
+ * Routific kan dan automatisch meerdere ritten op één dag plannen met
+ * depot-retours tussen de ritten.
  */
 export function buildRoutificPayload(
   orders: OrderForRoute[],
@@ -172,25 +171,15 @@ export function buildRoutificPayload(
   const fleet: Record<string, VehicleConfig> = {};
 
   if (busType === "klein") {
-    // Totale load bepaalt het aantal benodigde ritten
-    const totalLoad = orders.reduce((sum, o) => {
-      const baseFietsen = Math.max(1, Number(o.aantal_fietsen) || 1);
-      const unitSize = heeftGroteFiets ? 2 : 1;
-      return sum + baseFietsen * unitSize;
-    }, 0);
-    const numberOfTrips = Math.max(1, Math.ceil(totalLoad / FLEET_CAPACITY_KLEIN));
-
-    for (let i = 1; i <= numberOfTrips; i++) {
-      fleet[`vehicle_${i}`] = {
-        start_location: { address: DEPOT_ADDRESS },
-        end_location: { address: DEPOT_ADDRESS },
-        shift_start: vertrekTijd,
-        shift_end: DEFAULT_SHIFT_END,
-        capacity,
-        strict_start: i === 1,
-        reload_service_time: RELOAD_TIME_KLEIN_MINUTEN,
-      };
-    }
+    fleet["vehicle_1"] = {
+      start_location: { address: DEPOT_ADDRESS },
+      end_location: { address: DEPOT_ADDRESS },
+      shift_start: vertrekTijd,
+      shift_end: DEFAULT_SHIFT_END,
+      capacity,
+      strict_start: true,
+      reload_service_time: RELOAD_TIME_KLEIN_MINUTEN,
+    };
   } else {
     fleet["vehicle_1"] = {
       start_location: { address: DEPOT_ADDRESS },
