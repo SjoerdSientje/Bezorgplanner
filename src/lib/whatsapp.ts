@@ -129,6 +129,7 @@ function resolveFixedBusinessTemplate(
     if (kind === "proefrit") {
       return { name: "bezorgtijd_proefrit_aan_huis", language: "nl" };
     }
+    if (mp && paid) return { name: "bezorgtijd_bij_betaalde_bestellingen", language: "nl_BE" };
     if (mp) return { name: "bezorgtijd_bij_mp_bestellingen", language: "nl_BE" };
     if (paid) return { name: "bezorgtijd_bij_betaalde_bestellingen", language: "nl_BE" };
     return { name: "bezorgtijd_bij_niet_betaalde_bestellingen", language: "nl_BE" };
@@ -192,21 +193,18 @@ function fillVars(template: string, order: WhatsAppOrderInput): string {
     .replaceAll("{tijdslot}", String(order.aankomsttijd_slot ?? ""));
 }
 
-/** DD-MM for WhatsApp {datum}: vandaag vóór 19:00 Amsterdam, anders morgen (op verzendmoment). */
+/** DD-MM for WhatsApp {datum}: altijd morgen (Amsterdam). */
 function formatDatumPlaceholderAmsterdam(): string {
   const s = new Date().toLocaleString("sv-SE", { timeZone: "Europe/Amsterdam" });
-  const [datePart, timePart] = s.split(" ");
+  const [datePart] = s.split(" ");
   const [y, m, d] = datePart.split("-").map(Number);
-  const hour = Number(timePart.split(":")[0]);
   let yy = y;
   let mm = m;
   let dd = d;
-  if (hour >= 19) {
-    const next = new Date(Date.UTC(y, m - 1, d + 1));
-    yy = next.getUTCFullYear();
-    mm = next.getUTCMonth() + 1;
-    dd = next.getUTCDate();
-  }
+  const next = new Date(Date.UTC(y, m - 1, d + 1));
+  yy = next.getUTCFullYear();
+  mm = next.getUTCMonth() + 1;
+  dd = next.getUTCDate();
   return `${String(dd).padStart(2, "0")}-${String(mm).padStart(2, "0")}`;
 }
 
