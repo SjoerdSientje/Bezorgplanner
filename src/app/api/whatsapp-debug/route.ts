@@ -16,13 +16,11 @@ export const dynamic = "force-dynamic";
 
 function isPlanningGoedkeurenRecipient(o: {
   meenemen_in_planning?: boolean | null;
-  nieuw_appje_sturen?: boolean | null;
   datum_opmerking?: string | null;
   datum?: string | null;
 }): boolean {
   const { date: planningDate } = getPlanningDateForGoedkeuren();
   if (o.meenemen_in_planning !== true) return false;
-  if (o.nieuw_appje_sturen !== true) return false;
   const hasVandaagOfMorgenInOpmerking = isDatumOpmerkingVandaagOfMorgen(o.datum_opmerking);
   const datumIsPlanningDate = String(o.datum ?? "").trim() === planningDate;
   return hasVandaagOfMorgenInOpmerking || datumIsPlanningDate;
@@ -35,7 +33,7 @@ export async function GET(request: NextRequest) {
     const { data, error } = await supabase
       .from("orders")
       .select(
-        "id, order_nummer, naam, type, betaald, mp_tags, status, opmerkingen_klant, bezorgtijd_voorkeur, aankomsttijd_slot, telefoon_e164, telefoon_nummer, meenemen_in_planning, nieuw_appje_sturen, datum_opmerking, datum, created_at"
+        "id, order_nummer, naam, type, betaald, mp_tags, status, opmerkingen_klant, bezorgtijd_voorkeur, aankomsttijd_slot, telefoon_e164, telefoon_nummer, meenemen_in_planning, datum_opmerking, datum, created_at"
       )
       .eq("owner_email", ownerEmail)
       .eq("status", "ritjes_vandaag")
@@ -82,7 +80,6 @@ export async function GET(request: NextRequest) {
         aankomsttijd_slot: o.aankomsttijd_slot,
         telefoon: o.telefoon_e164 || o.telefoon_nummer || null,
         meenemen_in_planning: o.meenemen_in_planning,
-        nieuw_appje_sturen: o.nieuw_appje_sturen,
         datum_opmerking: o.datum_opmerking,
         datum: o.datum,
         planning_goedgekeurd_recipient: isPlanningGoedkeurenRecipient(o),

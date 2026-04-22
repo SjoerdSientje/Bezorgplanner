@@ -13,7 +13,6 @@ type DebugOrder = {
   aankomsttijd_slot: string | null;
   telefoon: string | null;
   meenemen_in_planning: boolean | null;
-  nieuw_appje_sturen: boolean | null;
   datum_opmerking: string | null;
   datum: string | null;
   planning_goedgekeurd_recipient: boolean;
@@ -100,7 +99,6 @@ export default function WhatsAppDebugPage() {
                   <th className="border border-stone-200 px-3 py-2">Tijdslot</th>
                   <th className="border border-stone-200 px-3 py-2">Telefoon</th>
                   <th className="border border-stone-200 px-3 py-2">In planning?</th>
-                  <th className="border border-stone-200 px-3 py-2">Nieuw appje?</th>
                   <th className="border border-stone-200 px-3 py-2">Datum opmerking</th>
                   <th className="border border-stone-200 px-3 py-2">Datum</th>
                   <th className="border border-stone-200 px-3 py-2">Wordt gestuurd bij goedkeuren</th>
@@ -119,7 +117,6 @@ export default function WhatsAppDebugPage() {
                     <td className="border border-stone-200 px-3 py-2">{o.aankomsttijd_slot ?? "-"}</td>
                     <td className="border border-stone-200 px-3 py-2">{o.telefoon ?? "-"}</td>
                     <td className="border border-stone-200 px-3 py-2">{o.meenemen_in_planning === true ? "ja" : "nee"}</td>
-                    <td className="border border-stone-200 px-3 py-2">{o.nieuw_appje_sturen === true ? "ja" : "nee"}</td>
                     <td className="border border-stone-200 px-3 py-2">{o.datum_opmerking ?? "-"}</td>
                     <td className="border border-stone-200 px-3 py-2">{o.datum ?? "-"}</td>
                     <td className="border border-stone-200 px-3 py-2">
@@ -160,7 +157,7 @@ export default function WhatsAppDebugPage() {
                 ))}
                 {!loading && orders.length === 0 && (
                   <tr>
-                    <td colSpan={14} className="border border-stone-200 px-3 py-8 text-center text-stone-500">
+                    <td colSpan={13} className="border border-stone-200 px-3 py-8 text-center text-stone-500">
                       Geen orders gevonden.
                     </td>
                   </tr>
