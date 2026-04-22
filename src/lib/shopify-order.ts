@@ -108,6 +108,26 @@ function parseSpecialServiceProductFromNote(note: string | null | undefined): st
   return String(match?.[1] ?? "").trim();
 }
 
+function parseSpecialServiceFromShippingLines(order: ShopifyOrder): string {
+  for (const line of order.shipping_lines ?? []) {
+    const title = String(line.title ?? "").trim();
+    if (!title) continue;
+    // Voorbeeld: "Naleveren: Standaard"
+    if (/\b(?:nalevering|naleveren|garantie)\b/i.test(title)) return title;
+    const code = String(line.code ?? "").trim();
+    if (/\b(?:nalevering|naleveren|garantie)\b/i.test(code)) {
+      return code || title;
+    }
+  }
+  return "";
+}
+
+function getSpecialServiceProduct(order: ShopifyOrder): string {
+  const fromNote = parseSpecialServiceProductFromNote(order.note);
+  if (fromNote) return fromNote;
+  return parseSpecialServiceFromShippingLines(order);
+}
+
 /**
  * Pakketjes-wachtrij: totaal &lt; €450, niet geannuleerd, nog niet volledig verzonden.
  * (Webhook; zelfde showroom-uitsluiting als Ritjes.)
@@ -115,7 +135,7 @@ function parseSpecialServiceProductFromNote(note: string | null | undefined): st
 export function qualifiesForPakketjes(order: ShopifyOrder): boolean {
   if (isShowroomShippingOrder(order)) return false;
   const total = parseFloat(String(order.total_price ?? 0));
-  const hasSpecialServiceItem = Boolean(parseSpecialServiceProductFromNote(order.note));
+  const hasSpecialServiceItem = Boolean(getSpecialServiceProduct(order));
   const qualifiesByTotal = total > 0 && total < PAKKETJES_MAX_PRIJS;
   const qualifiesBySpecialService = total === 0 && hasSpecialServiceItem;
   if (!qualifiesByTotal && !qualifiesBySpecialService) return false;
@@ -146,7 +166,7 @@ export function extractPakketjesLineItems(order: ShopifyOrder): { name: string; 
     out.push({ name, quantity: qty });
   }
   if (out.length === 0) {
-    const specialServiceProduct = parseSpecialServiceProductFromNote(order.note);
+    const specialServiceProduct = getSpecialServiceProduct(order);
     if (specialServiceProduct) {
       out.push({ name: specialServiceProduct, quantity: 1 });
     }
@@ -160,6 +180,7 @@ export function passesRitjesFilter(order: ShopifyOrder): boolean {
 
   const totalPrice = parseFloat(String(order.total_price ?? 0));
   const tags = (order.tags ?? "").toLowerCase();
+  const hasSpecialServiceItem = Boolean(getSpecialServiceProduct(order));
 
   const hasTerugbrengen = tags.includes("terugbrengen");
   const hasOphalen = tags.includes("ophalen");
@@ -167,6 +188,7 @@ export function passesRitjesFilter(order: ShopifyOrder): boolean {
   const hasProefrit = tags.includes("proefrit");
 
   if (hasTerugbrengen || hasOphalen || hasReparatieAanHuis || hasProefrit) return true;
+  if (totalPrice === 0 && hasSpecialServiceItem) return true;
   if (totalPrice >= 450) return true;
   return false;
 }
