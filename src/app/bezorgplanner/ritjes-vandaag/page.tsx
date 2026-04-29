@@ -56,6 +56,7 @@ function extractPhoneFromBelLink(value: string): string | null {
 export default function RitjesVandaagPage() {
   const [orders, setOrders] = useState<RitjesOrderFromApi[]>([]);
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<"alle" | "morgen">("alle");
   // Verhoog dit ALLEEN na een echte server-fetch zodat EditableSheetTable zijn waarden reset.
   // Cel-edits mogen dit NIET verhogen (dat veroorzaakt de page-flash).
   const [tableResetKey, setTableResetKey] = useState(0);
@@ -90,7 +91,25 @@ export default function RitjesVandaagPage() {
     fetchRitjes();
   }, [fetchRitjes]);
 
-  const tableRows = useMemo(() => ordersToTableRows(orders), [orders]);
+  const visibleRows = useMemo(() => {
+    const filtered =
+      activeTab === "morgen"
+        ? orders
+            .map((o, idx) => ({ o, idx }))
+            .filter((x) => x.o.in_morgen_tab === true)
+        : orders
+            .map((o, idx) => ({ o, idx }))
+            .filter((x) => x.o.in_morgen_tab !== true);
+    return {
+      orders: filtered.map((x) => x.o),
+      sourceIndices: filtered.map((x) => x.idx),
+    };
+  }, [orders, activeTab]);
+
+  const tableRows = useMemo(
+    () => ordersToTableRows(visibleRows.orders),
+    [visibleRows.orders]
+  );
 
   const RIT_COLORS: Record<number, string> = {
     1: "bg-green-50",
@@ -100,19 +119,22 @@ export default function RitjesVandaagPage() {
 
   const rowColorClass = useCallback(
     (rowIndex: number): string | undefined => {
-      const order = orders[rowIndex];
+      const sourceIndex = visibleRows.sourceIndices[rowIndex];
+      if (sourceIndex == null) return undefined;
+      const order = orders[sourceIndex];
       if (!order) return undefined;
       const rit = (order as any).rit_nummer as number | null | undefined;
       if (!rit) return undefined;
       return RIT_COLORS[rit] ?? "bg-purple-50";
     },
-    [orders]
+    [orders, visibleRows.sourceIndices]
   );
 
   const deleteOrder = useCallback(
     async (rowIndex: number) => {
-      if (rowIndex < 0 || rowIndex >= orders.length) return;
-      const order = orders[rowIndex];
+      const sourceIndex = visibleRows.sourceIndices[rowIndex];
+      if (sourceIndex == null || sourceIndex < 0 || sourceIndex >= orders.length) return;
+      const order = orders[sourceIndex];
       const id = order?.id as string | undefined;
       const orderNummer = String((order as any)?.order_nummer ?? "").trim();
       if (!id) return;
@@ -123,7 +145,7 @@ export default function RitjesVandaagPage() {
       if (!ok) return;
 
       // Optimistisch: verwijder direct uit state
-      setOrders((prev) => prev.filter((_, i) => i !== rowIndex));
+      setOrders((prev) => prev.filter((_, i) => i !== sourceIndex));
       setTableResetKey((k) => k + 1);
       try {
         const res = await fetch(`/api/orders/${id}`, { method: "DELETE" });
@@ -136,7 +158,7 @@ export default function RitjesVandaagPage() {
         await fetchRitjes();
       }
     },
-    [orders, fetchRitjes]
+    [orders, visibleRows.sourceIndices, fetchRitjes]
   );
 
   const cellRenderers = useMemo(
@@ -161,11 +183,14 @@ export default function RitjesVandaagPage() {
           <span className="block px-2 py-1.5 text-sm text-stone-300">—</span>
         ),
       "Bel link": (_rowIndex: number, value: string) => {
-        const naam = orders[_rowIndex]
-          ? String((orders[_rowIndex] as any).naam ?? "").trim()
+        const sourceIndex = visibleRows.sourceIndices[_rowIndex];
+        const rowOrder =
+          sourceIndex != null && sourceIndex >= 0 ? orders[sourceIndex] : null;
+        const naam = rowOrder
+          ? String((rowOrder as any).naam ?? "").trim()
           : "";
         const label = naam ? `Bel ${naam}` : "Bellen";
-        const order = orders[_rowIndex] as any;
+        const order = rowOrder as any;
         const phone =
           normalizeToE164(String(order?.telefoon_e164 ?? "")) ??
           normalizeToE164(String(order?.telefoon_nummer ?? "")) ??
@@ -183,7 +208,9 @@ export default function RitjesVandaagPage() {
         );
       },
       "Product(en)": (rowIndex: number, value: string, _onSave: (v: string) => void) => {
-        const order = orders[rowIndex];
+        const sourceIndex = visibleRows.sourceIndices[rowIndex];
+        if (sourceIndex == null || sourceIndex < 0) return null;
+        const order = orders[sourceIndex];
         const id = order?.id as string | undefined;
         const lineItemsJson =
           order != null ? (order.line_items_json as string | null | undefined) ?? null : null;
@@ -196,7 +223,7 @@ export default function RitjesVandaagPage() {
           ? async (fields: Record<string, unknown>) => {
               // Update orders state + reset tabel zodat producten-tekst en prijs direct zichtbaar zijn.
               // tableResetKey hier wél verhogen is OK: het is een expliciete "Opslaan" actie.
-              patchOrderInState(rowIndex, fields);
+              patchOrderInState(sourceIndex, fields);
               setTableResetKey((k) => k + 1);
               await fetch(`/api/orders/${id}`, {
                 method: "PATCH",
@@ -215,12 +242,14 @@ export default function RitjesVandaagPage() {
         );
       },
       "Opmerkingen klant": (rowIndex: number, value: string) => {
-        const order = orders[rowIndex];
+        const sourceIndex = visibleRows.sourceIndices[rowIndex];
+        if (sourceIndex == null || sourceIndex < 0) return null;
+        const order = orders[sourceIndex];
         const id = order?.id as string | undefined;
         const handleSave = id
           ? async (nextValue: string) => {
               const payload = { opmerkingen_klant: nextValue.trim() || null };
-              patchOrderInState(rowIndex, payload);
+              patchOrderInState(sourceIndex, payload);
               await fetch(`/api/orders/${id}`, {
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
@@ -231,19 +260,20 @@ export default function RitjesVandaagPage() {
         return <OpmerkingKlantCell value={String(value ?? "")} onSave={handleSave} />;
       },
     }),
-    [orders, deleteOrder, patchOrderInState]
+    [orders, visibleRows.sourceIndices, deleteOrder, patchOrderInState]
   );
 
   const handleCellBlur = useCallback(
     async (rowIndex: number, header: string, value: string) => {
-      if (rowIndex < 0 || rowIndex >= orders.length) return;
-      const order = orders[rowIndex];
+      const sourceIndex = visibleRows.sourceIndices[rowIndex];
+      if (sourceIndex == null || sourceIndex < 0 || sourceIndex >= orders.length) return;
+      const order = orders[sourceIndex];
       const id = order?.id as string | undefined;
       if (!id) return;
       const payload = ritjesCellToPayload(header, value);
       if (!payload || Object.keys(payload).length === 0) return;
       // Optimistisch: update direct de lokale order-state, GEEN fetchRitjes → geen page-flash
-      patchOrderInState(rowIndex, payload);
+      patchOrderInState(sourceIndex, payload);
       // Fire-and-forget PATCH, maar herstel vanuit server als opslaan mislukt.
       fetch(`/api/orders/${id}`, {
         method: "PATCH",
@@ -262,7 +292,7 @@ export default function RitjesVandaagPage() {
           fetchRitjes();
         });
     },
-    [orders, patchOrderInState, fetchRitjes]
+    [orders, visibleRows.sourceIndices, patchOrderInState, fetchRitjes]
   );
 
   return (
@@ -294,12 +324,12 @@ export default function RitjesVandaagPage() {
 
           <div className="mb-4 flex flex-wrap items-center gap-3">
             <SparrenMetSientje
-              ritjesOrders={orders}
+              ritjesOrders={visibleRows.orders}
               vertrektijd={vertrektijd}
               onSlotsUpdated={fetchRitjes}
             />
             <StuurAppjesButton
-              huidigeRitjesOrders={orders as any}
+              huidigeRitjesOrders={visibleRows.orders as any}
               onBeforeOpen={fetchRitjes}
             />
             <button
@@ -312,6 +342,31 @@ export default function RitjesVandaagPage() {
             </button>
           </div>
 
+          <div className="mb-4 inline-flex rounded-xl border border-stone-200 bg-stone-50 p-1">
+            <button
+              type="button"
+              onClick={() => setActiveTab("alle")}
+              className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
+                activeTab === "alle"
+                  ? "bg-white text-koopje-black shadow-sm"
+                  : "text-stone-600 hover:text-koopje-black"
+              }`}
+            >
+              Alle ritten ({orders.filter((o) => o.in_morgen_tab !== true).length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("morgen")}
+              className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
+                activeTab === "morgen"
+                  ? "bg-white text-koopje-black shadow-sm"
+                  : "text-stone-600 hover:text-koopje-black"
+              }`}
+            >
+              Morgen ({orders.filter((o) => o.in_morgen_tab === true).length})
+            </button>
+          </div>
+
           {loading ? (
             <p className="text-sm text-koopje-black/60">Laden…</p>
           ) : (
@@ -319,7 +374,7 @@ export default function RitjesVandaagPage() {
               headers={RITJES_HEADERS}
               initialData={tableRows}
               onCellBlur={handleCellBlur}
-              dataRowCount={orders.length}
+              dataRowCount={visibleRows.orders.length}
               rowAction={deleteOrder}
               cellRenderers={cellRenderers}
               resetKey={tableResetKey}
