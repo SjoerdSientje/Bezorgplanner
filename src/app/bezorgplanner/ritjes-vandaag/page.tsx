@@ -363,7 +363,7 @@ export default function RitjesVandaagPage() {
                   : "text-stone-600 hover:text-koopje-black"
               }`}
             >
-              Morgen ({orders.filter((o) => o.in_morgen_tab === true).length})
+              Routes ({orders.filter((o) => o.in_morgen_tab === true).length})
             </button>
           </div>
 
