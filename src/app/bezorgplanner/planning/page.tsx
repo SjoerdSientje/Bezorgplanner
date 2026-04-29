@@ -163,6 +163,7 @@ function PlanningTabel({
         onKeyDownCapture={(e) => {
           if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) return;
           const target = e.target as HTMLElement | null;
+          if (target?.closest?.("[data-disable-grid-arrows='true']")) return;
           const td = target?.closest?.('td[data-cell-row][data-cell-col]') as HTMLElement | null;
           if (!td) return;
           const cellRow = Number(td.getAttribute("data-cell-row"));

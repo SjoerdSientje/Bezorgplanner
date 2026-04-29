@@ -507,6 +507,7 @@ export default function ProductenCell({
       {/* Paneel */}
       {panelOpen && (
         <div
+          data-disable-grid-arrows="true"
           className="absolute left-0 top-full z-50 mt-1 w-96 rounded-xl border border-stone-200 bg-white shadow-2xl"
           style={{ minWidth: "22rem" }}
         >
