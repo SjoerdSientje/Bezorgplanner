@@ -6,9 +6,6 @@
 const DEPOT_ADDRESS = "Kapelweg 2, 3732 GS, De Bilt, Netherlands";
 const DEFAULT_DURATION = 20;
 const DEFAULT_SHIFT_END = "23:59";
-const FLEET_CAPACITY_GROOT = 11;
-const FLEET_CAPACITY_KLEIN = 4;
-const RELOAD_TIME_KLEIN_MINUTEN = 30;
 
 export interface OrderForRoute {
   id: string;
@@ -19,7 +16,7 @@ export interface OrderForRoute {
   producten: string | null;
 }
 
-/** GT2000, Engwe E26 en Qibbel/family/kinderzitje zijn breder/groter; kleine bus max 2 per rit. */
+/** GT2000, Engwe E26 en Qibbel/family/kinderzitje zijn breder/groter; bij max. load ≤ 4 tellen alle fietsen dubbel qua load. */
 const GROTE_FIETS_PATTERNS = [
   /gt\s*2000/i,
   /engwe\s*e26/i,
@@ -106,8 +103,6 @@ type VehicleConfig = {
   shift_end: string;
   capacity: number;
   strict_start: boolean;
-  /** Herlaadtijd bij depotterugkeer in minuten (klein bus, multi-trip) */
-  reload_service_time?: number;
 };
 
 export interface RoutificPayload {
@@ -124,41 +119,41 @@ export interface RoutificPayload {
   fleet: Record<string, VehicleConfig>;
 }
 
-/**
- * Bouwt de Routific-input uit orders en vertrektijd.
- *
- * Grote bus (default): 1 voertuig, capaciteit 11 fietsen.
- *
- * Kleine bus: één voertuig met capaciteit 4 en herlaadtijd op depot.
- * Routific kan dan automatisch meerdere ritten op één dag plannen met
- * depot-retours tussen de ritten.
- */
-export function buildRoutificPayload(
+export type ParallelRouteSpec = {
+  /** HH:MM — vertrek vanaf depot voor dit voertuig */
+  shift_start: string;
+  /** Max. fietsen tegelijk (VRP-capaciteit) */
+  capacity: number;
+};
+
+function sanitizeVisitId(id: string): string {
+  return id.replace(/[.$]/g, "_");
+}
+
+/** Als er een route met lage max. load (≤4) is én er zit een grote fiets in de batch, tellen alle fietsen dubbel qua load. */
+function shouldDoubleAllLoadsForGroteFiets(
   orders: OrderForRoute[],
-  vertrekTijd: string,
-  busType: "klein" | "groot" = "groot"
-): RoutificPayload {
-  const capacity = busType === "klein" ? FLEET_CAPACITY_KLEIN : FLEET_CAPACITY_GROOT;
+  treatAsSmallFleet: boolean
+): boolean {
+  return treatAsSmallFleet && orders.some((o) => isGroteFiets(o.producten));
+}
 
+function buildVisits(
+  orders: OrderForRoute[],
+  defaultStartForNoPreference: string,
+  doubleUnitForAllBikes: boolean
+): RoutificPayload["visits"] {
   const visits: RoutificPayload["visits"] = {};
-  const sanitizeId = (id: string) => id.replace(/[.$]/g, "_");
-
-  // Als er ook maar 1 grote fiets in de batch zit, tellen ALLE fietsen als load 2.
-  // Reden: naast een grote fiets past maar 1 andere fiets (groot of normaal).
-  // Met alle load=2 en capacity=4 past er altijd precies max 2 fietsen per rit.
-  const heeftGroteFiets =
-    busType === "klein" && orders.some((o) => isGroteFiets(o.producten));
-
   for (const o of orders) {
     const address = (o.volledig_adres || "").trim() || "Onbekend adres";
     const baseFietsen = Math.max(1, Number(o.aantal_fietsen) || 1);
-    const unitSize = heeftGroteFiets ? 2 : 1;
+    const unitSize = doubleUnitForAllBikes ? 2 : 1;
     const load = baseFietsen * unitSize;
     const window = parseBezorgtijdVoorkeur(o.bezorgtijd_voorkeur);
-    const start = window ? window.start : vertrekTijd;
+    const start = window ? window.start : defaultStartForNoPreference;
     const end = window && window.end !== null ? window.end : DEFAULT_SHIFT_END;
 
-    const visitId = sanitizeId(o.id);
+    const visitId = sanitizeVisitId(o.id);
     visits[visitId] = {
       location: { address },
       load,
@@ -167,29 +162,61 @@ export function buildRoutificPayload(
       end,
     };
   }
+  return visits;
+}
+
+function minutesFromHHMM(t: string): number {
+  const [h, m] = t.split(":").map((x) => parseInt(x, 10));
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return 24 * 60;
+  return h * 60 + m;
+}
+
+/** Vroegste shift voor bezoeken zonder klantvoorkeur (start/end venster). */
+export function earliestParallelShiftStart(routes: ParallelRouteSpec[]): string {
+  if (routes.length === 0) return "10:30";
+  let best = routes[0].shift_start;
+  let bestM = minutesFromHHMM(best);
+  for (const r of routes) {
+    const mm = minutesFromHHMM(r.shift_start);
+    if (mm < bestM) {
+      bestM = mm;
+      best = r.shift_start;
+    }
+  }
+  return best;
+}
+
+/**
+ * Bouwt fleet + visits: één of meer routes, elk met eigen vertrektijd en max. load (fietsen).
+ * Routific verdeelt stops om reistijd te minimaliseren binnen die capaciteiten.
+ */
+export function buildRoutificPayloadFromRoutes(
+  orders: OrderForRoute[],
+  routes: ParallelRouteSpec[]
+): RoutificPayload {
+  if (routes.length === 0) {
+    throw new Error("Minimaal één route nodig.");
+  }
+  const smallInFleet = routes.some((r) => r.capacity <= 4);
+  const doubleUnits = shouldDoubleAllLoadsForGroteFiets(orders, smallInFleet);
+  const defaultStart = earliestParallelShiftStart(routes);
+  const visits = buildVisits(orders, defaultStart, doubleUnits);
 
   const fleet: Record<string, VehicleConfig> = {};
-
-  if (busType === "klein") {
-    fleet["vehicle_1"] = {
+  routes.forEach((r, i) => {
+    const cap = Math.max(1, Math.min(99, Math.floor(Number(r.capacity) || 0)));
+    fleet[`vehicle_${i + 1}`] = {
       start_location: { address: DEPOT_ADDRESS },
       end_location: { address: DEPOT_ADDRESS },
-      shift_start: vertrekTijd,
+      shift_start: r.shift_start,
       shift_end: DEFAULT_SHIFT_END,
-      capacity,
-      strict_start: true,
-      reload_service_time: RELOAD_TIME_KLEIN_MINUTEN,
-    };
-  } else {
-    fleet["vehicle_1"] = {
-      start_location: { address: DEPOT_ADDRESS },
-      end_location: { address: DEPOT_ADDRESS },
-      shift_start: vertrekTijd,
-      shift_end: DEFAULT_SHIFT_END,
-      capacity,
+      capacity: cap,
       strict_start: true,
     };
-  }
+  });
 
   return { visits, fleet };
 }
+
+/** @deprecated gebruik buildRoutificPayloadFromRoutes — alias voor bestaande imports */
+export const buildRoutificPayloadParallel = buildRoutificPayloadFromRoutes;

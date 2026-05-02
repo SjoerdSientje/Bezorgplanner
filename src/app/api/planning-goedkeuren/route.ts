@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
     // Orders ophalen die in aanmerking komen
     const { data: orders, error: queryError } = await supabase
       .from("orders")
-      .select("id, order_nummer, aankomsttijd_slot, bestelling_totaal_prijs, naam, telefoon_e164, telefoon_nummer, type, betaald, mp_tags, datum, datum_opmerking, meenemen_in_planning, opmerkingen_klant, bezorgtijd_voorkeur, email, producten, serienummer, aantal_fietsen, link_aankoopbewijs")
+      .select("id, order_nummer, aankomsttijd_slot, bestelling_totaal_prijs, naam, telefoon_e164, telefoon_nummer, type, betaald, mp_tags, datum, datum_opmerking, meenemen_in_planning, opmerkingen_klant, bezorgtijd_voorkeur, email, producten, serienummer, aantal_fietsen, link_aankoopbewijs, route_nummer")
       .eq("owner_email", ownerEmail)
       .eq("status", "ritjes_vandaag")
       .eq("meenemen_in_planning", true)
@@ -55,10 +55,22 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    const parseMin = (slot: string) => {
+      const t = String(slot ?? "").split(" - ")[0].replace(".", ":").trim();
+      const [h, m] = t.split(":").map((x) => parseInt(x, 10));
+      if (!Number.isFinite(h)) return 9999;
+      return h * 60 + (Number.isFinite(m) ? m : 0);
+    };
     const sorted = [...rows].sort((a, b) => {
-      const startA = ((a.aankomsttijd_slot ?? "").toString().split(" - ")[0] ?? "");
-      const startB = ((b.aankomsttijd_slot ?? "").toString().split(" - ")[0] ?? "");
-      return startA.localeCompare(startB);
+      const ra = (a as { route_nummer?: number | null }).route_nummer;
+      const rb = (b as { route_nummer?: number | null }).route_nummer;
+      const na = ra != null && Number(ra) > 0 ? Number(ra) : 999;
+      const nb = rb != null && Number(rb) > 0 ? Number(rb) : 999;
+      if (na !== nb) return na - nb;
+      return (
+        parseMin((a.aankomsttijd_slot ?? "").toString()) -
+        parseMin((b.aankomsttijd_slot ?? "").toString())
+      );
     });
 
     // Bepaal de doeldatum: leeg planning → planningDate; anders → morgen (ritjes voor morgen)

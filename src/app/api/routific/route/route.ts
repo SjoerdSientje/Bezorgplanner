@@ -4,8 +4,9 @@ import { fetchAllOrders } from "@/lib/supabase";
 import { getPlanningDate, isDatumOpmerkingVandaagOfMorgen } from "@/lib/planning-date";
 import { requireAccountEmail } from "@/lib/account";
 import {
-  buildRoutificPayload,
+  buildRoutificPayloadFromRoutes,
   type OrderForRoute,
+  type ParallelRouteSpec,
 } from "@/lib/routific-payload";
 import { maakTijdslot } from "@/lib/tijdslot";
 
@@ -16,24 +17,46 @@ const POLL_TIMEOUT_MS = 120000; // 2 min
 
 /**
  * POST /api/routific/route
- * Body: { vertrektijd: "HH:MM" }
- *
- * Haalt orders op (meenemen in planning = ja, datum opmerking vandaag of datum = planningdatum),
- * bouwt Routific-payload (adressen, aantal fietsen, tijdvensters uit bezorgtijd voorkeur),
- * stuurt naar Routific vrp-long (ondersteunt address-geocoding), wacht op resultaat.
+ * Body: { parallelRoutes | routes: [{ vertrektijd: "HH:MM", maxFietsen: number }, ...] }
+ * Minimaal één route; per route verplicht vertrektijd en max. load (fietsen).
  */
 export async function POST(request: NextRequest) {
   try {
     const ownerEmail = requireAccountEmail(request);
     const body = await request.json().catch(() => ({}));
-    const vertrektijd = (body.vertrektijd ?? "10:30").toString().trim();
-    if (!/^\d{1,2}:\d{2}$/.test(vertrektijd)) {
+    const prRaw = body.parallelRoutes ?? body.routes;
+    if (!Array.isArray(prRaw) || prRaw.length === 0) {
       return NextResponse.json(
-        { error: "Ongeldige vertrektijd. Gebruik HH:MM." },
+        {
+          error:
+            "Minimaal één route nodig: stuur parallelRoutes (of routes) met per rij vertrektijd (HH:MM) en maxFietsen.",
+        },
         { status: 400 }
       );
     }
-    const busType: "klein" | "groot" = body.busType === "klein" ? "klein" : "groot";
+
+    const parallelRoutes: ParallelRouteSpec[] = [];
+    for (const row of prRaw) {
+      const r = row as Record<string, unknown>;
+      const ts = String(r.vertrektijd ?? r.shift_start ?? "").trim();
+      const capRaw = r.maxFietsen ?? r.capacity;
+      const cap = typeof capRaw === "number" ? capRaw : parseInt(String(capRaw ?? ""), 10);
+      if (!/^\d{1,2}:\d{2}$/.test(ts)) {
+        return NextResponse.json(
+          { error: `Ongeldige vertrektijd (gebruik HH:MM): ${ts}` },
+          { status: 400 }
+        );
+      }
+      if (!Number.isFinite(cap) || cap < 1 || cap > 99) {
+        return NextResponse.json(
+          { error: `Ongeldige max. fietsen per route (1–99): ${String(capRaw)}` },
+          { status: 400 }
+        );
+      }
+      parallelRoutes.push({ shift_start: ts, capacity: cap });
+    }
+
+    const vertrektijd = parallelRoutes[0]!.shift_start;
 
     const token = process.env.ROUTIFIC_API_TOKEN;
     if (!token) {
@@ -77,7 +100,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const payload = buildRoutificPayload(rows, vertrektijd, busType);
+    const payload = buildRoutificPayloadFromRoutes(rows, parallelRoutes);
 
     const res = await fetch(ROUTIFIC_VRP_URL, {
       method: "POST",
@@ -125,9 +148,7 @@ export async function POST(request: NextRequest) {
       orderByVisitId.set(sanitizeId(o.id), o);
     }
 
-    // Verwerk alle voertuigen op volgorde: vehicle_1, vehicle_2, ...
-    // Kleine bus gebruikt één voertuig met depot-reloads; rit_nummer leiden we af
-    // uit depot-terugkeren in de stop-sequentie.
+    // Verwerk alle voertuigen op volgorde: vehicle_1 → route 1, vehicle_2 → route 2, …
     const vehicleKeys = Object.keys(solution ?? {})
       .filter((k) => k.startsWith("vehicle_"))
       .sort((a, b) => {
@@ -142,62 +163,58 @@ export async function POST(request: NextRequest) {
       aankomsttijd: string;
       tijd_opmerking: string;
       rit_nummer: number | null;
+      route_nummer: number | null;
     }[] = [];
     let volgorde = 0;
-    const meerdereRitten = busType === "klein";
+
+    // Voorkom verouderde route/rit-markering op orders die opnieuw worden berekend.
+    for (const o of rows) {
+      await supabase
+        .from("orders")
+        .update({ rit_nummer: null, route_nummer: null })
+        .eq("owner_email", ownerEmail)
+        .eq("id", o.id);
+    }
+
+    const meerDanEenRoute = vehicleKeys.length > 1;
 
     for (let vi = 0; vi < vehicleKeys.length; vi++) {
       const vehicleKey = vehicleKeys[vi];
-      let ritNummer = meerdereRitten ? 1 : null;
-      let hasStopInCurrentRit = false;
+      const routeNummerVoertuig = vi + 1;
       const stops = solution?.[vehicleKey] ?? [];
       for (const stop of stops) {
         const locId = stop.location_id ?? "";
-        if (locId === "depot") {
-          // Depot tussen twee klanten = nieuwe rit (alleen kleine bus)
-          if (meerdereRitten && hasStopInCurrentRit) {
-            ritNummer = (ritNummer ?? 0) + 1;
-            hasStopInCurrentRit = false;
-          }
-          continue;
-        }
+        if (locId === "depot") continue;
         const order = orderByVisitId.get(locId);
         if (!order) continue;
         const arrivalTime = stop.arrival_time ?? "";
         if (!arrivalTime) continue;
         const slotStr = maakTijdslot(arrivalTime, order.bezorgtijd_voorkeur);
         volgorde += 1;
-        hasStopInCurrentRit = true;
         slotsToInsert.push({
           order_id: order.id,
           volgorde,
           aankomsttijd: slotStr,
           tijd_opmerking: arrivalTime,
-          rit_nummer: ritNummer,
+          rit_nummer: null,
+          route_nummer: meerDanEenRoute ? routeNummerVoertuig : null,
         });
       }
     }
 
     if (slotsToInsert.length > 0) {
-      // Schrijf aankomsttijd_slot en rit_nummer terug op elke order.
+      // Schrijf aankomsttijd_slot, rit_nummer en route_nummer terug op elke order.
       // planning_slots worden pas aangemaakt bij "Planning goedkeuren".
       for (const s of slotsToInsert) {
         await supabase
           .from("orders")
-          .update({ aankomsttijd_slot: s.aankomsttijd, rit_nummer: s.rit_nummer })
+          .update({
+            aankomsttijd_slot: s.aankomsttijd,
+            rit_nummer: s.rit_nummer,
+            route_nummer: s.route_nummer,
+          })
           .eq("owner_email", ownerEmail)
           .eq("id", s.order_id);
-      }
-    }
-
-    // Bij grote bus of één rit: wis rit_nummer voor alle betrokken orders
-    if (!meerdereRitten) {
-      for (const o of rows) {
-        await supabase
-          .from("orders")
-          .update({ rit_nummer: null })
-          .eq("owner_email", ownerEmail)
-          .eq("id", o.id);
       }
     }
 

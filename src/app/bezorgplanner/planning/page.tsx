@@ -28,6 +28,8 @@ type PlanningRow = {
   slot_id: string;
   order_id: string;
   datum: string;
+  /** Parallelle Routific-voertuigen; null = geen splitsing */
+  route_nummer?: number | null;
   order_nummer: string;
   naam: string;
   aankomsttijd: string;
@@ -416,7 +418,7 @@ export default function PlanningPage() {
     };
   }, [fetchPlanning]);
 
-  // Groepeer op datum; binnen elke datum sorteren op aankomsttijd vroeg→laat.
+  // Groepeer op datum; bij route_nummer ook per route; binnen elke groep sorteren op aankomst vroeg→laat.
   const grouped = useMemo(() => {
     const map = new Map<string, PlanningRow[]>();
     for (const r of rows) {
@@ -426,7 +428,6 @@ export default function PlanningPage() {
     }
 
     const parseMinutes = (t: string): number => {
-      // Accepteert zowel "9:00" als "9.00"
       const clean = t.replace(".", ":").trim();
       const [h, m] = clean.split(":").map(Number);
       if (!Number.isFinite(h)) return Infinity;
@@ -437,14 +438,50 @@ export default function PlanningPage() {
       const ta = String(a.aankomsttijd ?? "").split(" - ")[0].trim();
       const tb = String(b.aankomsttijd ?? "").split(" - ")[0].trim();
       if (!ta && !tb) return 0;
-      if (!ta) return 1;   // geen tijd → naar achter
+      if (!ta) return 1;
       if (!tb) return -1;
       return parseMinutes(ta) - parseMinutes(tb);
     };
 
-    return Array.from(map.entries())
+    type DatumGroup = {
+      datum: string;
+      sections: { routeNum: number | null; rows: PlanningRow[] }[];
+    };
+
+    const out: DatumGroup[] = Array.from(map.entries())
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([datum, datumRows]) => [datum, [...datumRows].sort(sortByTijd)] as [string, PlanningRow[]]);
+      .map(([datum, datumRows]) => {
+        const sorted = [...datumRows].sort(sortByTijd);
+        const hasParallelRoutes = sorted.some(
+          (row) => row.route_nummer != null && Number(row.route_nummer) > 0
+        );
+        if (!hasParallelRoutes) {
+          return { datum, sections: [{ routeNum: null, rows: sorted }] };
+        }
+        const byRoute = new Map<number, PlanningRow[]>();
+        const loose: PlanningRow[] = [];
+        for (const row of sorted) {
+          const rn = row.route_nummer;
+          if (rn != null && Number(rn) > 0) {
+            const k = Number(rn);
+            if (!byRoute.has(k)) byRoute.set(k, []);
+            byRoute.get(k)!.push(row);
+          } else {
+            loose.push(row);
+          }
+        }
+        const keys = Array.from(byRoute.keys()).sort((a, b) => a - b);
+        const sections: { routeNum: number | null; rows: PlanningRow[] }[] = keys.map((k) => ({
+          routeNum: k,
+          rows: (byRoute.get(k) ?? []).sort(sortByTijd),
+        }));
+        if (loose.length > 0) {
+          sections.push({ routeNum: null, rows: loose.sort(sortByTijd) });
+        }
+        return { datum, sections };
+      });
+
+    return out;
   }, [rows]);
 
   return (
@@ -481,20 +518,36 @@ export default function PlanningPage() {
               Geen planning. Keur eerst de planning goed op Ritjes voor vandaag.
             </p>
           ) : (
-            grouped.map(([datum, datumRows], idx) => (
-              <PlanningTabel
-                key={datum}
-                rows={datumRows}
-                label={
-                  idx === 0
-                    ? `Huidige planning — ${datum}`
-                    : `Ritjes voor morgen — ${datum}`
-                }
-                labelColor={
-                  idx === 0 ? "text-koopje-black" : "text-koopje-orange"
-                }
-                onDeleteSlot={deleteSlot}
-              />
+            grouped.map((group, idx) => (
+              <div key={group.datum} className="space-y-8">
+                {group.sections.map((section, sidx) => (
+                  <PlanningTabel
+                    key={section.routeNum ?? `all-${sidx}`}
+                    rows={section.rows}
+                    label={
+                      section.routeNum != null
+                        ? `Route ${section.routeNum} — ${group.datum}`
+                        : group.sections.length > 1
+                          ? `Overig — ${group.datum}`
+                          : idx === 0
+                            ? `Huidige planning — ${group.datum}`
+                            : `Ritjes voor morgen — ${group.datum}`
+                    }
+                    labelColor={
+                      section.routeNum != null
+                        ? sidx % 3 === 0
+                          ? "text-emerald-800"
+                          : sidx % 3 === 1
+                            ? "text-sky-800"
+                            : "text-violet-800"
+                        : idx === 0
+                          ? "text-koopje-black"
+                          : "text-koopje-orange"
+                    }
+                    onDeleteSlot={deleteSlot}
+                  />
+                ))}
+              </div>
             ))
           )}
         </div>

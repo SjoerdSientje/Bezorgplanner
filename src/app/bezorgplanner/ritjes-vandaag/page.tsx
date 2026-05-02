@@ -117,15 +117,29 @@ export default function RitjesVandaagPage() {
     3: "bg-blue-50",
   };
 
+  const ROUTE_COLORS: Record<number, string> = {
+    1: "bg-emerald-50",
+    2: "bg-sky-50",
+    3: "bg-violet-50",
+    4: "bg-amber-50",
+    5: "bg-rose-50",
+  };
+
   const rowColorClass = useCallback(
     (rowIndex: number): string | undefined => {
       const sourceIndex = visibleRows.sourceIndices[rowIndex];
       if (sourceIndex == null) return undefined;
       const order = orders[sourceIndex];
       if (!order) return undefined;
-      const rit = (order as any).rit_nummer as number | null | undefined;
-      if (!rit) return undefined;
-      return RIT_COLORS[rit] ?? "bg-purple-50";
+      const rit = (order as { rit_nummer?: number | null }).rit_nummer;
+      if (rit != null && Number(rit) > 0) {
+        return RIT_COLORS[Number(rit)] ?? "bg-purple-50";
+      }
+      const routeN = (order as { route_nummer?: number | null }).route_nummer;
+      if (routeN != null && Number(routeN) > 0) {
+        return ROUTE_COLORS[Number(routeN)] ?? "bg-stone-100";
+      }
+      return undefined;
     },
     [orders, visibleRows.sourceIndices]
   );
