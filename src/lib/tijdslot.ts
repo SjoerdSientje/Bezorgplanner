@@ -30,29 +30,39 @@ function parseRestriction(text: string | null | undefined): Restriction | null {
   const raw = (text ?? "").trim().toLowerCase();
   if (!raw || raw === "geen" || raw === "geen opmerking") return null;
 
-  const tijd = /\b(\d{1,2}):?(\d{2})?\b/;
-  const tijdMatch = (s: string) => {
+  /**
+   * Zelfde logica als routific-payload: "na 2" zonder :mm → 14:00 (uren 1–6 als middag).
+   * Alleen als middagBare true (extractie uit na/voor/tussen).
+   */
+  const tijdMatch = (s: string, middagBare: boolean) => {
     const m = s.match(/(\d{1,2}):(\d{2})/);
     if (m) return `${m[1].padStart(2, "0")}:${m[2]}`;
     const m2 = s.match(/(\d{1,2})\s*(?:uur|u\.?)?/);
-    if (m2) return `${m2[1].padStart(2, "0")}:00`;
+    if (m2) {
+      let h = parseInt(m2[1], 10);
+      const hasColon = /:/.test(s);
+      if (middagBare && !hasColon && h >= 1 && h <= 6) {
+        h += 12;
+      }
+      return `${String(h).padStart(2, "0")}:00`;
+    }
     return null;
   };
 
   if (/^\s*na\s+/i.test(raw) || /\bna\s+\d/i.test(raw)) {
     const t = raw.replace(/.*?(\d{1,2}(?::\d{2})?(?:\s*uur)?).*/, "$1");
-    const start = tijdMatch(t || raw);
+    const start = tijdMatch(t || raw, true);
     if (start) return { type: "na", minStart: start };
   }
   if (/^\s*voor\s+/i.test(raw) || /\bvoor\s+\d/i.test(raw)) {
     const t = raw.replace(/.*?(\d{1,2}(?::\d{2})?(?:\s*uur)?).*/, "$1");
-    const end = tijdMatch(t || raw);
+    const end = tijdMatch(t || raw, true);
     if (end) return { type: "voor", maxEnd: end };
   }
   const tussen = raw.match(/tussen\s*(\d{1,2}(?::\d{2})?(?:\s*uur)?)\s*en\s*(\d{1,2}(?::\d{2})?(?:\s*uur)?)/i);
   if (tussen) {
-    const a = tijdMatch(tussen[1]);
-    const b = tijdMatch(tussen[2]);
+    const a = tijdMatch(tussen[1], true);
+    const b = tijdMatch(tussen[2], true);
     if (a && b) return { type: "tussen", minStart: a, maxEnd: b };
   }
   const twoTimes = raw.match(/(\d{1,2}):(\d{2})\s*[-–tot en]\s*(\d{1,2}):(\d{2})/i);

@@ -13,7 +13,7 @@ import { requireAccountEmail } from "@/lib/account";
  * Verplaatst alle "ritjes vandaag"-orders met tijdslot naar planning_slots.
  * - Als planning leeg is: slots worden direct als planning gezet (vandaag/morgen op basis van 17:00).
  * - Als planning al actieve slots heeft: slots worden als "ritjes voor morgen" gezet (morgen).
- * WhatsApp wordt hier niet meer verstuurd; dat gaat via "Stuur appjes".
+ * Na het opslaan van planning_slots wordt per order ook WhatsApp geprobeerd (zelfde templates als "Stuur appjes").
  */
 export async function POST(request: NextRequest) {
   try {
@@ -25,7 +25,9 @@ export async function POST(request: NextRequest) {
     // Orders ophalen die in aanmerking komen
     const { data: orders, error: queryError } = await supabase
       .from("orders")
-      .select("id, order_nummer, aankomsttijd_slot, bestelling_totaal_prijs, naam, telefoon_e164, telefoon_nummer, type, betaald, mp_tags, datum, datum_opmerking, meenemen_in_planning, opmerkingen_klant, bezorgtijd_voorkeur, email, producten, serienummer, aantal_fietsen, link_aankoopbewijs, route_nummer")
+      .select(
+        "id, order_nummer, aankomsttijd_slot, bestelling_totaal_prijs, naam, telefoon_e164, telefoon_nummer, type, betaald, mp_tags, datum, datum_opmerking, meenemen_in_planning, opmerkingen_klant, bezorgtijd_voorkeur, email, producten, serienummer, aantal_fietsen, link_aankoopbewijs"
+      )
       .eq("owner_email", ownerEmail)
       .eq("status", "ritjes_vandaag")
       .eq("meenemen_in_planning", true)
@@ -34,7 +36,10 @@ export async function POST(request: NextRequest) {
     if (queryError) {
       console.error("[api/planning-goedkeuren]", queryError);
       return NextResponse.json(
-        { error: "Orders ophalen mislukt." },
+        {
+          error: "Orders ophalen mislukt.",
+          detail: queryError.message,
+        },
         { status: 500 }
       );
     }
@@ -61,17 +66,11 @@ export async function POST(request: NextRequest) {
       if (!Number.isFinite(h)) return 9999;
       return h * 60 + (Number.isFinite(m) ? m : 0);
     };
-    const sorted = [...rows].sort((a, b) => {
-      const ra = (a as { route_nummer?: number | null }).route_nummer;
-      const rb = (b as { route_nummer?: number | null }).route_nummer;
-      const na = ra != null && Number(ra) > 0 ? Number(ra) : 999;
-      const nb = rb != null && Number(rb) > 0 ? Number(rb) : 999;
-      if (na !== nb) return na - nb;
-      return (
+    const sorted = [...rows].sort(
+      (a, b) =>
         parseMin((a.aankomsttijd_slot ?? "").toString()) -
         parseMin((b.aankomsttijd_slot ?? "").toString())
-      );
-    });
+    );
 
     // Bepaal de doeldatum: leeg planning → planningDate; anders → morgen (ritjes voor morgen)
     const { date: targetDate, isRitjesVoorMorgen } = await getTargetPlanningDate(ownerEmail, supabase as any);

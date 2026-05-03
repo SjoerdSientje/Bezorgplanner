@@ -9,6 +9,7 @@ import {
   type ParallelRouteSpec,
 } from "@/lib/routific-payload";
 import { maakTijdslot } from "@/lib/tijdslot";
+import { supabaseMissingOrdersRouteNummerColumn } from "@/lib/orders-route-nummer-supabase";
 
 const ROUTIFIC_VRP_URL = "https://api.routific.com/v1/vrp-long";
 const ROUTIFIC_JOBS_URL = "https://api.routific.com/jobs";
@@ -167,14 +168,23 @@ export async function POST(request: NextRequest) {
     }[] = [];
     let volgorde = 0;
 
-    // Voorkom verouderde route/rit-markering op orders die opnieuw worden berekend.
-    for (const o of rows) {
-      await supabase
+    /** Schrijf order-update; zonder route_nummer-kolom (migratie 014) opnieuw proberen. */
+    const patchOrder = async (
+      orderId: string,
+      payload: { rit_nummer: number | null; route_nummer: number | null; aankomsttijd_slot?: string }
+    ) => {
+      let { error } = await supabase
         .from("orders")
-        .update({ rit_nummer: null, route_nummer: null })
+        .update(payload)
         .eq("owner_email", ownerEmail)
-        .eq("id", o.id);
-    }
+        .eq("id", orderId);
+      if (error && supabaseMissingOrdersRouteNummerColumn(error) && "route_nummer" in payload) {
+        const { route_nummer: _r, ...rest } = payload;
+        const r2 = await supabase.from("orders").update(rest).eq("owner_email", ownerEmail).eq("id", orderId);
+        error = r2.error;
+      }
+      return error;
+    };
 
     const meerDanEenRoute = vehicleKeys.length > 1;
 
@@ -202,19 +212,57 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    if (slotsToInsert.length === 0 && rows.length > 0) {
+      const unserved = output?.unserved;
+      return NextResponse.json({
+        ok: true,
+        warning:
+          "Routific leverde geen bezorgstops voor deze orders (controleer adressen of unserved in Routific).",
+        planningDate,
+        vertrektijd,
+        visitCount: rows.length,
+        slotsWritten: 0,
+        job_id,
+        solution: output?.solution ?? null,
+        unserved: unserved ?? null,
+      });
+    }
+
     if (slotsToInsert.length > 0) {
-      // Schrijf aankomsttijd_slot, rit_nummer en route_nummer terug op elke order.
-      // planning_slots worden pas aangemaakt bij "Planning goedkeuren".
+      const clearErrors: string[] = [];
+      for (const o of rows) {
+        const err = await patchOrder(o.id, { rit_nummer: null, route_nummer: null });
+        if (err) clearErrors.push(`${o.id}: ${err.message}`);
+      }
+      if (clearErrors.length > 0) {
+        console.error("[api/routific/route] orders reset:", clearErrors.slice(0, 5));
+        return NextResponse.json(
+          {
+            error: "Tijdsloten konden niet worden gewist op orders (database).",
+            detail: clearErrors[0],
+          },
+          { status: 500 }
+        );
+      }
+
+      const writeErrors: string[] = [];
       for (const s of slotsToInsert) {
-        await supabase
-          .from("orders")
-          .update({
-            aankomsttijd_slot: s.aankomsttijd,
-            rit_nummer: s.rit_nummer,
-            route_nummer: s.route_nummer,
-          })
-          .eq("owner_email", ownerEmail)
-          .eq("id", s.order_id);
+        const err = await patchOrder(s.order_id, {
+          aankomsttijd_slot: s.aankomsttijd,
+          rit_nummer: s.rit_nummer,
+          route_nummer: s.route_nummer,
+        });
+        if (err) writeErrors.push(`${s.order_id}: ${err.message}`);
+      }
+      if (writeErrors.length > 0) {
+        console.error("[api/routific/route] slot writes:", writeErrors.slice(0, 5));
+        return NextResponse.json(
+          {
+            error: "Route berekend maar tijdsloten opslaan in de database is mislukt.",
+            detail: writeErrors[0],
+          },
+          { status: 500 }
+        );
       }
     }
 
@@ -224,6 +272,7 @@ export async function POST(request: NextRequest) {
       planningDate,
       vertrektijd,
       visitCount: rows.length,
+      slotsWritten: slotsToInsert.length,
       job_id,
       solution: output?.solution ?? null,
       unserved: output?.unserved ?? null,

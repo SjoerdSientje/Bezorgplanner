@@ -176,10 +176,15 @@ export default function RitjesRouteControls({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setMessage({ type: "error", text: data.error || "Route kon niet worden gegenereerd." });
+        const errText = [data.error, data.detail].filter(Boolean).join(" — ");
+        setMessage({ type: "error", text: errText || "Route kon niet worden gegenereerd." });
         return;
       }
-      setMessage({ type: "ok", text: data.message || "Route berekend." });
+      const warn = typeof data.warning === "string" ? data.warning.trim() : "";
+      setMessage({
+        type: warn ? "error" : "ok",
+        text: (data.message || "Route berekend.") + (warn ? `\n\n${warn}` : ""),
+      });
       onRouteGenerated?.();
     } catch {
       setMessage({ type: "error", text: "Er ging iets mis. Probeer het opnieuw." });
@@ -199,7 +204,8 @@ export default function RitjesRouteControls({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setGoedkeurenMessage({ type: "error", text: data.error || "Goedkeuren mislukt." });
+        const errText = [data.error, data.detail].filter(Boolean).join(" — ");
+        setGoedkeurenMessage({ type: "error", text: errText || "Goedkeuren mislukt." });
         return;
       }
       const wa = data?.whatsapp;
@@ -208,9 +214,14 @@ export default function RitjesRouteControls({
           wa.failed > 0
             ? ` Appjes: ${wa.sent} verzonden, ${wa.failed} mislukt.`
             : ` Appjes: ${wa.sent} verzonden.`;
+        const details = Array.isArray(wa.details) ? (wa.details as string[]) : [];
+        const detailBlock =
+          details.length > 0
+            ? "\n\n" + details.join("\n")
+            : "";
         setGoedkeurenMessage({
           type: wa.failed > 0 ? "error" : "ok",
-          text: (data.message || "Planning goedgekeurd.") + suffix,
+          text: (data.message || "Planning goedgekeurd.") + suffix + detailBlock,
         });
       } else {
         setGoedkeurenMessage({ type: "ok", text: data.message || "Planning goedgekeurd." });
@@ -245,7 +256,7 @@ export default function RitjesRouteControls({
           </button>
           {message && (
             <p
-              className={`w-full text-sm sm:w-auto ${message.type === "error" ? "text-red-600" : "text-green-700"}`}
+              className={`w-full whitespace-pre-wrap text-sm sm:w-auto ${message.type === "error" ? "text-red-600" : "text-green-700"}`}
             >
               {message.text}
             </p>
@@ -266,7 +277,7 @@ export default function RitjesRouteControls({
           </button>
           {goedkeurenMessage && (
             <p
-              className={`w-full text-sm sm:w-auto ${goedkeurenMessage.type === "error" ? "text-red-600" : "text-green-700"}`}
+              className={`w-full whitespace-pre-wrap text-sm sm:w-auto ${goedkeurenMessage.type === "error" ? "text-red-600" : "text-green-700"}`}
             >
               {goedkeurenMessage.text}
             </p>

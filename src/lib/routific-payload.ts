@@ -37,6 +37,7 @@ export type Tijdvenster =
 /**
  * Parsed "Bezorgtijd voorkeur" naar een tijdvenster in HH:MM.
  * - "na 15:00" / "pas na 16:00" → { start, end: null } (Routific: alleen start, geen end)
+ * - "na 2" / "na 3" in **bezorgtijd voorkeur** (zonder minuten) → vaak middag: 14:00, 15:00 (uren 1–6 → +12)
  * - "tussen 12 en 17", "16:00 - 20:00" → { start, end }
  * Geen match → return null.
  */
@@ -49,8 +50,13 @@ export function parseBezorgtijdVoorkeur(
   // "na X" of "pas na X" → alleen start, geen end (Routific: "anytime after")
   const naMatch = raw.match(/\b(?:pas\s+)?na\s+(\d{1,2})(?::(\d{2}))?(?:\s*uur)?\b/i);
   if (naMatch) {
-    const h = parseInt(naMatch[1], 10);
-    const m = naMatch[2] != null ? parseInt(naMatch[2], 10) : 0;
+    let h = parseInt(naMatch[1], 10);
+    const explicitMinutes = naMatch[2] != null;
+    const m = explicitMinutes ? parseInt(naMatch[2]!, 10) : 0;
+    // "na 2" zonder :mm: klanten bedoelen vrijwel altijd 14:00, niet 02:00 (zelfde voor 1–6).
+    if (!explicitMinutes && h >= 1 && h <= 6) {
+      h += 12;
+    }
     if (h >= 0 && h <= 23 && m >= 0 && m <= 59) {
       return {
         start: `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`,
