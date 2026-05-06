@@ -4,6 +4,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Header from "@/components/Header";
+import {
+  DEFAULT_PRODUCT_RULES_V1,
+  applyProductDefaultItemsRules,
+  isProductDefaultItemsRulesV1,
+  type ProductDefaultItemsRulesV1,
+} from "@/lib/product-default-items-rules";
 
 type PaymentOption =
   | "Was al betaald"
@@ -14,6 +20,7 @@ type PaymentOption =
 interface LineItemFromJson {
   name: string;
   isFiets: boolean;
+  properties?: { name: string; value: string }[];
   defaultItems?: string[];
 }
 
@@ -36,7 +43,10 @@ function shouldIgnoreAfrondenChecklistItem(label: string): boolean {
   return false;
 }
 
-function parseChecklist(order: OrderDetail): Array<{ label: string; count: number }> {
+function parseChecklist(
+  order: OrderDetail,
+  rules: ProductDefaultItemsRulesV1
+): Array<{ label: string; count: number }> {
   const counts = new Map<string, number>();
   const add = (s: string) => {
     const key = s.trim();
@@ -52,7 +62,9 @@ function parseChecklist(order: OrderDetail): Array<{ label: string; count: numbe
       for (const item of items) {
         if (item.isFiets) {
           add(item.name);
-          for (const d of item.defaultItems ?? []) add(d);
+          // Herbereken live vanuit actuele rules i.p.v. opgeslagen defaultItems
+          const computed = applyProductDefaultItemsRules(item.name, item.properties ?? [], rules);
+          for (const d of computed) add(d);
         } else {
           add(item.name);
         }
@@ -82,6 +94,14 @@ export default function AfrondenVragenlijstPage({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [productRules, setProductRules] = useState<ProductDefaultItemsRulesV1>(DEFAULT_PRODUCT_RULES_V1);
+
+  useEffect(() => {
+    fetch(`/api/product-rules?t=${Date.now()}`, { cache: "no-store" })
+      .then((r) => r.json().catch(() => ({})))
+      .then((d) => { if (isProductDefaultItemsRulesV1(d?.rules)) setProductRules(d.rules); })
+      .catch(() => {});
+  }, []);
 
   const BEZORGER_OPTIES = ["Tristan", "Eef", "Silas"] as const;
   const [bezorgerKeuze, setBezorgerKeuze] = useState<string>("");
@@ -114,7 +134,7 @@ export default function AfrondenVragenlijstPage({
     fetchOrder();
   }, [fetchOrder]);
 
-  const checklist = useMemo(() => (order ? parseChecklist(order) : []), [order]);
+  const checklist = useMemo(() => (order ? parseChecklist(order, productRules) : []), [order, productRules]);
 
   // Init checked-state zodra checklist binnen is
   useEffect(() => {

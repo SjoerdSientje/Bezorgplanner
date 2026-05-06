@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { requireAccountEmail } from "@/lib/account";
 import { isDatumOpmerkingVandaagOfMorgen } from "@/lib/planning-date";
+import {
+  DEFAULT_PRODUCT_RULES_V1,
+  applyProductDefaultItemsRules,
+  isProductDefaultItemsRulesV1,
+  type ProductDefaultItemsRulesV1,
+} from "@/lib/product-default-items-rules";
 
 export const dynamic = "force-dynamic";
 
@@ -9,7 +15,7 @@ interface LineItemFromJson {
   name: string;
   price: number;
   isFiets: boolean;
-  properties: { name: string; value: string }[];
+  properties?: { name: string; value: string }[];
   defaultItems?: string[];
 }
 
@@ -48,6 +54,30 @@ function parseProductsTextFallback(producten: unknown): LineItemFromJson[] {
     }));
 }
 
+/** Haal opgeslagen product-rules op, val terug op hardcoded defaults. */
+async function loadProductRules(ownerEmail: string): Promise<ProductDefaultItemsRulesV1> {
+  try {
+    const supabase = createServerSupabaseClient();
+    const { data: row } = await supabase
+      .from("product_default_items_rules")
+      .select("rules")
+      .eq("owner_email", ownerEmail)
+      .eq("id", "default")
+      .maybeSingle();
+    if (row?.rules != null && isProductDefaultItemsRulesV1(row.rules)) return row.rules;
+  } catch { /* gebruik default */ }
+  return DEFAULT_PRODUCT_RULES_V1;
+}
+
+/** Herbereken defaultItems voor een fiets-item vanuit actuele rules. */
+function liveDefaultItems(
+  item: LineItemFromJson,
+  rules: ProductDefaultItemsRulesV1
+): string[] {
+  if (!item.isFiets) return [];
+  return applyProductDefaultItemsRules(item.name, item.properties ?? [], rules);
+}
+
 export async function GET(request: NextRequest) {
   try {
     const ownerEmail = requireAccountEmail(request);
@@ -60,6 +90,8 @@ export async function GET(request: NextRequest) {
       console.error("[api/paklijst]", error);
       return NextResponse.json({ error: "Genereren mislukt." }, { status: 500 });
     }
+
+    const productRules = await loadProductRules(ownerEmail);
 
     const orders = (allOrders ?? []).filter((o) => {
       if (o.status !== "ritjes_vandaag") return false;
@@ -125,7 +157,7 @@ export async function GET(request: NextRequest) {
         if (!item.isFiets) {
           add(item.name);
         } else {
-          for (const d of item.defaultItems ?? []) {
+          for (const d of liveDefaultItems(item, productRules)) {
             add(d);
           }
         }
