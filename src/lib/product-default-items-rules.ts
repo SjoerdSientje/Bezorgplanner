@@ -30,7 +30,7 @@ function normaliseerLevering(v: string): string {
 
 function matchesModels(model: string, targets: string[]): boolean {
   const ml = model.toLowerCase().trim();
-  return targets.some((t) => t.toLowerCase().trim() === ml);
+  return targets.some((t) => ml.includes(t.toLowerCase().trim()));
 }
 
 function expandItemTemplates(items: string[], model: string): string[] {

@@ -633,7 +633,13 @@ export default function ProductenCell({
               /* ── View mode ── */
               <div className="space-y-2">
                 {hasStructured ? (
-                  displayItems.map((item, i) => (
+                  displayItems.map((item, i) => {
+                    // Herbereken defaultItems altijd vanuit actuele rules zodat ook
+                    // bestaande orders met verouderde opgeslagen data kloppen.
+                    const liveDefaultItems = item.isFiets
+                      ? applyProductDefaultItemsRules(item.name, item.properties, productRules)
+                      : [];
+                    return (
                     <div
                       key={i}
                       className={`rounded-lg border px-3 py-2 ${
@@ -659,11 +665,11 @@ export default function ProductenCell({
                           ))}
                         </ul>
                       )}
-                      {item.defaultItems && item.defaultItems.length > 0 && (
+                      {liveDefaultItems.length > 0 && (
                         <div className="mt-1.5 border-t border-dashed border-stone-200 pt-1.5">
                           <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-stone-400">Standaard inbegrepen</p>
                           <ul className="space-y-0.5">
-                            {item.defaultItems.map((d, j) => (
+                            {liveDefaultItems.map((d, j) => (
                               <li key={j} className="flex items-center gap-1.5 text-xs text-stone-500">
                                 <span className="text-[10px]">📦</span>{d}
                               </li>
@@ -672,7 +678,8 @@ export default function ProductenCell({
                         </div>
                       )}
                     </div>
-                  ))
+                    );
+                  })
                 ) : (
                   <div className="whitespace-pre-wrap rounded-lg bg-stone-50 px-3 py-2 text-sm text-stone-700">
                     {value || "—"}
