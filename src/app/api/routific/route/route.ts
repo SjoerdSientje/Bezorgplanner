@@ -213,18 +213,19 @@ export async function POST(request: NextRequest) {
     }
 
     if (slotsToInsert.length === 0 && rows.length > 0) {
-      const unserved = output?.unserved;
+      const unservedRaw = output?.unserved as Record<string, unknown> | null | undefined;
+      const unservedIds = unservedRaw ? Object.keys(unservedRaw) : [];
       return NextResponse.json({
         ok: true,
         warning:
-          "Routific leverde geen bezorgstops voor deze orders (controleer adressen of unserved in Routific).",
+          `Routific heeft geen stops ingepland. ${unservedIds.length > 0 ? `${unservedIds.length} order(s) staan als onbereikbaar: ${unservedIds.join(", ")}` : "Controleer adressen in Routific."}`,
         planningDate,
         vertrektijd,
         visitCount: rows.length,
         slotsWritten: 0,
         job_id,
         solution: output?.solution ?? null,
-        unserved: unserved ?? null,
+        unserved: unservedRaw ?? null,
       });
     }
 
@@ -266,16 +267,24 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const unserved = output?.unserved as Record<string, unknown> | null | undefined;
+    const unservedIds = unserved ? Object.keys(unserved) : [];
+    const unservedWarning =
+      unservedIds.length > 0
+        ? `⚠️ ${unservedIds.length} order(s) niet ingepland door Routific (voertuig te vol of onbereikbaar adres):\n${unservedIds.join(", ")}`
+        : undefined;
+
     return NextResponse.json({
       ok: true,
-      message: "Route berekend en tijdsloten opgeslagen.",
+      message: `Route berekend en ${slotsToInsert.length} tijdsloten opgeslagen (van ${rows.length} orders).`,
       planningDate,
       vertrektijd,
       visitCount: rows.length,
       slotsWritten: slotsToInsert.length,
       job_id,
       solution: output?.solution ?? null,
-      unserved: output?.unserved ?? null,
+      unserved: unserved ?? null,
+      warning: unservedWarning,
     });
   } catch (e) {
     console.error("[api/routific/route]", e);

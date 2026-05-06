@@ -6,6 +6,8 @@
 const DEPOT_ADDRESS = "Kapelweg 2, 3732 GS, De Bilt, Netherlands";
 const DEFAULT_DURATION = 20;
 const DEFAULT_SHIFT_END = "23:59";
+/** Minuten op het depot tussen twee ritten; stelt Routific in staat meerdere laadrondes te plannen. */
+const RELOAD_TIME_MINUTEN = 30;
 
 export interface OrderForRoute {
   id: string;
@@ -109,6 +111,8 @@ type VehicleConfig = {
   shift_end: string;
   capacity: number;
   strict_start: boolean;
+  /** Minuten laden op het depot na terugkomst; stelt Routific in staat meerdere ritten te plannen per voertuig. */
+  reload_service_time: number;
 };
 
 export interface RoutificPayload {
@@ -218,6 +222,7 @@ export function buildRoutificPayloadFromRoutes(
       shift_end: DEFAULT_SHIFT_END,
       capacity: cap,
       strict_start: true,
+      reload_service_time: RELOAD_TIME_MINUTEN,
     };
   });
 

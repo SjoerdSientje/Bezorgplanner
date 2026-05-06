@@ -112,7 +112,7 @@ export default function RitjesRouteControls({
   onVertrektijdChange,
 }: Props) {
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState<{ type: "ok" | "error"; text: string } | null>(null);
+  const [message, setMessage] = useState<{ type: "ok" | "warning" | "error"; text: string } | null>(null);
   const [showDialog, setShowDialog] = useState(false);
   const [routes, setRoutes] = useState<RouteRow[]>(() => loadRoutesDefault());
 
@@ -182,7 +182,7 @@ export default function RitjesRouteControls({
       }
       const warn = typeof data.warning === "string" ? data.warning.trim() : "";
       setMessage({
-        type: warn ? "error" : "ok",
+        type: warn ? "warning" : "ok",
         text: (data.message || "Route berekend.") + (warn ? `\n\n${warn}` : ""),
       });
       onRouteGenerated?.();
@@ -256,7 +256,7 @@ export default function RitjesRouteControls({
           </button>
           {message && (
             <p
-              className={`w-full whitespace-pre-wrap text-sm sm:w-auto ${message.type === "error" ? "text-red-600" : "text-green-700"}`}
+              className={`w-full whitespace-pre-wrap text-sm sm:w-auto ${message.type === "error" ? "text-red-600" : message.type === "warning" ? "text-orange-600" : "text-green-700"}`}
             >
               {message.text}
             </p>
