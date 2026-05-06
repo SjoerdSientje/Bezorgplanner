@@ -60,7 +60,6 @@ export const DEFAULT_PRODUCT_RULES_V1: ProductDefaultItemsRulesV1 = {
       },
       {
         models: [
-          "V20 PRO",
           "V20 Limited",
           "GT20",
           "V8 ultra mini",
