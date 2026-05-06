@@ -54,7 +54,8 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
-      parallelRoutes.push({ shift_start: ts, capacity: cap });
+      const meerdereRitten = Boolean(r.meerdereRitten ?? r.meerdere_ritten ?? false);
+      parallelRoutes.push({ shift_start: ts, capacity: cap, meerdereRitten });
     }
 
     const vertrektijd = parallelRoutes[0]!.shift_start;

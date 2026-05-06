@@ -96,14 +96,24 @@ export function maakTijdslot(
 
   if (res.type === "na") {
     const minStart = toMinutes(res.minStart);
-    const slotStart = Math.min(Math.max(minStart, arrival - SLOT_DURATION_MIN), arrival);
+    // Houd "na X" hard aan: begin nooit vóór minStart.
+    // Als Routific toch een eerdere aankomst geeft, schuiven we het volledige venster op naar minStart.
+    const slotStart =
+      arrival < minStart
+        ? minStart
+        : Math.max(minStart, arrival - SLOT_DURATION_MIN);
     const slotEnd = slotStart + SLOT_DURATION_MIN;
     return `${fromMinutes(slotStart)} - ${fromMinutes(slotEnd)}`;
   }
 
   if (res.type === "voor") {
     const maxEnd = toMinutes(res.maxEnd);
-    const slotEnd = Math.max(arrival, Math.min(maxEnd, arrival + SLOT_DURATION_MIN));
+    // Houd "voor X" hard aan: eindig nooit ná maxEnd.
+    // Als Routific toch een latere aankomst geeft, eindigt het venster op maxEnd.
+    const slotEnd =
+      arrival > maxEnd
+        ? maxEnd
+        : Math.min(maxEnd, arrival + SLOT_DURATION_MIN);
     const slotStart = slotEnd - SLOT_DURATION_MIN;
     return `${fromMinutes(slotStart)} - ${fromMinutes(slotEnd)}`;
   }

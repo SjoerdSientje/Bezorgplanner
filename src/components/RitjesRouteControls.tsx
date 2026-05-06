@@ -4,11 +4,11 @@ import { useState, useRef, useEffect, useCallback } from "react";
 
 const ROUTES_LS = "bezorgplanner.routes.v2";
 
-export type RouteRow = { vertrektijd: string; maxFietsen: number };
+export type RouteRow = { vertrektijd: string; maxFietsen: number; meerdereRitten: boolean };
 
 function loadRoutesDefault(): RouteRow[] {
   if (typeof window === "undefined") {
-    return [{ vertrektijd: "10:30", maxFietsen: 11 }];
+    return [{ vertrektijd: "10:30", maxFietsen: 11, meerdereRitten: false }];
   }
   try {
     const raw = localStorage.getItem(ROUTES_LS);
@@ -23,8 +23,9 @@ function loadRoutesDefault(): RouteRow[] {
             typeof o.maxFietsen === "number"
               ? o.maxFietsen
               : parseInt(String(o.maxFietsen ?? "11"), 10);
+          const mr = Boolean(o.meerdereRitten ?? false);
           if (/^\d{1,2}:\d{2}$/.test(vt) && Number.isFinite(mf) && mf >= 1 && mf <= 99) {
-            rows.push({ vertrektijd: vt, maxFietsen: mf });
+            rows.push({ vertrektijd: vt, maxFietsen: mf, meerdereRitten: mr });
           }
         }
         if (rows.length > 0) return rows;
@@ -33,7 +34,7 @@ function loadRoutesDefault(): RouteRow[] {
   } catch {
     // ignore
   }
-  return [{ vertrektijd: "10:30", maxFietsen: 11 }];
+  return [{ vertrektijd: "10:30", maxFietsen: 11, meerdereRitten: false }];
 }
 
 const TIJDOPTIES: string[] = [];
@@ -136,7 +137,7 @@ export default function RitjesRouteControls({
   useEffect(() => {
     if (!showDialog) return;
     setRoutes((prev) => {
-      if (prev.length === 0) return [{ vertrektijd: vertrektijd || "10:30", maxFietsen: 11 }];
+      if (prev.length === 0) return [{ vertrektijd: vertrektijd || "10:30", maxFietsen: 11, meerdereRitten: false }];
       const next = [...prev];
       next[0] = { ...next[0], vertrektijd: vertrektijd || next[0].vertrektijd };
       return next;
@@ -171,6 +172,7 @@ export default function RitjesRouteControls({
           routes: cleaned.map((r) => ({
             vertrektijd: r.vertrektijd.trim(),
             maxFietsen: r.maxFietsen,
+            meerdereRitten: r.meerdereRitten,
           })),
         }),
       });
@@ -296,7 +298,7 @@ export default function RitjesRouteControls({
             <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
               <h2 className="mb-2 text-base font-semibold text-koopje-black">Routes</h2>
               <p className="mb-4 text-sm text-koopje-black/70">
-                Per route <strong>verplicht</strong>: vertrek vanaf Kapelweg en het maximum aantal fietsen dat tegelijk op die route past. Meerdere routes = parallel meer busjes; één route = één bus met jouw max. load. Opgeslagen op dit apparaat.
+                Per route: vertrektijd en max. fietsen. Met <strong>1 rit</strong> is de capaciteit hard (geen depot-return). Met <strong>↩ meerdere ritten</strong> rijdt het voertuig terug als vol en bepaalt Routific zelf wanneer de volgende rit start. Opgeslagen op dit apparaat.
               </p>
               <div className="mb-4 max-h-[40vh] space-y-3 overflow-y-auto pr-1">
                 {routes.map((row, i) => (
@@ -333,6 +335,25 @@ export default function RitjesRouteControls({
                       />
                       <span className="text-koopje-black/60">fietsen</span>
                     </label>
+                    {/* Toggle: mag dit voertuig terug naar depot voor meerdere ritten? */}
+                    <button
+                      type="button"
+                      title={row.meerdereRitten
+                        ? "Meerdere ritten — voertuig rijdt terug naar depot als vol, Routific bepaalt wanneer"
+                        : "Één rit — vaste capaciteit, geen depot-return"}
+                      onClick={() => {
+                        const next = [...routes];
+                        next[i] = { ...next[i], meerdereRitten: !row.meerdereRitten };
+                        setRoutes(next);
+                      }}
+                      className={`flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium transition ${
+                        row.meerdereRitten
+                          ? "bg-blue-100 text-blue-700"
+                          : "bg-stone-100 text-stone-500"
+                      }`}
+                    >
+                      {row.meerdereRitten ? "↩ meerdere ritten" : "1 rit"}
+                    </button>
                     {routes.length > 1 && (
                       <button
                         type="button"
@@ -348,7 +369,7 @@ export default function RitjesRouteControls({
               <button
                 type="button"
                 onClick={() =>
-                  setRoutes((prev) => [...prev, { vertrektijd: vertrektijd || "10:30", maxFietsen: 11 }])
+                  setRoutes((prev) => [...prev, { vertrektijd: vertrektijd || "10:30", maxFietsen: 11, meerdereRitten: false }])
                 }
                 className="mb-4 w-full rounded-lg border border-dashed border-stone-300 py-2 text-sm text-koopje-black/70 hover:bg-stone-50"
               >

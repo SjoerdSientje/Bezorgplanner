@@ -132,8 +132,14 @@ export interface RoutificPayload {
 export type ParallelRouteSpec = {
   /** HH:MM — vertrek vanaf depot voor dit voertuig */
   shift_start: string;
-  /** Max. fietsen tegelijk (VRP-capaciteit) */
+  /** Max. fietsen tegelijk (VRP-capaciteit) per rit */
   capacity: number;
+  /**
+   * true  → voertuig mag terug naar depot als vol en meerdere ritten rijden.
+   *         Routific bepaalt zelf wanneer de volgende rit start.
+   * false → één rit, geen depot-return. Max capaciteit is hard.
+   */
+  meerdereRitten?: boolean;
 };
 
 function sanitizeVisitId(id: string): string {
@@ -213,7 +219,9 @@ export function buildRoutificPayloadFromRoutes(
       shift_end: DEFAULT_SHIFT_END,
       capacity: cap,
       strict_start: true,
-      reload_service_time: RELOAD_TIME_MINUTEN,
+      // Alleen reload_service_time instellen als meerdere ritten expliciet gewenst zijn.
+      // Zonder deze veld doet Routific één rit en is max-capaciteit hard.
+      ...(r.meerdereRitten ? { reload_service_time: RELOAD_TIME_MINUTEN } : {}),
     };
   });
 

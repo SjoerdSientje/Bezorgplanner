@@ -58,9 +58,9 @@ function Doc({ d }: { d: GarantiePdfData }) {
 
         {/* Wat houdt garantie in */}
         <Text style={s.sectLabel}>Wat houdt onze garantie in?</Text>
-        <Text style={s.bullet}>● U kunt met uw Fatbike altijd langskomen bij onze winkel-werkplaats. Wij herstellen het probleem dan kosteloos voor u.</Text>
-        <Text style={s.bullet}>● Woont u niet in de buurt? Dan kunnen wij de benodigde onderdelen naar u opsturen.</Text>
-        <Text style={s.bullet}>● U kunt ook gebruikmaken van onze Haal & Breng-service of Reparatie aan Huis-service. Hieraan zijn uitsluitend de voorrijkosten verbonden.</Text>
+        <Text style={s.bullet}>- U kunt met uw Fatbike altijd langskomen bij onze winkel-werkplaats. Wij herstellen het probleem dan kosteloos voor u.</Text>
+        <Text style={s.bullet}>- Woont u niet in de buurt? Dan kunnen wij de benodigde onderdelen naar u opsturen.</Text>
+        <Text style={s.bullet}>- U kunt ook gebruikmaken van onze Haal & Breng-service of Reparatie aan Huis-service. Hieraan zijn uitsluitend de voorrijkosten verbonden.</Text>
 
         {/* Klantgegevens */}
         <View style={s.dataBlok}>
