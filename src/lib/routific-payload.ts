@@ -140,24 +140,17 @@ function sanitizeVisitId(id: string): string {
   return id.replace(/[.$]/g, "_");
 }
 
-/** Als er een route met lage max. load (≤4) is én er zit een grote fiets in de batch, tellen alle fietsen dubbel qua load. */
-function shouldDoubleAllLoadsForGroteFiets(
-  orders: OrderForRoute[],
-  treatAsSmallFleet: boolean
-): boolean {
-  return treatAsSmallFleet && orders.some((o) => isGroteFiets(o.producten));
-}
-
 function buildVisits(
   orders: OrderForRoute[],
   defaultStartForNoPreference: string,
-  doubleUnitForAllBikes: boolean
 ): RoutificPayload["visits"] {
   const visits: RoutificPayload["visits"] = {};
   for (const o of orders) {
     const address = (o.volledig_adres || "").trim() || "Onbekend adres";
     const baseFietsen = Math.max(1, Number(o.aantal_fietsen) || 1);
-    const unitSize = doubleUnitForAllBikes ? 2 : 1;
+    // Grote fietsen (GT2000, Engwe E26, Qibbel etc.) nemen 2 laadplekken in beslag.
+    // Gewone fietsen tellen als 1. De gebruiker stelt zelf de max capaciteit in.
+    const unitSize = isGroteFiets(o.producten) ? 2 : 1;
     const load = baseFietsen * unitSize;
     const window = parseBezorgtijdVoorkeur(o.bezorgtijd_voorkeur);
     const start = window ? window.start : defaultStartForNoPreference;
@@ -207,10 +200,8 @@ export function buildRoutificPayloadFromRoutes(
   if (routes.length === 0) {
     throw new Error("Minimaal één route nodig.");
   }
-  const smallInFleet = routes.some((r) => r.capacity <= 4);
-  const doubleUnits = shouldDoubleAllLoadsForGroteFiets(orders, smallInFleet);
   const defaultStart = earliestParallelShiftStart(routes);
-  const visits = buildVisits(orders, defaultStart, doubleUnits);
+  const visits = buildVisits(orders, defaultStart);
 
   const fleet: Record<string, VehicleConfig> = {};
   routes.forEach((r, i) => {

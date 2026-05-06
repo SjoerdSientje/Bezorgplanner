@@ -78,6 +78,18 @@ export async function POST(request: NextRequest) {
     }
 
     const supabase = createClient(supabaseUrl, serviceKey);
+
+    // Bereken vandaag en morgen in Amsterdam-tijd — orders voor beide dagen worden meegenomen.
+    // getPlanningDate() geeft vóór 18:00 vandaag terug, waardoor orders met datum=morgen eerder
+    // werden uitgesloten als datum_opmerking leeg was. Door altijd beide data te checken werkt
+    // route-generatie correct op elk moment van de dag.
+    const toAmsterdamDateStr = (offsetDays: number): string => {
+      const d = new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Amsterdam" }));
+      d.setDate(d.getDate() + offsetDays);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    };
+    const vandaagStr = toAmsterdamDateStr(0);
+    const morgenStr = toAmsterdamDateStr(1);
     const { date: planningDate } = getPlanningDate();
 
     // Gebruik fetchAllOrders om row-limit bug te omzeilen, filter daarna in JS
@@ -87,14 +99,16 @@ export async function POST(request: NextRequest) {
       if ((o as unknown as Record<string, unknown>).status !== "ritjes_vandaag") return false;
       if (!(o as unknown as Record<string, unknown>).meenemen_in_planning) return false;
       const opmerking = ((o as unknown as Record<string, unknown>).datum_opmerking as string) ?? "";
+      const datum = (o as unknown as Record<string, unknown>).datum as string | null;
+      // Inclusief als datum_opmerking naar vandaag/morgen verwijst, of als datum = vandaag of morgen
       const heeftVandaagOfMorgen = isDatumOpmerkingVandaagOfMorgen(opmerking);
-      const heeftDatum = ((o as unknown as Record<string, unknown>).datum as string | null) === planningDate;
+      const heeftDatum = datum === vandaagStr || datum === morgenStr || datum === planningDate;
       return heeftVandaagOfMorgen || heeftDatum;
     });
     if (rows.length === 0) {
       return NextResponse.json({
         ok: true,
-        message: "Geen orders om mee te nemen in de route (planningdatum: " + planningDate + ").",
+        message: `Geen orders gevonden met meenemen_in_planning=true en datum vandaag (${vandaagStr}) of morgen (${morgenStr}).`,
         planningDate,
         vertrektijd,
         visitCount: 0,
@@ -171,7 +185,7 @@ export async function POST(request: NextRequest) {
     /** Schrijf order-update; zonder route_nummer-kolom (migratie 014) opnieuw proberen. */
     const patchOrder = async (
       orderId: string,
-      payload: { rit_nummer: number | null; route_nummer: number | null; aankomsttijd_slot?: string }
+      payload: { rit_nummer: number | null; route_nummer: number | null; aankomsttijd_slot?: string | null }
     ) => {
       let { error } = await supabase
         .from("orders")
@@ -229,23 +243,25 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    if (slotsToInsert.length > 0) {
-      const clearErrors: string[] = [];
-      for (const o of rows) {
-        const err = await patchOrder(o.id, { rit_nummer: null, route_nummer: null });
-        if (err) clearErrors.push(`${o.id}: ${err.message}`);
-      }
-      if (clearErrors.length > 0) {
-        console.error("[api/routific/route] orders reset:", clearErrors.slice(0, 5));
-        return NextResponse.json(
-          {
-            error: "Tijdsloten konden niet worden gewist op orders (database).",
-            detail: clearErrors[0],
-          },
-          { status: 500 }
-        );
-      }
+    // Altijd alle orders in de batch resetten (ook aankomsttijd_slot), zodat geen
+    // verouderde tijdsloten van een vorige run zichtbaar blijven voor unserved orders.
+    const clearErrors: string[] = [];
+    for (const o of rows) {
+      const err = await patchOrder(o.id, { aankomsttijd_slot: null, rit_nummer: null, route_nummer: null });
+      if (err) clearErrors.push(`${o.id}: ${err.message}`);
+    }
+    if (clearErrors.length > 0) {
+      console.error("[api/routific/route] orders reset:", clearErrors.slice(0, 5));
+      return NextResponse.json(
+        {
+          error: "Tijdsloten konden niet worden gewist op orders (database).",
+          detail: clearErrors[0],
+        },
+        { status: 500 }
+      );
+    }
 
+    if (slotsToInsert.length > 0) {
       const writeErrors: string[] = [];
       for (const s of slotsToInsert) {
         const err = await patchOrder(s.order_id, {
@@ -267,12 +283,18 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const unserved = output?.unserved as Record<string, unknown> | null | undefined;
+    const unserved = output?.unserved as Record<string, string | unknown> | null | undefined;
     const unservedIds = unserved ? Object.keys(unserved) : [];
-    const unservedWarning =
-      unservedIds.length > 0
-        ? `⚠️ ${unservedIds.length} order(s) niet ingepland door Routific (voertuig te vol of onbereikbaar adres):\n${unservedIds.join(", ")}`
-        : undefined;
+    let unservedWarning: string | undefined;
+    if (unservedIds.length > 0) {
+      const lines = unservedIds.map((uid) => {
+        const order = orderByVisitId.get(uid) ?? orderByVisitId.get(uid.replace(/[.$]/g, "_"));
+        const naam = order?.naam ?? uid;
+        const reden = typeof unserved?.[uid] === "string" ? ` (${unserved[uid]})` : "";
+        return `• ${naam}${reden}`;
+      });
+      unservedWarning = `⚠️ ${unservedIds.length} order(s) niet ingepland door Routific:\n${lines.join("\n")}`;
+    }
 
     return NextResponse.json({
       ok: true,
