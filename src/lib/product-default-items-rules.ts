@@ -25,7 +25,10 @@ export type ProductDefaultItemsRulesV1 = {
 };
 
 function normaliseerLevering(v: string): string {
-  return v.trim().replace(/:$/, "").trim().toLowerCase();
+  const n = v.trim().replace(/:$/, "").trim().toLowerCase();
+  // "rijklaar" zonder "in doos" → volledig rijklaar
+  if (n === "rijklaar") return "volledig rijklaar";
+  return n;
 }
 
 function matchesModels(model: string, targets: string[]): boolean {
@@ -57,6 +60,7 @@ export const DEFAULT_PRODUCT_RULES_V1: ProductDefaultItemsRulesV1 = {
       },
       {
         models: [
+          "V20 PRO",
           "V20 Limited",
           "GT20",
           "V8 ultra mini",
@@ -107,7 +111,21 @@ export function applyProductDefaultItemsRules(
 
   const leveringRaw =
     rawProperties.find((p) => p.name?.toLowerCase().trim() === "levering")?.value ?? "";
-  const levering = normaliseerLevering(leveringRaw);
+  let levering = normaliseerLevering(leveringRaw);
+
+  // Fallback: als er geen Levering property is, lees het uit de productnaam.
+  // Manual orders hebben "rijklaar" in de titel; Shopify Combi-Deal heeft geen aparte property.
+  if (!levering) {
+    if (
+      naamLower.includes("rijklaar") ||
+      naamLower.includes("combi-deal") ||
+      naamLower.includes("combi deal")
+    ) {
+      levering = "volledig rijklaar";
+    } else if (naamLower.includes("in doos")) {
+      levering = "in doos";
+    }
+  }
 
   if (levering === "volledig rijklaar") {
     if (!excluded) {
