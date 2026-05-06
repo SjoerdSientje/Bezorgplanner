@@ -127,11 +127,38 @@ export function applyProductDefaultItemsRules(
     }
   }
 
+  // Combineer modelExtras van de meegegeven rules (eventueel DB) én altijd de hardcoded
+  // defaults, zodat nieuwe modellen in defaults automatisch voor alle gebruikers werken —
+  // ook als zij eerder een versie zonder die modellen in de DB hebben opgeslagen.
+  function mergedExtras(
+    custom: ProductDefaultItemsRulesV1["volledigRijklaar"]["modelExtras"]
+  ): ProductDefaultItemsRulesV1["volledigRijklaar"]["modelExtras"] {
+    const base = DEFAULT_PRODUCT_RULES_V1.volledigRijklaar.modelExtras;
+    if (custom === base) return base;
+    const combined = [...base];
+    for (const cg of custom) {
+      const key = cleanLines(cg.items).sort().join("|");
+      const existingIdx = combined.findIndex(
+        (d) => cleanLines(d.items).sort().join("|") === key
+      );
+      if (existingIdx >= 0) {
+        const existingModels = new Set(combined[existingIdx].models.map((m) => m.toLowerCase()));
+        const newModels = cg.models.filter((m) => !existingModels.has(m.toLowerCase()));
+        if (newModels.length) {
+          combined[existingIdx] = { ...combined[existingIdx], models: [...combined[existingIdx].models, ...newModels] };
+        }
+      } else {
+        combined.push(cg);
+      }
+    }
+    return combined;
+  }
+
   if (levering === "volledig rijklaar") {
     if (!excluded) {
       items.push(...vrStandardItems);
     }
-    for (const g of rules.volledigRijklaar.modelExtras) {
+    for (const g of mergedExtras(rules.volledigRijklaar.modelExtras)) {
       const models = cleanLines(g.models);
       const groupItems = cleanLines(g.items);
       if (matchesModels(model, models)) {
