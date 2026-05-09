@@ -176,6 +176,13 @@ export async function POST(request: NextRequest) {
     // Als planning nu leeg is, promoot ritjes voor morgen naar vandaag.
     await promoteRitjesVoorMorgen(ownerEmail, supabase as any);
 
+    const slotDatums = (slotsVoor ?? [])
+      .map((s: { datum?: string | null }) => String(s.datum ?? "").trim())
+      .filter(Boolean)
+      .sort();
+    const templateBezorgdatum =
+      slotDatums.length > 0 ? slotDatums[slotDatums.length - 1]! : String((order as any).datum ?? "").trim();
+
     const waRes = await sendWhatsAppByEvent(
       "afronden",
       {
@@ -188,7 +195,7 @@ export async function POST(request: NextRequest) {
         type: (order as any).type,
         betaald: (order as any).betaald,
         mp_tags: (order as any).mp_tags,
-        datum: (order as any).datum,
+        datum: templateBezorgdatum,
         opmerkingen_klant: (order as any).opmerkingen_klant,
         bezorgtijd_voorkeur: (order as any).bezorgtijd_voorkeur,
       },

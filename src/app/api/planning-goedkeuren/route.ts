@@ -119,7 +119,7 @@ export async function POST(request: NextRequest) {
           type: o.type,
           betaald: o.betaald,
           mp_tags: o.mp_tags,
-          datum: o.datum ?? targetDate,
+          datum: targetDate,
           opmerkingen_klant: o.opmerkingen_klant,
           bezorgtijd_voorkeur: o.bezorgtijd_voorkeur,
           in_planning_en_ritjes_vandaag: false,

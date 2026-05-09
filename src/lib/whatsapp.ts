@@ -31,6 +31,7 @@ export type WhatsAppOrderInput = {
   type?: string | null;
   betaald?: boolean | null;
   mp_tags?: string | null;
+  /** YYYY-MM-DD: lever-/planningsdatum voor template (niet de besteldatum). */
   datum?: string | null;
   opmerkingen_klant?: string | null;
   bezorgtijd_voorkeur?: string | null;
@@ -193,19 +194,37 @@ function fillVars(template: string, order: WhatsAppOrderInput): string {
     .replaceAll("{tijdslot}", String(order.aankomsttijd_slot ?? ""));
 }
 
-/** DD-MM for WhatsApp {datum}: altijd morgen (Amsterdam). */
-function formatDatumPlaceholderAmsterdam(): string {
+function formatAsDdMm(date: Date): string {
+  return `${String(date.getDate()).padStart(2, "0")}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function parseIsoDateKey(raw: string): Date | null {
+  const s = raw.trim();
+  if (!s) return null;
+  // Supports YYYY-MM-DD (orders.datum) and other ISO-like values.
+  const isoLike = /^\d{4}-\d{2}-\d{2}/.exec(s);
+  if (isoLike) {
+    const [y, m, d] = isoLike[0].split("-").map(Number);
+    if (Number.isFinite(y) && Number.isFinite(m) && Number.isFinite(d)) {
+      return new Date(y, m - 1, d);
+    }
+  }
+  const parsed = new Date(s);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/** DD-MM for WhatsApp-body: `datum` = lever-/planningsdatum (YYYY-MM-DD); anders vandaag Amsterdam. */
+function formatDatumPlaceholderAmsterdam(order: WhatsAppOrderInput): string {
+  const fromPlanning = parseIsoDateKey(String(order.datum ?? ""));
+  if (fromPlanning) return formatAsDdMm(fromPlanning);
+
   const s = new Date().toLocaleString("sv-SE", { timeZone: "Europe/Amsterdam" });
   const [datePart] = s.split(" ");
   const [y, m, d] = datePart.split("-").map(Number);
-  let yy = y;
-  let mm = m;
-  let dd = d;
-  const next = new Date(Date.UTC(y, m - 1, d + 1));
-  yy = next.getUTCFullYear();
-  mm = next.getUTCMonth() + 1;
-  dd = next.getUTCDate();
-  return `${String(dd).padStart(2, "0")}-${String(mm).padStart(2, "0")}`;
+  if (Number.isFinite(y) && Number.isFinite(m) && Number.isFinite(d)) {
+    return formatAsDdMm(new Date(y, m - 1, d));
+  }
+  return "";
 }
 
 export function resolveTemplateForOrder(
@@ -252,7 +271,7 @@ function buildAutoVariables(
 function buildBusinessVariables(order: WhatsAppOrderInput, count: number): string[] {
   const vars = [
     String(order.naam ?? ""),
-    formatDatumPlaceholderAmsterdam(),
+    formatDatumPlaceholderAmsterdam(order),
     String(order.aankomsttijd_slot ?? ""),
     String(order.bestelling_totaal_prijs ?? ""),
   ];

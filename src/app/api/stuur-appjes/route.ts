@@ -4,6 +4,18 @@ import { sendWhatsAppByEvent } from "@/lib/whatsapp";
 import { requireAccountEmail } from "@/lib/account";
 import { getLatestOrNewPlanningDate } from "@/lib/planning-promote";
 
+function mergeSlotDatums(rows: Array<{ order_id: string | null; datum: string | null }>) {
+  const m = new Map<string, string>();
+  for (const r of rows) {
+    const id = String(r.order_id ?? "");
+    const d = String(r.datum ?? "").trim();
+    if (!id || !d) continue;
+    const prev = m.get(id);
+    if (!prev || d > prev) m.set(id, d);
+  }
+  return m;
+}
+
 /**
  * POST /api/stuur-appjes
  * Body: { orders: Array<{ order_id; order_nummer; naam; aankomsttijd_slot; telefoon_e164;
@@ -70,8 +82,10 @@ export async function POST(request: NextRequest) {
 
     // Voor "nieuwe_order": toevoegen aan planning
     const nieuweOrderOrders = selected.filter((o) => o.section === "nieuwe_order");
+    let planningDatumVoorNieuweOrders: string | null = null;
     if (nieuweOrderOrders.length > 0) {
-      const targetDate = await getLatestOrNewPlanningDate(ownerEmail, supabase as any);
+      planningDatumVoorNieuweOrders = await getLatestOrNewPlanningDate(ownerEmail, supabase as any);
+      const targetDate = planningDatumVoorNieuweOrders;
 
       // Bepaal hoogste volgorde voor die datum
       const { data: existingSlots } = await supabase
@@ -114,6 +128,27 @@ export async function POST(request: NextRequest) {
 
     }
 
+    const tijdslotOrderIds = Array.from(
+      new Set(selected.filter((o) => o.section === "nieuw_tijdslot").map((o) => o.order_id))
+    );
+    let slotDatumByOrderId = new Map<string, string>();
+    if (tijdslotOrderIds.length > 0) {
+      const { data: slotRows } = await supabase
+        .from("planning_slots")
+        .select("order_id, datum")
+        .eq("owner_email", ownerEmail)
+        .in("order_id", tijdslotOrderIds)
+        .neq("status", "afgerond");
+      slotDatumByOrderId = mergeSlotDatums((slotRows ?? []) as Array<{ order_id: string | null; datum: string | null }>);
+    }
+
+    const mistSlotDatumVoorTijdslot = selected.some(
+      (o) => o.section === "nieuw_tijdslot" && !slotDatumByOrderId.get(o.order_id)
+    );
+    const fallbackPlanningDatum = mistSlotDatumVoorTijdslot
+      ? await getLatestOrNewPlanningDate(ownerEmail, supabase as any)
+      : "";
+
     // Verstuur WhatsApp per order
     const details: string[] = [];
     let sentCount = 0;
@@ -125,6 +160,11 @@ export async function POST(request: NextRequest) {
       // "nieuwe_order" → standaard template (in_planning_en_ritjes_vandaag = false)
       // "nieuw_tijdslot" → nieuw_tijdslot template (in_planning_en_ritjes_vandaag = true)
       const inPlanningEnRitjesVandaag = o.section === "nieuw_tijdslot";
+
+      const templatePlandatum =
+        o.section === "nieuwe_order"
+          ? (planningDatumVoorNieuweOrders ?? "")
+          : (slotDatumByOrderId.get(o.order_id) || fallbackPlanningDatum);
 
       const sendRes = await sendWhatsAppByEvent(
         "stuur_appjes",
@@ -138,7 +178,7 @@ export async function POST(request: NextRequest) {
           type: String(meta.type ?? ""),
           betaald: (meta.betaald as boolean | null) ?? null,
           mp_tags: String(meta.mp_tags ?? ""),
-          datum: String(meta.datum ?? ""),
+          datum: templatePlandatum,
           opmerkingen_klant: String(meta.opmerkingen_klant ?? ""),
           bezorgtijd_voorkeur: String(meta.bezorgtijd_voorkeur ?? ""),
           in_planning_en_ritjes_vandaag: inPlanningEnRitjesVandaag,

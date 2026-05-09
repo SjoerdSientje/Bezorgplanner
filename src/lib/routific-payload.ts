@@ -111,8 +111,8 @@ type VehicleConfig = {
   shift_end: string;
   capacity: number;
   strict_start: boolean;
-  /** Minuten laden op het depot na terugkomst; stelt Routific in staat meerdere ritten te plannen per voertuig. */
-  reload_service_time: number;
+  /** Minuten laden op het depot na terugkomst; weglaten = geen depot-reload (één rit). */
+  reload_service_time?: number;
 };
 
 export interface RoutificPayload {
