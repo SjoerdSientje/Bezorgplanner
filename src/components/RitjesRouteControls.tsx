@@ -298,7 +298,11 @@ export default function RitjesRouteControls({
             <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
               <h2 className="mb-2 text-base font-semibold text-koopje-black">Routes</h2>
               <p className="mb-4 text-sm text-koopje-black/70">
-                Per route: vertrektijd en max. fietsen. Met <strong>1 rit</strong> is de capaciteit hard (geen depot-return). Met <strong>↩ meerdere ritten</strong> rijdt het voertuig terug als vol en bepaalt Routific zelf wanneer de volgende rit start. Opgeslagen op dit apparaat.
+                Je kiest <strong>per route</strong> vertrektijd en max. fietsen. Zonder vinkje onder{" "}
+                <strong>Voertuig mag terug naar depot</strong> = één rit, vaste capaciteit. Met vinkje
+                mag het voertuig na een volle lading terug naar depot en daarna weer uit. Bijvoorbeeld
+                grote bus max. 12 zonder vinkje, kleine bus max. 4 mét vinkje. Opgeslagen op dit
+                apparaat.
               </p>
               <div className="mb-4 max-h-[40vh] space-y-3 overflow-y-auto pr-1">
                 {routes.map((row, i) => (
@@ -335,25 +339,22 @@ export default function RitjesRouteControls({
                       />
                       <span className="text-koopje-black/60">fietsen</span>
                     </label>
-                    {/* Toggle: mag dit voertuig terug naar depot voor meerdere ritten? */}
-                    <button
-                      type="button"
-                      title={row.meerdereRitten
-                        ? "Meerdere ritten — voertuig rijdt terug naar depot als vol, Routific bepaalt wanneer"
-                        : "Één rit — vaste capaciteit, geen depot-return"}
-                      onClick={() => {
-                        const next = [...routes];
-                        next[i] = { ...next[i], meerdereRitten: !row.meerdereRitten };
-                        setRoutes(next);
-                      }}
-                      className={`flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium transition ${
-                        row.meerdereRitten
-                          ? "bg-blue-100 text-blue-700"
-                          : "bg-stone-100 text-stone-500"
-                      }`}
-                    >
-                      {row.meerdereRitten ? "↩ meerdere ritten" : "1 rit"}
-                    </button>
+                    <label className="flex items-center gap-2 rounded-md bg-white/80 px-2 py-1 text-xs text-koopje-black">
+                      <input
+                        type="checkbox"
+                        checked={row.meerdereRitten}
+                        onChange={(e) => {
+                          const next = [...routes];
+                          next[i] = { ...next[i], meerdereRitten: e.target.checked };
+                          setRoutes(next);
+                        }}
+                        className="h-4 w-4 accent-koopje-orange"
+                      />
+                      <span>
+                        Voertuig mag terug naar depot
+                        <span className="text-koopje-black/60"> (meerdere ritten)</span>
+                      </span>
+                    </label>
                     {routes.length > 1 && (
                       <button
                         type="button"
