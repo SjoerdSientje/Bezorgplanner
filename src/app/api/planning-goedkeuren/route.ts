@@ -13,7 +13,7 @@ import { requireAccountEmail } from "@/lib/account";
  * POST /api/planning-goedkeuren
  *
  * Verplaatst alle "ritjes vandaag"-orders met tijdslot naar planning_slots.
- * - Als planning leeg is: slots worden direct als planning gezet (vandaag/morgen op basis van 17:00).
+ * - Als planning leeg is: slots worden direct als planning gezet (vandaag/morgen: 18:00 Amsterdam, zie planning-date).
  * - Als planning al actieve slots heeft: nieuwe slots op morgen — alleen orders die echt bij die
  *   leverdatum horen (niet lopende ritjes van vandaag op planning_slots onderweg/gepland).
  * Na het opslaan van planning_slots wordt per order ook WhatsApp geprobeerd (zelfde templates als "Stuur appjes").

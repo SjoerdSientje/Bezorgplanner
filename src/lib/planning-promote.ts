@@ -23,7 +23,7 @@ function getTomorrowAmsterdam(): string {
 /**
  * Gebruikt door "Planning goedkeuren":
  * - Als er actieve planning-slots zijn → morgen (nieuwe batch als "ritjes voor morgen")
- * - Als planning leeg is → planningDate (vandaag vóór 17:00, morgen erna)
+ * - Als planning leeg is → planningDate (vóór 18:00 Amsterdam = vandaag, daarna = morgen)
  */
 export async function getTargetPlanningDate(
   ownerEmail: string,
@@ -46,7 +46,7 @@ export async function getTargetPlanningDate(
 /**
  * Gebruikt door "Stuur appjes → Nieuwe order":
  * Voeg toe aan de LAATSTE (meest toekomstige) bestaande planning-batch.
- * Als er geen actieve slots zijn → planningDate (vandaag/morgen op basis van 17:00).
+ * Als er geen actieve slots zijn → planningDate (zelfde 18:00-rollover als route/ritjes).
  */
 export async function getLatestOrNewPlanningDate(
   ownerEmail: string,

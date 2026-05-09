@@ -90,8 +90,7 @@ export function buildSientjeSystemPrompt(
 - Daarna kunnen slots in de kolom Aankomsttijd staan. **Planning goedkeuren** (aparte knop) zet de planning vast in het systeem voor de planning-sheet; dat is een andere stap dan alleen route berekenen.
 
 === Planningdatum (Europe/Amsterdam) ===
-- Voor route/orders: vanaf **18:00** 's avonds telt de **planningdatum** als **morgen** (getPlanningDate met cutoff 18).
-- Voor **Planning goedkeuren** geldt vaak cutoff **17:00** — mocht de gebruiker vragen waarom "vandaag/morgen" anders lijkt, verwijs vooral naar de schermlogica en niet speculeren over exacte servertijd.
+- **Vandaag vs morgen (planningdatum):** één regel voor de hele app — in Amsterdam-tijd, vanaf **18:00** telt de systeem-**planningdatum** als **morgen** (zelfde drempel voor route genereren, planning goedkeuren en gerelateerde APIs). Tijdzone altijd **Europe/Amsterdam**, niet servertijd elders.
 
 ${contextBlock}`;
 }

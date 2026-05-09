@@ -1,9 +1,17 @@
 /**
- * Bepalen van de planningdatum: voor cutoff = vandaag, vanaf cutoff = morgen.
+ * Bepalen van de planningdatum: vóór rollover = vandaag, vanaf rollover = morgen.
  * Tijdzone: Europe/Amsterdam.
- * @param cutoffHour Uur (0-23) waarop overgegaan wordt naar morgen; standaard 18.
+ *
+ * Let op: gebruik overal dezelfde drempel ({@link PLANNING_ROLLOVER_HOUR_AMSTERDAM}) —
+ * route genereren, planning goedkeuren en “stuur appjes”-doeldatum moeten hetzelfde
+ * “vandaag/morgen”-begrip hebben.
  */
-export function getPlanningDate(cutoffHour: number = 18): { date: string; isTomorrow: boolean } {
+export const PLANNING_ROLLOVER_HOUR_AMSTERDAM = 18;
+
+/**
+ * @param cutoffHour Uur (0-23) waarop overgegaan wordt naar morgen; standaard = {@link PLANNING_ROLLOVER_HOUR_AMSTERDAM}.
+ */
+export function getPlanningDate(cutoffHour: number = PLANNING_ROLLOVER_HOUR_AMSTERDAM): { date: string; isTomorrow: boolean } {
   const now = new Date();
   const amsterdam = new Date(now.toLocaleString("en-US", { timeZone: "Europe/Amsterdam" }));
   const hour = amsterdam.getHours();
@@ -23,9 +31,9 @@ export function getPlanningDate(cutoffHour: number = 18): { date: string; isTomo
   };
 }
 
-/** Planningdatum voor 'Planning goedkeuren': vanaf 17:00 = morgen. */
+/** Zelfde rollover als route/ritjes ({@link PLANNING_ROLLOVER_HOUR_AMSTERDAM}). */
 export function getPlanningDateForGoedkeuren() {
-  return getPlanningDate(17);
+  return getPlanningDate(PLANNING_ROLLOVER_HOUR_AMSTERDAM);
 }
 
 /** Kalenderdatum Amsterdam als YYYY-MM-DD; offsetDays verschuiving (0 = vandaag). */
