@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import {
+  getAmsterdamCalendarDate,
   getPlanningDateForGoedkeuren,
   isDatumOpmerkingVandaagOfMorgen,
+  orderIntendedForPlanningDateKey,
 } from "@/lib/planning-date";
 import { getTargetPlanningDate } from "@/lib/planning-promote";
 import { sendWhatsAppByEvent } from "@/lib/whatsapp";
@@ -12,7 +14,8 @@ import { requireAccountEmail } from "@/lib/account";
  *
  * Verplaatst alle "ritjes vandaag"-orders met tijdslot naar planning_slots.
  * - Als planning leeg is: slots worden direct als planning gezet (vandaag/morgen op basis van 17:00).
- * - Als planning al actieve slots heeft: slots worden als "ritjes voor morgen" gezet (morgen).
+ * - Als planning al actieve slots heeft: nieuwe slots op morgen — alleen orders die echt bij die
+ *   leverdatum horen (niet lopende ritjes van vandaag op planning_slots onderweg/gepland).
  * Na het opslaan van planning_slots wordt per order ook WhatsApp geprobeerd (zelfde templates als "Stuur appjes").
  */
 export async function POST(request: NextRequest) {
@@ -75,6 +78,38 @@ export async function POST(request: NextRequest) {
     // Bepaal de doeldatum: leeg planning → planningDate; anders → morgen (ritjes voor morgen)
     const { date: targetDate, isRitjesVoorMorgen } = await getTargetPlanningDate(ownerEmail, supabase as any);
 
+    let batchOrders = sorted;
+    if (isRitjesVoorMorgen) {
+      const todayKey = getAmsterdamCalendarDate(0);
+      const { data: busySlots } = await supabase
+        .from("planning_slots")
+        .select("order_id")
+        .eq("owner_email", ownerEmail)
+        .eq("datum", todayKey)
+        .neq("status", "afgerond");
+
+      const busyTodayIds = new Set(
+        (busySlots ?? []).map((s: { order_id: string }) => String(s.order_id))
+      );
+
+      batchOrders = sorted.filter((o) => {
+        if (busyTodayIds.has(String(o.id))) return false;
+        return orderIntendedForPlanningDateKey(o, targetDate);
+      });
+    }
+
+    if (batchOrders.length === 0) {
+      return NextResponse.json({
+        ok: true,
+        message: isRitjesVoorMorgen
+          ? "Geen orders voor morgen om goed te keuren (ritjes van vandaag blijven buiten deze batch)."
+          : "Geen orders om goed te keuren (geen orders met tijdslot die voldoen aan de criteria).",
+        count: 0,
+        planningDate: targetDate,
+        isRitjesVoorMorgen,
+      });
+    }
+
     // Verwijder eventuele bestaande slots voor die doeldatum (vermijd duplicaten).
     await supabase
       .from("planning_slots")
@@ -82,7 +117,7 @@ export async function POST(request: NextRequest) {
       .eq("owner_email", ownerEmail)
       .eq("datum", targetDate);
 
-    const slotsToInsert = sorted.map((o, i) => ({
+    const slotsToInsert = batchOrders.map((o, i) => ({
       owner_email: ownerEmail,
       datum: targetDate,
       order_id: o.id,
@@ -106,7 +141,7 @@ export async function POST(request: NextRequest) {
     const whatsappDetails: string[] = [];
     let whatsappSent = 0;
     let whatsappFailed = 0;
-    for (const o of sorted as any[]) {
+    for (const o of batchOrders as any[]) {
       const sendRes = await sendWhatsAppByEvent(
         "stuur_appjes",
         {
@@ -138,9 +173,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       ok: true,
       message: isRitjesVoorMorgen
-        ? `${sorted.length} order(s) als ritjes voor morgen toegevoegd.`
-        : `${sorted.length} order(s) in de planning gezet.`,
-      count: sorted.length,
+        ? `${batchOrders.length} order(s) als ritjes voor morgen toegevoegd.`
+        : `${batchOrders.length} order(s) in de planning gezet.`,
+      count: batchOrders.length,
       planningDate: targetDate,
       isRitjesVoorMorgen,
       whatsapp: {

@@ -28,6 +28,53 @@ export function getPlanningDateForGoedkeuren() {
   return getPlanningDate(17);
 }
 
+/** Kalenderdatum Amsterdam als YYYY-MM-DD; offsetDays verschuiving (0 = vandaag). */
+export function getAmsterdamCalendarDate(offsetDays = 0): string {
+  const now = new Date();
+  const amsterdam = new Date(now.toLocaleString("en-US", { timeZone: "Europe/Amsterdam" }));
+  amsterdam.setDate(amsterdam.getDate() + offsetDays);
+  const y = amsterdam.getFullYear();
+  const m = String(amsterdam.getMonth() + 1).padStart(2, "0");
+  const d = String(amsterdam.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+/**
+ * Of deze order bij `targetDate` (YYYY-MM-DD) hoort voor planning-goedkeuren.
+ * Bij een tweede batch (ná actieve rit) mag alleen morgen-datum worden meegenomen —
+ * daarom niet de losse „vandaag of morgen”-bundel gebruiken voor targetDate=morgen.
+ */
+export function orderIntendedForPlanningDateKey(
+  order: { datum?: unknown; datum_opmerking?: unknown },
+  targetDate: string
+): boolean {
+  const now = getAmsterdamNow();
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const todayKey = toDateKey(now);
+  const tomorrowKey = toDateKey(tomorrow);
+
+  const datumStr = String(order.datum ?? "").trim();
+  const isoMatch = /^(\d{4}-\d{2}-\d{2})/.exec(datumStr);
+  if (isoMatch) {
+    return isoMatch[1] === targetDate;
+  }
+
+  const raw = String(order.datum_opmerking ?? "").trim().toLowerCase();
+
+  const mentions = parseDateMentions(raw, now);
+  if (mentions.some((k) => k === targetDate)) return true;
+  if (mentions.length > 0) return false;
+
+  const hasVandaag = raw.includes("vandaag");
+  const hasMorgen = raw.includes("morgen");
+
+  if (hasMorgen && !hasVandaag && targetDate === tomorrowKey) return true;
+  if (hasVandaag && !hasMorgen && targetDate === todayKey) return true;
+
+  return false;
+}
+
 function getAmsterdamNow(baseDate?: Date): Date {
   const now = baseDate ?? new Date();
   return new Date(now.toLocaleString("en-US", { timeZone: "Europe/Amsterdam" }));
