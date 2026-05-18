@@ -16,6 +16,39 @@ const ROUTIFIC_JOBS_URL = "https://api.routific.com/jobs";
 const POLL_INTERVAL_MS = 2000;
 const POLL_TIMEOUT_MS = 120000; // 2 min
 
+/** Leesbare fout uit Routific JSON-body (trial, auth, payload). */
+function routificErrorMessage(status: number, errText: string): { error: string; detail: string } {
+  const detail = errText.slice(0, 500);
+  try {
+    const j = JSON.parse(errText) as { error?: string; error_type?: string };
+    const type = String(j.error_type ?? "");
+    const msg = String(j.error ?? "").trim();
+    if (type === "ERR_TRIAL_ENDED" || /trial is over/i.test(msg)) {
+      return {
+        error:
+          "Routific-account: proefperiode/credits zijn op. Upgrade of abonneer in het Routific-dashboard, of gebruik een API-token van een actief betaald account. Een nieuwe token van hetzelfde account helpt niet.",
+        detail,
+      };
+    }
+    if (status === 401 || status === 403 || type.includes("AUTH")) {
+      return {
+        error:
+          "Routific-token geweigerd. Controleer ROUTIFIC_API_TOKEN in Vercel (exacte naam), redeploy na wijziging, en of je Production vs Preview de juiste omgeving test.",
+        detail,
+      };
+    }
+    if (msg) {
+      return { error: `Routific: ${msg}`, detail };
+    }
+  } catch {
+    // geen JSON
+  }
+  return {
+    error: "Routific weigert het verzoek. Controleer token en accountstatus in Routific.",
+    detail,
+  };
+}
+
 /**
  * POST /api/routific/route
  * Body: { parallelRoutes | routes: [{ vertrektijd: "HH:MM", maxFietsen: number }, ...] }
@@ -130,12 +163,9 @@ export async function POST(request: NextRequest) {
     if (!res.ok) {
       const errText = await res.text();
       console.error("[api/routific/route] Routific POST:", res.status, errText);
+      const parsed = routificErrorMessage(res.status, errText);
       return NextResponse.json(
-        {
-          error:
-            "Routific weigert het verzoek. Controleer payload en token.",
-          detail: errText.slice(0, 500),
-        },
+        { error: parsed.error, detail: parsed.detail },
         { status: 502 }
       );
     }
