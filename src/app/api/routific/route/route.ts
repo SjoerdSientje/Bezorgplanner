@@ -113,6 +113,19 @@ export async function POST(request: NextRequest) {
 
     const supabase = createClient(supabaseUrl, serviceKey);
 
+    // Zelfde logica als tab "Routes" op ritjes-vandaag: orders met actieve planning_slot
+    // horen niet in Routific (handmatige route/planning), wel nog bij Stuur appjes.
+    const { data: planningSlots } = await supabase
+      .from("planning_slots")
+      .select("order_id")
+      .eq("owner_email", ownerEmail)
+      .neq("status", "afgerond");
+    const routesTabOrderIds = new Set(
+      (planningSlots ?? [])
+        .map((s: { order_id?: string | null }) => String(s.order_id ?? "").trim())
+        .filter(Boolean)
+    );
+
     // Bereken vandaag en morgen in Amsterdam-tijd — orders voor beide dagen worden meegenomen.
     // getPlanningDate() geeft vóór 18:00 vandaag terug, waardoor orders met datum=morgen eerder
     // werden uitgesloten als datum_opmerking leeg was. Door altijd beide data te checken werkt
@@ -129,8 +142,10 @@ export async function POST(request: NextRequest) {
     // Gebruik fetchAllOrders om row-limit bug te omzeilen, filter daarna in JS
     const allOrders = await fetchAllOrders();
     const rows = (allOrders as unknown as OrderForRoute[]).filter((o) => {
+      const orderId = String((o as unknown as Record<string, unknown>).id ?? "").trim();
       if (String((o as unknown as Record<string, unknown>).owner_email ?? "") !== ownerEmail) return false;
       if ((o as unknown as Record<string, unknown>).status !== "ritjes_vandaag") return false;
+      if (routesTabOrderIds.has(orderId)) return false;
       if (!(o as unknown as Record<string, unknown>).meenemen_in_planning) return false;
       const opmerking = ((o as unknown as Record<string, unknown>).datum_opmerking as string) ?? "";
       const datum = (o as unknown as Record<string, unknown>).datum as string | null;

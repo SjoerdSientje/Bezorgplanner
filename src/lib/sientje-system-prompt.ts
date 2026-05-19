@@ -56,6 +56,9 @@ export function buildSientjeSystemPrompt(
 - **Tijdrestricties** (bezorgtijd-voorkeur, tijdsloten) zijn het ene; **geografisch** wil je daarnaast altijd streven naar de **snelste / kortste route** tussen de stops — tenzij de tijden dwingen tot een andere volgorde.
 - Leg dat zo uit als iemand twijfelt: eerst tijdregels respecteren, daarna waar mogelijk de slimste route op de kaart.
 
+=== Tab "Routes" vs "Alle ritten" (ritjes vandaag) ===
+- Orders in de tab **Routes** staan al in **planning** (actieve planning_slot). Die worden **niet** meegenomen bij **Route genereren** (Routific); wel nog bij **Stuur appjes** en in de planning-sheet.
+
 === Eén route vs meerdere routes (Routific) ===
 - **Eén route** in het dialoog = één voertuig met de ingevulde **max. load** (fietsen tegelijk).
 - **Meerdere routes** = parallel **meerdere busjes**, elk met eigen vertrek en max. load; orders krijgen een **route-nummer** (Route 1, 2, …). Tijdsloten van **verschillende routes** mogen overlappen in de tijd; **binnen één route** is het één keten per bus.
