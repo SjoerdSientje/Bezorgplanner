@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useRef } from "react";
 import type { AlleRittenOrder } from "@/components/AlleRittenTabel";
 
 function parseSlotMin(slot: string | null | undefined): number {
@@ -9,9 +10,61 @@ function parseSlotMin(slot: string | null | undefined): number {
   return h * 60 + (Number.isFinite(m) ? m : 0);
 }
 
+function EditableSlotCell({
+  value,
+  onSave,
+}: {
+  value: string;
+  onSave: (v: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const commit = () => {
+    setEditing(false);
+    if (draft.trim() !== value) onSave(draft.trim());
+  };
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        autoFocus
+        className="w-full rounded border border-koopje-orange px-1 py-0.5 text-sm font-medium focus:outline-none"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+          if (e.key === "Escape") setEditing(false);
+        }}
+        placeholder="bv. 10:00 - 12:00"
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className="w-full text-left font-medium text-koopje-black hover:underline hover:decoration-dotted"
+      onClick={() => { setDraft(value); setEditing(true); }}
+      title="Klik om tijdslot te bewerken"
+    >
+      {value || <span className="text-stone-300 text-xs font-normal">Klik om in te vullen</span>}
+    </button>
+  );
+}
+
 const HEADERS = ["Tijdslot", "Voorkeurstijd", "Adres", "Model / Product", "Opmerking klant"];
 
-export default function LijstSjoerd({ orders }: { orders: AlleRittenOrder[] }) {
+export default function LijstSjoerd({
+  orders,
+  onPatch,
+}: {
+  orders: AlleRittenOrder[];
+  onPatch: (id: string, fields: Record<string, unknown>) => void;
+}) {
   const filtered = [...orders]
     .filter((o) => o.meenemen_in_planning === true)
     .sort((a, b) =>
@@ -55,12 +108,12 @@ export default function LijstSjoerd({ orders }: { orders: AlleRittenOrder[] }) {
                 <td className="border border-stone-200 px-2 py-1.5 text-center text-xs text-stone-500">
                   {i + 1}
                 </td>
-                {/* Tijdslot */}
-                <td className="border border-stone-200 px-3 py-1.5 font-medium text-koopje-black whitespace-nowrap">
-                  {String(order.aankomsttijd_slot ?? "")}
-                  {!order.aankomsttijd_slot && (
-                    <span className="text-xs text-stone-300">Nog geen tijdslot</span>
-                  )}
+                {/* Tijdslot (bewerkbaar) */}
+                <td className="border border-stone-200 px-3 py-1.5 whitespace-nowrap min-w-[10rem]">
+                  <EditableSlotCell
+                    value={String(order.aankomsttijd_slot ?? "")}
+                    onSave={(v) => onPatch(String(order.id), { aankomsttijd_slot: v || null })}
+                  />
                 </td>
                 {/* Voorkeurstijd */}
                 <td className="border border-stone-200 px-3 py-1.5 text-stone-500 whitespace-nowrap">

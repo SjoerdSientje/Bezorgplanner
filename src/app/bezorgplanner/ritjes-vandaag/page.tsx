@@ -465,6 +465,7 @@ export default function RitjesVandaagPage() {
             // ── Lijst Sjoerd: meenemen=ja orders ─────────────────────────────
             <LijstSjoerd
               orders={orders.filter((o) => o.in_morgen_tab !== true) as AlleRittenOrder[]}
+              onPatch={patchOrderById}
             />
           ) : activeTab === "morgen" && routesGroups && routesGroups.length > 1 ? (
             // ── Routes-tab met meerdere datum-groepen ────────────────────────
