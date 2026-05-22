@@ -45,7 +45,9 @@ export async function getTargetPlanningDate(
 
 /**
  * Gebruikt door "Stuur appjes → Nieuwe order":
- * Voeg toe aan de LAATSTE (meest toekomstige) bestaande planning-batch.
+ * Voeg toe aan de VROEGSTE (huidige/actieve) bestaande planning-batch.
+ * Zo gaat een nieuw order bij een lopende planning voor vandaag mee in die planning,
+ * ook als morgen al is goedgekeurd.
  * Als er geen actieve slots zijn → planningDate (zelfde 18:00-rollover als route/ritjes).
  */
 export async function getLatestOrNewPlanningDate(
@@ -53,17 +55,17 @@ export async function getLatestOrNewPlanningDate(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: SupabaseClient<any, any, any>
 ): Promise<string> {
-  const { data: latestSlot } = await supabase
+  const { data: earliestSlot } = await supabase
     .from("planning_slots")
     .select("datum")
     .eq("owner_email", ownerEmail)
     .neq("status", "afgerond")
-    .order("datum", { ascending: false })
+    .order("datum", { ascending: true })
     .limit(1)
     .maybeSingle();
 
-  if (latestSlot?.datum) {
-    return String(latestSlot.datum);
+  if (earliestSlot?.datum) {
+    return String(earliestSlot.datum);
   }
   const { date } = getPlanningDateForGoedkeuren();
   return date;
