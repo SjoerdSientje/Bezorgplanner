@@ -123,10 +123,20 @@ function parseSpecialServiceFromShippingLines(order: ShopifyOrder): string {
   return "";
 }
 
+function parseSpecialServiceFromLineItems(order: ShopifyOrder): string {
+  for (const li of order.line_items ?? []) {
+    const name = String(li.name ?? "").trim();
+    if (/\b(?:nalevering|naleveren|garantie)\b/i.test(name)) return name;
+  }
+  return "";
+}
+
 function getSpecialServiceProduct(order: ShopifyOrder): string {
   const fromNote = parseSpecialServiceProductFromNote(order.note);
   if (fromNote) return fromNote;
-  return parseSpecialServiceFromShippingLines(order);
+  const fromShipping = parseSpecialServiceFromShippingLines(order);
+  if (fromShipping) return fromShipping;
+  return parseSpecialServiceFromLineItems(order);
 }
 
 /**
