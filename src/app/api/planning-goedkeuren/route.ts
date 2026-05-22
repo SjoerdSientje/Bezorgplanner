@@ -1,11 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
-import {
-  getAmsterdamCalendarDate,
-  isDatumOpmerkingVandaagOfMorgen,
-  isExplicitVandaagLeveringFromOpmerking,
-  orderIntendedForPlanningDateKey,
-} from "@/lib/planning-date";
+import { getAmsterdamCalendarDate } from "@/lib/planning-date";
 import { getTargetPlanningDate } from "@/lib/planning-promote";
 import { sendWhatsAppByEvent } from "@/lib/whatsapp";
 import { requireAccountEmail } from "@/lib/account";
@@ -53,37 +48,36 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    let busyTodayIds = new Set<string>();
-    if (isRitjesVoorMorgen) {
-      const { data: busySlots } = await supabase
-        .from("planning_slots")
-        .select("order_id")
-        .eq("owner_email", ownerEmail)
-        .eq("datum", todayKey)
-        .neq("status", "afgerond");
+    // Haal alle actieve planning-slots op (datum + order_id) om dubbele inserts te voorkomen.
+    const { data: activeSlots } = await supabase
+      .from("planning_slots")
+      .select("order_id, datum")
+      .eq("owner_email", ownerEmail)
+      .neq("status", "afgerond");
 
-      busyTodayIds = new Set(
-        (busySlots ?? []).map((s: { order_id: string }) => String(s.order_id))
-      );
-    }
+    // Orders die al op targetDate staan hoeven niet opnieuw te worden ingevoegd.
+    const alreadyOnTargetDate = new Set(
+      (activeSlots ?? [])
+        .filter((s: { datum: string | null }) => String(s.datum ?? "") === targetDate)
+        .map((s: { order_id: string }) => String(s.order_id))
+    );
+
+    // Orders die actief onderweg/gepland zijn op vandaag (lopende rit) sluiten we uit:
+    // die horen bij de huidige bezorgronde en niet in een nieuwe batch.
+    const busyTodayIds = new Set(
+      (activeSlots ?? [])
+        .filter((s: { datum: string | null }) => String(s.datum ?? "") === todayKey)
+        .map((s: { order_id: string }) => String(s.order_id))
+    );
 
     const rows = (orders ?? []).filter((o) => {
       if ((o.aankomsttijd_slot ?? "").toString().trim().length === 0) return false;
       const orderId = String(o.id ?? "");
-
-      if (isRitjesVoorMorgen) {
-        // Lopende ritjes op planning vandaag (Routes-tab) blijven buiten de morgen-batch
-        if (busyTodayIds.has(orderId)) return false;
-        // Alleen datum_opmerking "vandaag" telt; orders.datum is vaak besteldatum, niet leverdatum
-        if (isExplicitVandaagLeveringFromOpmerking(o.datum_opmerking)) return false;
-        // Overige ritjes met tijdslot (tab Alle ritten) → ritjes voor morgen
-        return true;
-      }
-
-      return (
-        orderIntendedForPlanningDateKey(o, targetDate) ||
-        isDatumOpmerkingVandaagOfMorgen(o.datum_opmerking)
-      );
+      // Al ingepland op de doeldatum → overslaan (zou anders dubbel staan)
+      if (alreadyOnTargetDate.has(orderId)) return false;
+      // Actief in de huidige bezorgronde vandaag → niet naar een nieuwe batch
+      if (busyTodayIds.has(orderId)) return false;
+      return true;
     });
 
     if (rows.length === 0) {
