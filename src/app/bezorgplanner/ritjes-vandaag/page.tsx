@@ -17,6 +17,7 @@ import {
   sortRoutesTabOrders,
   type RitjesOrderFromApi,
 } from "@/lib/ritjes-mapping";
+import { getAmsterdamCalendarDate } from "@/lib/planning-date";
 import StuurAppjesButton from "@/components/StuurAppjesButton";
 
 function normalizeToE164(input: string): string | null {
@@ -121,6 +122,27 @@ export default function RitjesVandaagPage() {
     () => ordersToTableRows(visibleRows.orders),
     [visibleRows.orders]
   );
+
+  // Groepeer de Routes-tab op datum (vandaag / morgen) zodat we aparte secties kunnen tonen.
+  const routesGroups = useMemo(() => {
+    if (activeTab !== "morgen") return null;
+    const todayKey = getAmsterdamCalendarDate(0);
+    const map = new Map<string, { orders: RitjesOrderFromApi[]; startOffset: number }>();
+    let offset = 0;
+    for (const o of visibleRows.orders) {
+      const datum = String((o as unknown as Record<string, unknown>).planning_slot_datum ?? "");
+      if (!map.has(datum)) map.set(datum, { orders: [], startOffset: offset });
+      map.get(datum)!.orders.push(o);
+      offset++;
+    }
+    return Array.from(map.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([datum, group]) => ({
+        datum,
+        isToday: datum === todayKey,
+        ...group,
+      }));
+  }, [activeTab, visibleRows.orders]);
 
   const RIT_COLORS: Record<number, string> = {
     1: "bg-green-50",
@@ -394,6 +416,42 @@ export default function RitjesVandaagPage() {
 
           {loading ? (
             <p className="text-sm text-koopje-black/60">Laden…</p>
+          ) : activeTab === "morgen" && routesGroups && routesGroups.length > 1 ? (
+            // Routes-tab met meerdere datum-groepen: toon aparte secties
+            <div className="space-y-8">
+              {routesGroups.map((group) => {
+                const off = group.startOffset;
+                const groupTableRows = ordersToTableRows(group.orders);
+                const offsetRenderers = Object.fromEntries(
+                  Object.entries(cellRenderers).map(([key, fn]) => [
+                    key,
+                    (ri: number, v: string, os: (val: string) => void) => fn(ri + off, v, os),
+                  ])
+                );
+                return (
+                  <div key={group.datum}>
+                    <h2
+                      className={`mb-3 text-base font-semibold ${
+                        group.isToday ? "text-koopje-black" : "text-koopje-orange"
+                      }`}
+                    >
+                      {group.isToday ? `Ritjes vandaag — ${group.datum}` : `Ritjes voor morgen — ${group.datum}`}
+                    </h2>
+                    <EditableSheetTable
+                      headers={RITJES_HEADERS}
+                      initialData={groupTableRows}
+                      onCellBlur={(ri, header, value) => handleCellBlur(ri + off, header, value)}
+                      dataRowCount={group.orders.length}
+                      rowAction={(ri) => deleteOrder(ri + off)}
+                      cellRenderers={offsetRenderers}
+                      resetKey={tableResetKey}
+                      showRowNumbers
+                      rowColorClass={(ri) => rowColorClass(ri + off)}
+                    />
+                  </div>
+                );
+              })}
+            </div>
           ) : (
             <EditableSheetTable
               headers={RITJES_HEADERS}
