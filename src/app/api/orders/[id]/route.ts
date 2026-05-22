@@ -33,6 +33,8 @@ const ALLOWED_KEYS = new Set([
   "aankomsttijd_slot",
   "mp_tags",
   "line_items_json",
+  "planning_kleur",
+  "planning_opmerking",
 ]);
 
 export async function GET(

@@ -9,6 +9,8 @@ import SparrenMetSientje from "@/components/SparrenMetSientje";
 import ProductenCell from "@/components/ProductenCell";
 import OpmerkingKlantCell from "@/components/OpmerkingKlantCell";
 import JaNeeCell from "@/components/JaNeeCell";
+import AlleRittenTabel, { type AlleRittenOrder } from "@/components/AlleRittenTabel";
+import LijstSjoerd from "@/components/LijstSjoerd";
 import {
   RITJES_HEADERS,
   ordersToTableRows,
@@ -58,7 +60,7 @@ function extractPhoneFromBelLink(value: string): string | null {
 export default function RitjesVandaagPage() {
   const [orders, setOrders] = useState<RitjesOrderFromApi[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"alle" | "morgen">("alle");
+  const [activeTab, setActiveTab] = useState<"alle" | "sjoerd" | "morgen">("alle");
   // Verhoog dit ALLEEN na een echte server-fetch zodat EditableSheetTable zijn waarden reset.
   // Cel-edits mogen dit NIET verhogen (dat veroorzaakt de page-flash).
   const [tableResetKey, setTableResetKey] = useState(0);
@@ -87,6 +89,42 @@ export default function RitjesVandaagPage() {
       );
     },
     []
+  );
+
+  /** Patch op basis van order-ID (voor AlleRittenTabel / LijstSjoerd). */
+  const patchOrderById = useCallback(
+    (id: string, fields: Record<string, unknown>) => {
+      setOrders((prev) =>
+        prev.map((o) => (String(o.id ?? "") === id ? { ...o, ...fields } : o))
+      );
+      fetch(`/api/orders/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(fields),
+      }).catch(() => fetchRitjes());
+    },
+    [fetchRitjes]
+  );
+
+  /** Verwijder order op ID (voor AlleRittenTabel). */
+  const deleteOrderById = useCallback(
+    async (id: string) => {
+      const order = orders.find((o) => String(o.id ?? "") === id);
+      const orderNummer = String((order as any)?.order_nummer ?? "").trim();
+      const ok = window.confirm(
+        `Order verwijderen uit Ritjes voor vandaag?\n\n${orderNummer || id}\n\nDit verwijdert de order definitief.`
+      );
+      if (!ok) return;
+      setOrders((prev) => prev.filter((o) => String(o.id ?? "") !== id));
+      setTableResetKey((k) => k + 1);
+      try {
+        const res = await fetch(`/api/orders/${id}`, { method: "DELETE" });
+        if (!res.ok) await fetchRitjes();
+      } catch {
+        await fetchRitjes();
+      }
+    },
+    [orders, fetchRitjes]
   );
 
   useEffect(() => {
@@ -390,34 +428,46 @@ export default function RitjesVandaagPage() {
           </div>
 
           <div className="mb-4 inline-flex rounded-xl border border-stone-200 bg-stone-50 p-1">
-            <button
-              type="button"
-              onClick={() => setActiveTab("alle")}
-              className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
-                activeTab === "alle"
-                  ? "bg-white text-koopje-black shadow-sm"
-                  : "text-stone-600 hover:text-koopje-black"
-              }`}
-            >
-              Alle ritten ({orders.filter((o) => o.in_morgen_tab !== true).length})
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab("morgen")}
-              className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
-                activeTab === "morgen"
-                  ? "bg-white text-koopje-black shadow-sm"
-                  : "text-stone-600 hover:text-koopje-black"
-              }`}
-            >
-              Routes ({orders.filter((o) => o.in_morgen_tab === true).length})
-            </button>
+            {(["alle", "sjoerd", "morgen"] as const).map((tab) => {
+              const label =
+                tab === "alle"
+                  ? `Alle ritten (${orders.filter((o) => o.in_morgen_tab !== true).length})`
+                  : tab === "sjoerd"
+                  ? `Lijst Sjoerd (${orders.filter((o) => o.in_morgen_tab !== true && o.meenemen_in_planning === true).length})`
+                  : `Routes (${orders.filter((o) => o.in_morgen_tab === true).length})`;
+              return (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setActiveTab(tab)}
+                  className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
+                    activeTab === tab
+                      ? "bg-white text-koopje-black shadow-sm"
+                      : "text-stone-600 hover:text-koopje-black"
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
 
           {loading ? (
             <p className="text-sm text-koopje-black/60">Laden…</p>
+          ) : activeTab === "alle" ? (
+            // ── Alle ritten: nieuwe tabel met kleurmarkering ──────────────────
+            <AlleRittenTabel
+              orders={orders.filter((o) => o.in_morgen_tab !== true) as AlleRittenOrder[]}
+              onPatch={patchOrderById}
+              onDelete={deleteOrderById}
+            />
+          ) : activeTab === "sjoerd" ? (
+            // ── Lijst Sjoerd: meenemen=ja orders ─────────────────────────────
+            <LijstSjoerd
+              orders={orders.filter((o) => o.in_morgen_tab !== true) as AlleRittenOrder[]}
+            />
           ) : activeTab === "morgen" && routesGroups && routesGroups.length > 1 ? (
-            // Routes-tab met meerdere datum-groepen: toon aparte secties
+            // ── Routes-tab met meerdere datum-groepen ────────────────────────
             <div className="space-y-8">
               {routesGroups.map((group) => {
                 const off = group.startOffset;
@@ -427,7 +477,6 @@ export default function RitjesVandaagPage() {
                   Object.entries(cellRenderers).map(([key, fn]) => [
                     key,
                     (ri: number, v: string, os: (val: string) => void) => {
-                      // Buiten data-rijen van deze groep: niets renderen (voorkomt lekken naar volgende groep)
                       if (ri >= groupSize) return null;
                       return fn(ri + off, v, os);
                     },
@@ -458,6 +507,7 @@ export default function RitjesVandaagPage() {
               })}
             </div>
           ) : (
+            // ── Routes-tab enkelvoudig ────────────────────────────────────────
             <EditableSheetTable
               headers={RITJES_HEADERS}
               initialData={tableRows}
