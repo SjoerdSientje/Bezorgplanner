@@ -422,10 +422,15 @@ export default function RitjesVandaagPage() {
               {routesGroups.map((group) => {
                 const off = group.startOffset;
                 const groupTableRows = ordersToTableRows(group.orders);
+                const groupSize = group.orders.length;
                 const offsetRenderers = Object.fromEntries(
                   Object.entries(cellRenderers).map(([key, fn]) => [
                     key,
-                    (ri: number, v: string, os: (val: string) => void) => fn(ri + off, v, os),
+                    (ri: number, v: string, os: (val: string) => void) => {
+                      // Buiten data-rijen van deze groep: niets renderen (voorkomt lekken naar volgende groep)
+                      if (ri >= groupSize) return null;
+                      return fn(ri + off, v, os);
+                    },
                   ])
                 );
                 return (
