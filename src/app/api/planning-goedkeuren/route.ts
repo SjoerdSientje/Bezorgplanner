@@ -48,35 +48,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Haal alle actieve planning-slots op (datum + order_id) om dubbele inserts te voorkomen.
+    // Orders die actief onderweg/gepland zijn op vandaag (lopende rit) sluiten we uit.
     const { data: activeSlots } = await supabase
       .from("planning_slots")
       .select("order_id, datum")
       .eq("owner_email", ownerEmail)
+      .eq("datum", todayKey)
       .neq("status", "afgerond");
 
-    // Orders die al op targetDate staan hoeven niet opnieuw te worden ingevoegd.
-    const alreadyOnTargetDate = new Set(
-      (activeSlots ?? [])
-        .filter((s: { datum: string | null }) => String(s.datum ?? "") === targetDate)
-        .map((s: { order_id: string }) => String(s.order_id))
-    );
-
-    // Orders die actief onderweg/gepland zijn op vandaag (lopende rit) sluiten we uit:
-    // die horen bij de huidige bezorgronde en niet in een nieuwe batch.
     const busyTodayIds = new Set(
-      (activeSlots ?? [])
-        .filter((s: { datum: string | null }) => String(s.datum ?? "") === todayKey)
-        .map((s: { order_id: string }) => String(s.order_id))
+      (activeSlots ?? []).map((s: { order_id: string }) => String(s.order_id))
     );
 
     const rows = (orders ?? []).filter((o) => {
       if ((o.aankomsttijd_slot ?? "").toString().trim().length === 0) return false;
-      const orderId = String(o.id ?? "");
-      // Al ingepland op de doeldatum → overslaan (zou anders dubbel staan)
-      if (alreadyOnTargetDate.has(orderId)) return false;
       // Actief in de huidige bezorgronde vandaag → niet naar een nieuwe batch
-      if (busyTodayIds.has(orderId)) return false;
+      if (busyTodayIds.has(String(o.id ?? ""))) return false;
       return true;
     });
 
@@ -104,12 +91,17 @@ export async function POST(request: NextRequest) {
         parseMin((b.aankomsttijd_slot ?? "").toString())
     );
 
-    // Verwijder eventuele bestaande slots voor die doeldatum (vermijd duplicaten).
-    await supabase
-      .from("planning_slots")
-      .delete()
-      .eq("owner_email", ownerEmail)
-      .eq("datum", targetDate);
+    // Verwijder alleen de slots voor orders in deze batch (niet alle slots voor targetDate —
+    // andere orders die al gepland staan voor die datum blijven onberoerd).
+    const batchOrderIds = batchOrders.map((o) => String(o.id));
+    if (batchOrderIds.length > 0) {
+      await supabase
+        .from("planning_slots")
+        .delete()
+        .eq("owner_email", ownerEmail)
+        .eq("datum", targetDate)
+        .in("order_id", batchOrderIds);
+    }
 
     const slotsToInsert = batchOrders.map((o, i) => ({
       owner_email: ownerEmail,
