@@ -131,10 +131,17 @@ function getSpecialServiceProduct(order: ShopifyOrder): string {
 
 /**
  * Pakketjes-wachtrij: totaal &lt; €450, niet geannuleerd, nog niet volledig verzonden.
- * (Webhook; zelfde showroom-uitsluiting als Ritjes.)
+ * Service-orders (terugbrengen, ophalen, proefrit, reparatie) zijn geen pakketjes.
  */
 export function qualifiesForPakketjes(order: ShopifyOrder): boolean {
   if (isShowroomShippingOrder(order)) return false;
+  const tags = String(order.tags ?? "").toLowerCase();
+  if (
+    tags.includes("terugbrengen") ||
+    tags.includes("ophalen") ||
+    tags.includes("proefrit") ||
+    tags.includes("reparatie aan huis")
+  ) return false;
   const total = parseFloat(String(order.total_price ?? 0));
   const hasSpecialServiceItem = Boolean(getSpecialServiceProduct(order));
   const qualifiesByTotal = total > 0 && total < PAKKETJES_MAX_PRIJS;
