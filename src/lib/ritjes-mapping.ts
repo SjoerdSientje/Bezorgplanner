@@ -2,6 +2,8 @@
  * Mapping tussen Ritjes voor vandaag tabelkolommen en order-velden (API/supabase).
  */
 
+import { getAmsterdamCalendarDate } from "@/lib/planning-date";
+
 export const RITJES_HEADERS = [
   "Order Nummer",
   "Naam",
@@ -84,6 +86,29 @@ export function sortRitjesOrdersNewestFirst<T extends RitjesOrderFromApi>(orders
     const ub = parseTime(b.updated_at);
     const ua = parseTime(a.updated_at);
     return ub - ua;
+  });
+}
+
+/**
+ * Tab Routes: vandaag-lopende planning eerst, daarna morgen; binnen groep op aankomsttijd.
+ */
+export function sortRoutesTabOrders<T extends RitjesOrderFromApi>(orders: T[]): T[] {
+  const todayKey = getAmsterdamCalendarDate(0);
+  const parseSlotMin = (value: unknown): number => {
+    const t = String(value ?? "").split(" - ")[0].replace(".", ":").trim();
+    const [h, m] = t.split(":").map((x) => parseInt(x, 10));
+    if (!Number.isFinite(h)) return 9999;
+    return h * 60 + (Number.isFinite(m) ? m : 0);
+  };
+
+  return [...orders].sort((a, b) => {
+    const da = String(a.planning_slot_datum ?? "9999-99-99");
+    const db = String(b.planning_slot_datum ?? "9999-99-99");
+    const rankA = da === todayKey ? 0 : 1;
+    const rankB = db === todayKey ? 0 : 1;
+    if (rankA !== rankB) return rankA - rankB;
+    if (da !== db) return da.localeCompare(db);
+    return parseSlotMin(a.aankomsttijd_slot) - parseSlotMin(b.aankomsttijd_slot);
   });
 }
 

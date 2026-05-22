@@ -83,6 +83,14 @@ export function orderIntendedForPlanningDateKey(
   return false;
 }
 
+/**
+ * Expliciet "vandaag leveren" uit datum_opmerking (niet orders.datum — dat is vaak besteldatum).
+ */
+export function isExplicitVandaagLeveringFromOpmerking(datumOpmerking: unknown): boolean {
+  const opm = String(datumOpmerking ?? "").trim().toLowerCase();
+  return opm.includes("vandaag") && !opm.includes("morgen");
+}
+
 function getAmsterdamNow(baseDate?: Date): Date {
   const now = baseDate ?? new Date();
   return new Date(now.toLocaleString("en-US", { timeZone: "Europe/Amsterdam" }));

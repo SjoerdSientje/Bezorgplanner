@@ -14,6 +14,7 @@ import {
   ordersToTableRows,
   ritjesCellToPayload,
   sortRitjesOrdersNewestFirst,
+  sortRoutesTabOrders,
   type RitjesOrderFromApi,
 } from "@/lib/ritjes-mapping";
 import StuurAppjesButton from "@/components/StuurAppjesButton";
@@ -92,7 +93,7 @@ export default function RitjesVandaagPage() {
   }, [fetchRitjes]);
 
   const visibleRows = useMemo(() => {
-    const filtered =
+    let filtered =
       activeTab === "morgen"
         ? orders
             .map((o, idx) => ({ o, idx }))
@@ -100,6 +101,16 @@ export default function RitjesVandaagPage() {
         : orders
             .map((o, idx) => ({ o, idx }))
             .filter((x) => x.o.in_morgen_tab !== true);
+
+    if (activeTab === "morgen" && filtered.length > 1) {
+      const sorted = sortRoutesTabOrders(filtered.map((x) => x.o));
+      const idxById = new Map(filtered.map((x) => [String(x.o.id ?? ""), x.idx]));
+      filtered = sorted.map((o) => ({
+        o,
+        idx: idxById.get(String(o.id ?? "")) ?? 0,
+      }));
+    }
+
     return {
       orders: filtered.map((x) => x.o),
       sourceIndices: filtered.map((x) => x.idx),

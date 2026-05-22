@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import {
   getAmsterdamCalendarDate,
-  getPlanningDateForGoedkeuren,
   isDatumOpmerkingVandaagOfMorgen,
+  isExplicitVandaagLeveringFromOpmerking,
   orderIntendedForPlanningDateKey,
 } from "@/lib/planning-date";
 import { getTargetPlanningDate } from "@/lib/planning-promote";
@@ -14,8 +14,8 @@ import { requireAccountEmail } from "@/lib/account";
  *
  * Verplaatst alle "ritjes vandaag"-orders met tijdslot naar planning_slots.
  * - Als planning leeg is: slots worden direct als planning gezet (vandaag/morgen: 18:00 Amsterdam, zie planning-date).
- * - Als planning al actieve slots heeft: nieuwe slots op morgen — alleen orders die echt bij die
- *   leverdatum horen (niet lopende ritjes van vandaag op planning_slots onderweg/gepland).
+ * - Als planning al actieve slots heeft: nieuwe slots op morgen — alle ritjes met tijdslot die
+ *   nog niet op planning vandaag staan (Routes-tab), behalve expliciet "vandaag" in datum_opmerking.
  * Na het opslaan van planning_slots wordt per order ook WhatsApp geprobeerd (zelfde templates als "Stuur appjes").
  */
 export async function POST(request: NextRequest) {
@@ -23,7 +23,13 @@ export async function POST(request: NextRequest) {
     const ownerEmail = requireAccountEmail(request);
 
     const supabase = createServerSupabaseClient();
-    const { date: planningDate } = getPlanningDateForGoedkeuren();
+    const todayKey = getAmsterdamCalendarDate(0);
+
+    // Eerst doeldatum: bij actieve planning → morgen-batch; anders vandaag/morgen via 18:00-regel
+    const { date: targetDate, isRitjesVoorMorgen } = await getTargetPlanningDate(
+      ownerEmail,
+      supabase as any
+    );
 
     // Orders ophalen die in aanmerking komen
     const { data: orders, error: queryError } = await supabase
@@ -47,19 +53,48 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    let busyTodayIds = new Set<string>();
+    if (isRitjesVoorMorgen) {
+      const { data: busySlots } = await supabase
+        .from("planning_slots")
+        .select("order_id")
+        .eq("owner_email", ownerEmail)
+        .eq("datum", todayKey)
+        .neq("status", "afgerond");
+
+      busyTodayIds = new Set(
+        (busySlots ?? []).map((s: { order_id: string }) => String(s.order_id))
+      );
+    }
+
     const rows = (orders ?? []).filter((o) => {
       if ((o.aankomsttijd_slot ?? "").toString().trim().length === 0) return false;
-      const datumOpmerkingOk = isDatumOpmerkingVandaagOfMorgen(o.datum_opmerking);
-      const datumIsPlanningDate = String(o.datum ?? "").trim() === planningDate;
-      return datumOpmerkingOk || datumIsPlanningDate;
+      const orderId = String(o.id ?? "");
+
+      if (isRitjesVoorMorgen) {
+        // Lopende ritjes op planning vandaag (Routes-tab) blijven buiten de morgen-batch
+        if (busyTodayIds.has(orderId)) return false;
+        // Alleen datum_opmerking "vandaag" telt; orders.datum is vaak besteldatum, niet leverdatum
+        if (isExplicitVandaagLeveringFromOpmerking(o.datum_opmerking)) return false;
+        // Overige ritjes met tijdslot (tab Alle ritten) → ritjes voor morgen
+        return true;
+      }
+
+      return (
+        orderIntendedForPlanningDateKey(o, targetDate) ||
+        isDatumOpmerkingVandaagOfMorgen(o.datum_opmerking)
+      );
     });
 
     if (rows.length === 0) {
       return NextResponse.json({
         ok: true,
-        message: "Geen orders om goed te keuren (geen orders met tijdslot die voldoen aan de criteria).",
+        message: isRitjesVoorMorgen
+          ? "Geen orders voor morgen om goed te keuren (lopende ritjes van vandaag blijven staan)."
+          : "Geen orders om goed te keuren (geen orders met tijdslot die voldoen aan de criteria).",
         count: 0,
-        planningDate,
+        planningDate: targetDate,
+        isRitjesVoorMorgen,
       });
     }
 
@@ -69,46 +104,11 @@ export async function POST(request: NextRequest) {
       if (!Number.isFinite(h)) return 9999;
       return h * 60 + (Number.isFinite(m) ? m : 0);
     };
-    const sorted = [...rows].sort(
+    const batchOrders = [...rows].sort(
       (a, b) =>
         parseMin((a.aankomsttijd_slot ?? "").toString()) -
         parseMin((b.aankomsttijd_slot ?? "").toString())
     );
-
-    // Bepaal de doeldatum: leeg planning → planningDate; anders → morgen (ritjes voor morgen)
-    const { date: targetDate, isRitjesVoorMorgen } = await getTargetPlanningDate(ownerEmail, supabase as any);
-
-    let batchOrders = sorted;
-    if (isRitjesVoorMorgen) {
-      const todayKey = getAmsterdamCalendarDate(0);
-      const { data: busySlots } = await supabase
-        .from("planning_slots")
-        .select("order_id")
-        .eq("owner_email", ownerEmail)
-        .eq("datum", todayKey)
-        .neq("status", "afgerond");
-
-      const busyTodayIds = new Set(
-        (busySlots ?? []).map((s: { order_id: string }) => String(s.order_id))
-      );
-
-      batchOrders = sorted.filter((o) => {
-        if (busyTodayIds.has(String(o.id))) return false;
-        return orderIntendedForPlanningDateKey(o, targetDate);
-      });
-    }
-
-    if (batchOrders.length === 0) {
-      return NextResponse.json({
-        ok: true,
-        message: isRitjesVoorMorgen
-          ? "Geen orders voor morgen om goed te keuren (ritjes van vandaag blijven buiten deze batch)."
-          : "Geen orders om goed te keuren (geen orders met tijdslot die voldoen aan de criteria).",
-        count: 0,
-        planningDate: targetDate,
-        isRitjesVoorMorgen,
-      });
-    }
 
     // Verwijder eventuele bestaande slots voor die doeldatum (vermijd duplicaten).
     await supabase

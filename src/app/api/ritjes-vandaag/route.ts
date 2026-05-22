@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
     }
     const { data: planningSlots, error: planningErr } = await supabase
       .from("planning_slots")
-      .select("order_id")
+      .select("order_id, datum")
       .eq("owner_email", ownerEmail)
       .neq("status", "afgerond");
     if (planningErr) {
@@ -29,17 +29,24 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Ophalen mislukt." }, { status: 500 });
     }
 
-    const planningOrderIds = new Set(
-      (planningSlots ?? [])
-        .map((s: Record<string, unknown>) => String(s.order_id ?? "").trim())
-        .filter(Boolean)
-    );
+    const slotDatumByOrderId = new Map<string, string>();
+    for (const s of planningSlots ?? []) {
+      const id = String((s as Record<string, unknown>).order_id ?? "").trim();
+      const d = String((s as Record<string, unknown>).datum ?? "").trim();
+      if (!id || !d) continue;
+      const prev = slotDatumByOrderId.get(id);
+      if (!prev || d < prev) slotDatumByOrderId.set(id, d);
+    }
 
     const orders = sortRitjesOrdersNewestFirst(
-      (data ?? []).map((o) => ({
-        ...o,
-        in_morgen_tab: planningOrderIds.has(String((o as Record<string, unknown>).id ?? "").trim()),
-      }))
+      (data ?? []).map((o) => {
+        const id = String((o as Record<string, unknown>).id ?? "").trim();
+        return {
+          ...o,
+          in_morgen_tab: slotDatumByOrderId.has(id),
+          planning_slot_datum: slotDatumByOrderId.get(id) ?? null,
+        };
+      })
     );
 
     return NextResponse.json(
