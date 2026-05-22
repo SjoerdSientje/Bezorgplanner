@@ -104,7 +104,8 @@ const PAKKETJES_MAX_PRIJS = 450;
 
 function parseSpecialServiceProductFromNote(note: string | null | undefined): string {
   const text = String(note ?? "");
-  const match = text.match(/^\s*(?:nalevering|naleveren|garantie)\s*:\s*([^\n\r]+)/im);
+  // Capture het volledige label inclusief de naam, bijv. "Naleveren: Standaard"
+  const match = text.match(/^\s*((?:nalevering|naleveren|garantie)\s*:[^\n\r]+)/im);
   return String(match?.[1] ?? "").trim();
 }
 
@@ -165,11 +166,10 @@ export function extractPakketjesLineItems(order: ShopifyOrder): { name: string; 
     const qty = Math.max(1, Number(li.quantity ?? 1) || 1);
     out.push({ name, quantity: qty });
   }
-  if (out.length === 0) {
-    const specialServiceProduct = getSpecialServiceProduct(order);
-    if (specialServiceProduct) {
-      out.push({ name: specialServiceProduct, quantity: 1 });
-    }
+  // Altijd toevoegen als aanwezig — ook wanneer er gewone line items zijn.
+  const specialServiceProduct = getSpecialServiceProduct(order);
+  if (specialServiceProduct) {
+    out.push({ name: specialServiceProduct, quantity: 1 });
   }
   return out;
 }
