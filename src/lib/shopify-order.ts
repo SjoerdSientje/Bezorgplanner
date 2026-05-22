@@ -183,10 +183,12 @@ export function extractPakketjesLineItems(order: ShopifyOrder): { name: string; 
     const qty = Math.max(1, Number(li.quantity ?? 1) || 1);
     out.push({ name, quantity: qty });
   }
-  // Altijd toevoegen als aanwezig — ook wanneer er gewone line items zijn.
-  const specialServiceProduct = getSpecialServiceProduct(order);
-  if (specialServiceProduct) {
-    out.push({ name: specialServiceProduct, quantity: 1 });
+  // Voeg special service toe uit note of shipping lines (niet uit line_items — die staan er al in).
+  const fromNoteOrShipping =
+    parseSpecialServiceProductFromNote(order.note) ||
+    parseSpecialServiceFromShippingLines(order);
+  if (fromNoteOrShipping) {
+    out.push({ name: fromNoteOrShipping, quantity: 1 });
   }
   return out;
 }
