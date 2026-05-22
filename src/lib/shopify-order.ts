@@ -135,13 +135,13 @@ function getSpecialServiceProduct(order: ShopifyOrder): string {
  */
 export function qualifiesForPakketjes(order: ShopifyOrder): boolean {
   if (isShowroomShippingOrder(order)) return false;
+  const SERVICE_KEYWORDS = ["terugbrengen", "ophalen", "proefrit", "reparatie aan huis"];
   const tags = String(order.tags ?? "").toLowerCase();
-  if (
-    tags.includes("terugbrengen") ||
-    tags.includes("ophalen") ||
-    tags.includes("proefrit") ||
-    tags.includes("reparatie aan huis")
-  ) return false;
+  const lineItemNames = (order.line_items ?? []).map((li) => String(li.name ?? "").toLowerCase());
+  const hasServiceKeyword = SERVICE_KEYWORDS.some(
+    (kw) => tags.includes(kw) || lineItemNames.some((n) => n.includes(kw))
+  );
+  if (hasServiceKeyword) return false;
   const total = parseFloat(String(order.total_price ?? 0));
   const hasSpecialServiceItem = Boolean(getSpecialServiceProduct(order));
   const qualifiesByTotal = total > 0 && total < PAKKETJES_MAX_PRIJS;
