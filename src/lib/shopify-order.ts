@@ -201,13 +201,15 @@ export function passesRitjesFilter(order: ShopifyOrder): boolean {
   const tags = (order.tags ?? "").toLowerCase();
   const hasSpecialServiceItem = Boolean(getSpecialServiceProduct(order));
 
+  // Naleveren/garantie zijn pakketjes — horen niet in ritjes vandaag.
+  if (hasSpecialServiceItem && totalPrice === 0) return false;
+
   const hasTerugbrengen = tags.includes("terugbrengen");
   const hasOphalen = tags.includes("ophalen");
   const hasReparatieAanHuis = tags.includes("reparatie aan huis");
   const hasProefrit = tags.includes("proefrit");
 
   if (hasTerugbrengen || hasOphalen || hasReparatieAanHuis || hasProefrit) return true;
-  if (totalPrice === 0 && hasSpecialServiceItem) return true;
   if (totalPrice >= 450) return true;
   return false;
 }

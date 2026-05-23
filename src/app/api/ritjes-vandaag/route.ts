@@ -38,15 +38,27 @@ export async function GET(request: NextRequest) {
       if (!prev || d < prev) slotDatumByOrderId.set(id, d);
     }
 
+    // Sluit naleveren/garantie orders uit — die horen alleen in de pakketjes paklijst.
+    const NALEVEREN_RE = /\b(naleveren|nalevering|garantie)\b/i;
+    const isNaleverenOrder = (o: Record<string, unknown>): boolean => {
+      const prijs = parseFloat(String(o.bestelling_totaal_prijs ?? 0));
+      if (prijs > 0) return false; // €0-orders zijn de enige kandidaten
+      const producten = String(o.producten ?? "");
+      const opmerkingen = String(o.opmerkingen_klant ?? "");
+      return NALEVEREN_RE.test(producten) || NALEVEREN_RE.test(opmerkingen);
+    };
+
     const orders = sortRitjesOrdersNewestFirst(
-      (data ?? []).map((o) => {
-        const id = String((o as Record<string, unknown>).id ?? "").trim();
-        return {
-          ...o,
-          in_morgen_tab: slotDatumByOrderId.has(id),
-          planning_slot_datum: slotDatumByOrderId.get(id) ?? null,
-        };
-      })
+      (data ?? [])
+        .filter((o) => !isNaleverenOrder(o as Record<string, unknown>))
+        .map((o) => {
+          const id = String((o as Record<string, unknown>).id ?? "").trim();
+          return {
+            ...o,
+            in_morgen_tab: slotDatumByOrderId.has(id),
+            planning_slot_datum: slotDatumByOrderId.get(id) ?? null,
+          };
+        })
     );
 
     return NextResponse.json(
