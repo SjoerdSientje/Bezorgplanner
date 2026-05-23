@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef } from "react";
 import ProductenCell from "@/components/ProductenCell";
+import OpmerkingKlantCell from "@/components/OpmerkingKlantCell";
 
 export type PlanningKleur = "groen" | "oranje" | "rood" | null;
 
@@ -289,6 +290,9 @@ export default function AlleRittenTabel({
                       value={String(order.producten ?? "")}
                       lineItemsJson={(order.line_items_json as string | null | undefined) ?? null}
                       bestellingTotaalPrijs={typeof order.bestelling_totaal_prijs === "number" ? order.bestelling_totaal_prijs : null}
+                      onSaveMulti={async (fields) => {
+                        onPatch(order.id, fields);
+                      }}
                     />
                   </td>
 
@@ -298,10 +302,11 @@ export default function AlleRittenTabel({
                   </td>
 
                   {/* Opmerkingen klant */}
-                  <td className="border border-stone-200 px-2 py-1.5 text-stone-600 min-w-[10rem] max-w-[16rem]">
-                    <span className="block whitespace-pre-wrap break-words text-xs">
-                      {String(order.opmerkingen_klant ?? "") || <span className="text-stone-300">—</span>}
-                    </span>
+                  <td className="border border-stone-200 p-0 min-w-[10rem] max-w-[16rem]">
+                    <OpmerkingKlantCell
+                      value={String(order.opmerkingen_klant ?? "")}
+                      onSave={async (v) => onPatch(order.id, { opmerkingen_klant: v.trim() || null })}
+                    />
                   </td>
 
                   {/* Ordernummer */}
@@ -316,15 +321,10 @@ export default function AlleRittenTabel({
 
                   {/* Betaald */}
                   <td className="border border-stone-200 px-2 py-1.5 text-center">
-                    <span
-                      className={`rounded px-1.5 py-0.5 text-xs font-medium ${
-                        order.betaald === true
-                          ? "bg-green-100 text-green-700"
-                          : "bg-red-50 text-red-600"
-                      }`}
-                    >
-                      {order.betaald === true ? "ja" : "nee"}
-                    </span>
+                    <MeenemenToggle
+                      value={order.betaald === true}
+                      onChange={(v) => onPatch(order.id, { betaald: v })}
+                    />
                   </td>
 
                   {/* Telefoon (kopieer) */}
