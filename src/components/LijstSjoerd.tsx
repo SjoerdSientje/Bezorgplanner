@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState } from "react";
+import ProductenCell from "@/components/ProductenCell";
+import OpmerkingKlantCell from "@/components/OpmerkingKlantCell";
 import type { AlleRittenOrder } from "@/components/AlleRittenTabel";
 
 function parseSlotMin(slot: string | null | undefined): number {
@@ -10,16 +12,19 @@ function parseSlotMin(slot: string | null | undefined): number {
   return h * 60 + (Number.isFinite(m) ? m : 0);
 }
 
-function EditableSlotCell({
+function EditableCell({
   value,
   onSave,
+  placeholder,
+  fontMedium,
 }: {
   value: string;
   onSave: (v: string) => void;
+  placeholder?: string;
+  fontMedium?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
-  const inputRef = useRef<HTMLInputElement>(null);
 
   const commit = () => {
     setEditing(false);
@@ -29,17 +34,15 @@ function EditableSlotCell({
   if (editing) {
     return (
       <input
-        ref={inputRef}
         autoFocus
-        className="w-full rounded border border-koopje-orange px-1 py-0.5 text-sm font-medium focus:outline-none"
+        className={`w-full rounded border border-koopje-orange px-1 py-0.5 text-sm focus:outline-none ${fontMedium ? "font-medium" : ""}`}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => {
           if (e.key === "Enter") commit();
-          if (e.key === "Escape") setEditing(false);
+          if (e.key === "Escape") { setEditing(false); setDraft(value); }
         }}
-        placeholder="bv. 10:00 - 12:00"
       />
     );
   }
@@ -47,11 +50,10 @@ function EditableSlotCell({
   return (
     <button
       type="button"
-      className="w-full text-left font-medium text-koopje-black hover:underline hover:decoration-dotted"
+      className={`w-full text-left text-sm hover:underline hover:decoration-dotted ${fontMedium ? "font-medium text-koopje-black" : "text-stone-600"}`}
       onClick={() => { setDraft(value); setEditing(true); }}
-      title="Klik om tijdslot te bewerken"
     >
-      {value || <span className="text-stone-300 text-xs font-normal">Klik om in te vullen</span>}
+      {value || <span className="text-stone-300 font-normal text-xs">{placeholder ?? "—"}</span>}
     </button>
   );
 }
@@ -108,30 +110,51 @@ export default function LijstSjoerd({
                 <td className="border border-stone-200 px-2 py-1.5 text-center text-xs text-stone-500">
                   {i + 1}
                 </td>
-                {/* Tijdslot (bewerkbaar) */}
+
+                {/* Tijdslot */}
                 <td className="border border-stone-200 px-3 py-1.5 whitespace-nowrap min-w-[10rem]">
-                  <EditableSlotCell
+                  <EditableCell
                     value={String(order.aankomsttijd_slot ?? "")}
                     onSave={(v) => onPatch(String(order.id), { aankomsttijd_slot: v || null })}
+                    placeholder="Klik om in te vullen"
+                    fontMedium
                   />
                 </td>
+
                 {/* Voorkeurstijd */}
-                <td className="border border-stone-200 px-3 py-1.5 text-stone-500 whitespace-nowrap">
-                  {String(order.bezorgtijd_voorkeur ?? "") || <span className="text-stone-300">—</span>}
+                <td className="border border-stone-200 px-3 py-1.5 whitespace-nowrap min-w-[8rem]">
+                  <EditableCell
+                    value={String(order.bezorgtijd_voorkeur ?? "")}
+                    onSave={(v) => onPatch(String(order.id), { bezorgtijd_voorkeur: v || null })}
+                    placeholder="—"
+                  />
                 </td>
+
                 {/* Adres */}
-                <td className="border border-stone-200 px-3 py-1.5 text-stone-600 min-w-[14rem]">
-                  {String(order.volledig_adres ?? "") || <span className="text-stone-300">—</span>}
+                <td className="border border-stone-200 px-3 py-1.5 min-w-[14rem]">
+                  <EditableCell
+                    value={String(order.volledig_adres ?? "")}
+                    onSave={(v) => onPatch(String(order.id), { volledig_adres: v || null })}
+                    placeholder="—"
+                  />
                 </td>
-                {/* Model */}
-                <td className="border border-stone-200 px-3 py-1.5 text-stone-600 min-w-[10rem]">
-                  {String(order.producten ?? "") || <span className="text-stone-300">—</span>}
+
+                {/* Model / Product */}
+                <td className="border border-stone-200 p-0 min-w-[10rem]">
+                  <ProductenCell
+                    value={String(order.producten ?? "")}
+                    lineItemsJson={(order.line_items_json as string | null | undefined) ?? null}
+                    bestellingTotaalPrijs={typeof order.bestelling_totaal_prijs === "number" ? order.bestelling_totaal_prijs : null}
+                    onSaveMulti={async (fields) => onPatch(String(order.id), fields)}
+                  />
                 </td>
+
                 {/* Opmerking klant */}
-                <td className="border border-stone-200 px-3 py-1.5 text-xs text-stone-500 min-w-[10rem] max-w-[18rem]">
-                  <span className="block whitespace-pre-wrap break-words">
-                    {String(order.opmerkingen_klant ?? "") || <span className="text-stone-300">—</span>}
-                  </span>
+                <td className="border border-stone-200 p-0 min-w-[10rem] max-w-[18rem]">
+                  <OpmerkingKlantCell
+                    value={String(order.opmerkingen_klant ?? "")}
+                    onSave={async (v) => onPatch(String(order.id), { opmerkingen_klant: v.trim() || null })}
+                  />
                 </td>
               </tr>
             ))

@@ -268,19 +268,29 @@ export default function AlleRittenTabel({
                   {/* Naam */}
                   <td className="border border-stone-200 px-2 py-1.5 min-w-[8rem]">
                     {isOranje ? (
-                      <button
-                        type="button"
-                        onClick={() => handleNaamClick(order)}
-                        className="w-full text-left font-medium text-orange-700 underline decoration-dotted underline-offset-2 hover:text-orange-900"
-                        title={order.planning_opmerking ? String(order.planning_opmerking) : "Voeg opmerking toe"}
-                      >
-                        {String(order.naam ?? "—")}
-                        {order.planning_opmerking && (
-                          <span className="ml-1 text-xs text-orange-400">💬</span>
-                        )}
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleNaamClick(order)}
+                          className="shrink-0 text-orange-400 hover:text-orange-600"
+                          title={order.planning_opmerking ? String(order.planning_opmerking) : "Voeg opmerking toe"}
+                        >
+                          💬
+                        </button>
+                        <EditableCell
+                          value={String(order.naam ?? "")}
+                          onSave={(v) => onPatch(order.id, { naam: v || null })}
+                          className="font-medium text-orange-700"
+                          placeholder="—"
+                        />
+                      </div>
                     ) : (
-                      <span className="font-medium text-koopje-black">{String(order.naam ?? "—")}</span>
+                      <EditableCell
+                        value={String(order.naam ?? "")}
+                        onSave={(v) => onPatch(order.id, { naam: v || null })}
+                        className="font-medium text-koopje-black"
+                        placeholder="—"
+                      />
                     )}
                   </td>
 
@@ -296,9 +306,15 @@ export default function AlleRittenTabel({
                     />
                   </td>
 
-                  {/* Woonplaats */}
-                  <td className="border border-stone-200 px-2 py-1.5 text-stone-600 min-w-[7rem]">
-                    {woonplaats || <span className="text-stone-300">—</span>}
+                  {/* Woonplaats / volledig adres */}
+                  <td className="border border-stone-200 px-2 py-1.5 min-w-[7rem]">
+                    <EditableCell
+                      value={String(order.volledig_adres ?? "")}
+                      displayValue={woonplaats}
+                      onSave={(v) => onPatch(order.id, { volledig_adres: v || null })}
+                      placeholder="—"
+                      className="text-stone-600"
+                    />
                   </td>
 
                   {/* Opmerkingen klant */}
@@ -310,13 +326,28 @@ export default function AlleRittenTabel({
                   </td>
 
                   {/* Ordernummer */}
-                  <td className="border border-stone-200 px-2 py-1.5 text-stone-500 whitespace-nowrap">
-                    {String(order.order_nummer ?? "—")}
+                  <td className="border border-stone-200 px-2 py-1.5 whitespace-nowrap">
+                    <EditableCell
+                      value={String(order.order_nummer ?? "")}
+                      onSave={(v) => onPatch(order.id, { order_nummer: v || null })}
+                      placeholder="—"
+                      className="text-stone-500"
+                    />
                   </td>
 
                   {/* Bedrag */}
-                  <td className="border border-stone-200 px-2 py-1.5 text-stone-600 whitespace-nowrap">
-                    {prijs || <span className="text-stone-300">—</span>}
+                  <td className="border border-stone-200 px-2 py-1.5 whitespace-nowrap">
+                    <EditableCell
+                      value={typeof order.bestelling_totaal_prijs === "number"
+                        ? String(order.bestelling_totaal_prijs)
+                        : ""}
+                      onSave={(v) => {
+                        const num = parseFloat(v.replace(",", "."));
+                        onPatch(order.id, { bestelling_totaal_prijs: Number.isFinite(num) ? num : null });
+                      }}
+                      placeholder="—"
+                      className="text-stone-600"
+                    />
                   </td>
 
                   {/* Betaald */}
@@ -327,9 +358,18 @@ export default function AlleRittenTabel({
                     />
                   </td>
 
-                  {/* Telefoon (kopieer) */}
+                  {/* Telefoon (bewerkbaar + kopieer) */}
                   <td className="border border-stone-200 px-2 py-1.5 whitespace-nowrap min-w-[8rem]">
-                    <CopyCell value={telefoon} />
+                    <EditableCell
+                      value={String(order.telefoon_nummer ?? "")}
+                      displayValue={telefoon || undefined}
+                      onSave={(v) => onPatch(order.id, { telefoon_nummer: v || null })}
+                      placeholder="—"
+                      className="text-koopje-orange underline underline-offset-2"
+                      onDisplayClick={() => {
+                        if (telefoon) navigator.clipboard.writeText(telefoon);
+                      }}
+                    />
                   </td>
 
                   {/* Delete */}
@@ -358,16 +398,23 @@ export default function AlleRittenTabel({
 
 function EditableCell({
   value,
+  displayValue,
   onSave,
   placeholder,
+  className,
+  onDisplayClick,
 }: {
   value: string;
+  /** Wat getoond wordt in display-mode (standaard = value). */
+  displayValue?: string;
   onSave: (v: string) => void;
   placeholder?: string;
+  className?: string;
+  /** Extra actie bij klik op de display-knop (bijv. kopiëren). Dubbel-klik start edit. */
+  onDisplayClick?: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
-  const inputRef = useRef<HTMLInputElement>(null);
 
   const commit = () => {
     setEditing(false);
@@ -377,24 +424,43 @@ function EditableCell({
   if (editing) {
     return (
       <input
-        ref={inputRef}
         autoFocus
         className="w-full rounded border border-koopje-orange px-1 py-0.5 text-sm focus:outline-none"
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
-        onKeyDown={(e) => { if (e.key === "Enter") commit(); if (e.key === "Escape") setEditing(false); }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+          if (e.key === "Escape") { setEditing(false); setDraft(value); }
+        }}
       />
+    );
+  }
+
+  const shown = displayValue !== undefined ? displayValue : value;
+
+  if (onDisplayClick) {
+    // Single click → actie (kopiëren); double click → edit
+    return (
+      <button
+        type="button"
+        className={`w-full text-left text-sm hover:underline hover:decoration-dotted ${className ?? "text-stone-600"}`}
+        onClick={onDisplayClick}
+        onDoubleClick={() => { setDraft(value); setEditing(true); }}
+        title="Klik om te kopiëren, dubbelklik om te bewerken"
+      >
+        {shown || <span className="text-stone-300">{placeholder ?? "—"}</span>}
+      </button>
     );
   }
 
   return (
     <button
       type="button"
-      className="w-full text-left text-sm text-stone-600 hover:underline hover:decoration-dotted"
+      className={`w-full text-left text-sm hover:underline hover:decoration-dotted ${className ?? "text-stone-600"}`}
       onClick={() => { setDraft(value); setEditing(true); }}
     >
-      {value || <span className="text-stone-300">{placeholder ?? "—"}</span>}
+      {shown || <span className="text-stone-300">{placeholder ?? "—"}</span>}
     </button>
   );
 }
