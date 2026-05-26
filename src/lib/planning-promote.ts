@@ -30,21 +30,19 @@ export async function getTargetPlanningDate(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: SupabaseClient<any, any, any>
 ): Promise<{ date: string; isRitjesVoorMorgen: boolean }> {
-  // Alleen lopende slots van VANDAAG tellen mee als "bezorgronde bezig".
-  // Stale slots van gisteren of eerder mogen de doeldatum niet naar morgen schuiven.
+  // "Planning goedkeuren" is altijd voor morgen.
+  // isRitjesVoorMorgen = true als er al actieve slots bestaan (tweede batch).
+  const tomorrowAmsterdam = getTomorrowAmsterdam();
   const todayAmsterdam = getTodayAmsterdam();
+
   const { count } = await supabase
     .from("planning_slots")
     .select("id", { count: "exact", head: true })
     .eq("owner_email", ownerEmail)
-    .eq("datum", todayAmsterdam)
+    .gte("datum", todayAmsterdam)
     .neq("status", "afgerond");
 
-  if ((count ?? 0) > 0) {
-    return { date: getTomorrowAmsterdam(), isRitjesVoorMorgen: true };
-  }
-  const { date } = getPlanningDateForGoedkeuren();
-  return { date, isRitjesVoorMorgen: false };
+  return { date: tomorrowAmsterdam, isRitjesVoorMorgen: (count ?? 0) > 0 };
 }
 
 /**

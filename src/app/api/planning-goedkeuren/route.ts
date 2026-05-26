@@ -48,22 +48,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Orders die actief onderweg/gepland zijn op vandaag (lopende rit) sluiten we uit.
+    // Orders die al in een actieve planning_slot zitten (Routes-tab) nooit opnieuw indelen.
     const { data: activeSlots } = await supabase
       .from("planning_slots")
-      .select("order_id, datum")
+      .select("order_id")
       .eq("owner_email", ownerEmail)
-      .eq("datum", todayKey)
       .neq("status", "afgerond");
 
-    const busyTodayIds = new Set(
+    const alreadyPlannedIds = new Set(
       (activeSlots ?? []).map((s: { order_id: string }) => String(s.order_id))
     );
 
     const rows = (orders ?? []).filter((o) => {
       if ((o.aankomsttijd_slot ?? "").toString().trim().length === 0) return false;
-      // Actief in de huidige bezorgronde vandaag → niet naar een nieuwe batch
-      if (busyTodayIds.has(String(o.id ?? ""))) return false;
+      // Al in de Routes-tab (actieve planning slot) → overslaan
+      if (alreadyPlannedIds.has(String(o.id ?? ""))) return false;
       return true;
     });
 
