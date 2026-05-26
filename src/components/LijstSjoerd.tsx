@@ -58,7 +58,7 @@ function EditableCell({
   );
 }
 
-const HEADERS = ["Tijdslot", "Voorkeurstijd", "Adres", "Model / Product", "Opmerking klant"];
+const HEADERS = ["Tijdslot", "Voorkeurstijd", "Adres", "Model / Product", "Opmerking klant", "Email"];
 
 export default function LijstSjoerd({
   orders,
@@ -154,6 +154,15 @@ export default function LijstSjoerd({
                   <OpmerkingKlantCell
                     value={String(order.opmerkingen_klant ?? "")}
                     onSave={async (v) => onPatch(String(order.id), { opmerkingen_klant: v.trim() || null })}
+                  />
+                </td>
+
+                {/* Email */}
+                <td className="border border-stone-200 px-3 py-1.5 min-w-[12rem]">
+                  <EditableCell
+                    value={String(order.email ?? "")}
+                    onSave={(v) => onPatch(String(order.id), { email: v || null })}
+                    placeholder="—"
                   />
                 </td>
               </tr>
