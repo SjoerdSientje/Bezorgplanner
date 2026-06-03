@@ -5,6 +5,12 @@ import { createPortal } from "react-dom";
 
 type Section = "nieuwe_order" | "nieuw_tijdslot";
 
+type VerschuivenResult = {
+  ok: boolean;
+  message?: string;
+  error?: string;
+};
+
 type AppjesOrder = {
   order_id: string;
   order_nummer: string;
@@ -148,6 +154,9 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<SendResult | null>(null);
+  const [vertragingMinuten, setVertragingMinuten] = useState<string>("");
+  const [verschuivenSending, setVerschuivenSending] = useState(false);
+  const [verschuivenResult, setVerschuivenResult] = useState<VerschuivenResult | null>(null);
 
   const currentByOrderId = useMemo(() => {
     const m = new Map<string, CurrentRitjesOrder>();
@@ -220,8 +229,35 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
     return { nieuw, bestaand };
   }
 
+  async function handleVerschuiven() {
+    const minuten = parseInt(vertragingMinuten, 10);
+    if (!Number.isFinite(minuten) || minuten <= 0) return;
+    setVerschuivenSending(true);
+    setVerschuivenResult(null);
+    try {
+      const res = await fetch("/api/planning-verschuiven", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vertragingMinuten: minuten }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setVerschuivenResult({ ok: false, error: data.error ?? "Verschuiven mislukt." });
+      } else {
+        setVerschuivenResult({ ok: true, message: data.message ?? "Planning verschoven." });
+        setVertragingMinuten("");
+      }
+    } catch {
+      setVerschuivenResult({ ok: false, error: "Er ging iets mis. Probeer het opnieuw." });
+    } finally {
+      setVerschuivenSending(false);
+    }
+  }
+
   const openDialog = useCallback(async () => {
     setResult(null);
+    setVerschuivenResult(null);
+    setVertragingMinuten("");
     setSelectedNieuweOrder(new Set());
     setSelectedNieuwTijdslot(new Set());
     setLoadingOrders(true);
@@ -412,6 +448,59 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
                   onToggleAll={() => toggleAll("nieuw_tijdslot")}
                   emptyText="Geen orders in planning met gewijzigd tijdslot."
                 />
+
+                <div className="border-t border-koopje-black/10" />
+
+                {/* Planning verschuiven */}
+                <div>
+                  <div className="mb-3">
+                    <h3 className="text-sm font-semibold text-koopje-black">Planning verschuiven</h3>
+                    <p className="text-xs text-koopje-black/60">
+                      Verschuif alle actieve orders in de planning met een vertraging. Iedereen
+                      krijgt automatisch een appje met het nieuwe tijdslot.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2 rounded-xl border border-koopje-black/10 bg-koopje-black/5 px-3 py-2">
+                      <input
+                        type="number"
+                        min={1}
+                        max={480}
+                        value={vertragingMinuten}
+                        onChange={(e) => {
+                          setVerschuivenResult(null);
+                          setVertragingMinuten(e.target.value);
+                        }}
+                        placeholder="0"
+                        className="w-16 bg-transparent text-sm font-medium text-koopje-black outline-none"
+                      />
+                      <span className="text-xs text-koopje-black/50">minuten vertraging</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleVerschuiven}
+                      disabled={
+                        verschuivenSending ||
+                        !vertragingMinuten ||
+                        parseInt(vertragingMinuten, 10) <= 0
+                      }
+                      className="rounded-lg bg-koopje-orange px-4 py-2 text-sm font-medium text-white transition hover:bg-koopje-orange-dark disabled:opacity-50"
+                    >
+                      {verschuivenSending ? "Bezig…" : "Goedkeuren"}
+                    </button>
+                  </div>
+                  {verschuivenResult && (
+                    <p
+                      className={`mt-2 rounded-lg px-3 py-2 text-sm ${
+                        verschuivenResult.ok
+                          ? "bg-green-50 text-green-800"
+                          : "bg-red-50 text-red-700"
+                      }`}
+                    >
+                      {verschuivenResult.ok ? verschuivenResult.message : verschuivenResult.error}
+                    </p>
+                  )}
+                </div>
               </>
             )}
 
