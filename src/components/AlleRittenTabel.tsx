@@ -19,6 +19,7 @@ export type AlleRittenOrder = {
   opmerkingen_klant?: string | null;
   telefoon_nummer?: string | null;
   telefoon_e164?: string | null;
+  email?: string | null;
   betaald?: boolean | null;
   bezorgtijd_voorkeur?: string | null;
   planning_kleur?: PlanningKleur;
@@ -199,6 +200,8 @@ export default function AlleRittenTabel({
     "Bedrag",
     "Betaald?",
     "Telefoon",
+    "Email",
+    "Voorkeurstijd",
     "", // delete
   ];
 
@@ -369,6 +372,26 @@ export default function AlleRittenTabel({
                       onDisplayClick={() => {
                         if (telefoon) navigator.clipboard.writeText(telefoon);
                       }}
+                    />
+                  </td>
+
+                  {/* Email */}
+                  <td className="border border-stone-200 px-2 py-1.5 min-w-[10rem]">
+                    <EditableCell
+                      value={String(order.email ?? "")}
+                      onSave={(v) => onPatch(order.id, { email: v || null })}
+                      placeholder="—"
+                      className="text-stone-600"
+                    />
+                  </td>
+
+                  {/* Voorkeurstijd */}
+                  <td className="border border-stone-200 px-2 py-1.5 min-w-[8rem]">
+                    <EditableCell
+                      value={String(order.bezorgtijd_voorkeur ?? "")}
+                      onSave={(v) => onPatch(order.id, { bezorgtijd_voorkeur: v || null })}
+                      placeholder="—"
+                      className="text-stone-600"
                     />
                   </td>
 
