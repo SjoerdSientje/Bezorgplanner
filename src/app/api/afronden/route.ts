@@ -123,11 +123,15 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Huidige datum in Amsterdam-tijd (YYYY-MM-DD) = de werkelijke bezorgdatum
+    const bezorgdatum = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Amsterdam" });
+
     // Update order afrond-info + status
     const updatePayload: Record<string, unknown> = {
       bezorger_naam: bezorgerNaam,
       betaalmethode,
       afgerond_at: new Date().toISOString(),
+      datum: bezorgdatum,
       status: nextStatus,
     };
     if (needsBedrag && betaalBedragNum != null) {
