@@ -161,25 +161,65 @@ export default function RitjesVandaagPage() {
     [visibleRows.orders]
   );
 
-  // Groepeer de Routes-tab op datum (vandaag / morgen) zodat we aparte secties kunnen tonen.
+  const ROUTE_HEADER_COLORS: Record<number, string> = {
+    1: "text-emerald-700",
+    2: "text-sky-700",
+    3: "text-violet-700",
+    4: "text-amber-700",
+    5: "text-rose-700",
+  };
+
+  // Groepeer de Routes-tab op datum én route_nummer voor aparte secties.
   const routesGroups = useMemo(() => {
     if (activeTab !== "morgen") return null;
     const todayKey = getAmsterdamCalendarDate(0);
-    const map = new Map<string, { orders: RitjesOrderFromApi[]; startOffset: number }>();
-    let offset = 0;
-    for (const o of visibleRows.orders) {
-      const datum = String((o as unknown as Record<string, unknown>).planning_slot_datum ?? "");
-      if (!map.has(datum)) map.set(datum, { orders: [], startOffset: offset });
-      map.get(datum)!.orders.push(o);
-      offset++;
+
+    // Bouw positiemap: elke positie in visibleRows.orders
+    const datumMap = new Map<string, number[]>();
+    for (let pos = 0; pos < visibleRows.orders.length; pos++) {
+      const o = visibleRows.orders[pos];
+      const datum = String((o as Record<string, unknown>).planning_slot_datum ?? "");
+      if (!datumMap.has(datum)) datumMap.set(datum, []);
+      datumMap.get(datum)!.push(pos);
     }
-    return Array.from(map.entries())
+
+    return Array.from(datumMap.entries())
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([datum, group]) => ({
-        datum,
-        isToday: datum === todayKey,
-        ...group,
-      }));
+      .map(([datum, positions]) => {
+        const isToday = datum === todayKey;
+        const hasRoutes = positions.some((pos) => {
+          const rn = Number((visibleRows.orders[pos] as Record<string, unknown>).route_nummer ?? 0);
+          return rn > 0;
+        });
+
+        if (!hasRoutes) {
+          return {
+            datum,
+            isToday,
+            routeSubGroups: [{ routeNum: null as number | null, positions }],
+          };
+        }
+
+        const routeMap = new Map<number, number[]>();
+        const loosePositions: number[] = [];
+        for (const pos of positions) {
+          const rn = Number((visibleRows.orders[pos] as Record<string, unknown>).route_nummer ?? 0);
+          if (rn > 0) {
+            if (!routeMap.has(rn)) routeMap.set(rn, []);
+            routeMap.get(rn)!.push(pos);
+          } else {
+            loosePositions.push(pos);
+          }
+        }
+        const routeKeys = Array.from(routeMap.keys()).sort((a, b) => a - b);
+        const routeSubGroups: { routeNum: number | null; positions: number[] }[] = routeKeys.map((k) => ({
+          routeNum: k,
+          positions: routeMap.get(k)!,
+        }));
+        if (loosePositions.length > 0) routeSubGroups.push({ routeNum: null, positions: loosePositions });
+
+        return { datum, isToday, routeSubGroups };
+      });
   }, [activeTab, visibleRows.orders]);
 
   const RIT_COLORS: Record<number, string> = {
@@ -467,60 +507,68 @@ export default function RitjesVandaagPage() {
               orders={orders.filter((o) => o.in_morgen_tab !== true) as AlleRittenOrder[]}
               onPatch={patchOrderById}
             />
-          ) : activeTab === "morgen" && routesGroups && routesGroups.length > 1 ? (
-            // ── Routes-tab met meerdere datum-groepen ────────────────────────
+          ) : activeTab === "morgen" && routesGroups ? (
+            // ── Routes-tab: gegroepeerd op datum én route ─────────────────────
             <div className="space-y-8">
-              {routesGroups.map((group) => {
-                const off = group.startOffset;
-                const groupTableRows = ordersToTableRows(group.orders);
-                const groupSize = group.orders.length;
-                const offsetRenderers = Object.fromEntries(
-                  Object.entries(cellRenderers).map(([key, fn]) => [
-                    key,
-                    (ri: number, v: string, os: (val: string) => void) => {
-                      if (ri >= groupSize) return null;
-                      return fn(ri + off, v, os);
-                    },
-                  ])
-                );
-                return (
-                  <div key={group.datum}>
+              {routesGroups.map((group) => (
+                <div key={group.datum}>
+                  {routesGroups.length > 1 && (
                     <h2
-                      className={`mb-3 text-base font-semibold ${
+                      className={`mb-4 text-base font-semibold ${
                         group.isToday ? "text-koopje-black" : "text-koopje-orange"
                       }`}
                     >
-                      {group.isToday ? `Ritjes vandaag — ${group.datum}` : `Ritjes voor morgen — ${group.datum}`}
+                      {group.isToday
+                        ? `Ritjes vandaag — ${group.datum}`
+                        : `Ritjes voor morgen — ${group.datum}`}
                     </h2>
-                    <EditableSheetTable
-                      headers={RITJES_HEADERS}
-                      initialData={groupTableRows}
-                      onCellBlur={(ri, header, value) => handleCellBlur(ri + off, header, value)}
-                      dataRowCount={group.orders.length}
-                      rowAction={(ri) => deleteOrder(ri + off)}
-                      cellRenderers={offsetRenderers}
-                      resetKey={tableResetKey}
-                      showRowNumbers
-                      rowColorClass={(ri) => rowColorClass(ri + off)}
-                    />
+                  )}
+                  <div className="space-y-6">
+                    {group.routeSubGroups.map((sub) => {
+                      const subOrders = sub.positions.map((pos) => visibleRows.orders[pos]);
+                      const subTableRows = ordersToTableRows(subOrders);
+                      const subSize = sub.positions.length;
+                      const subRenderers = Object.fromEntries(
+                        Object.entries(cellRenderers).map(([key, fn]) => [
+                          key,
+                          (ri: number, v: string, os: (val: string) => void) => {
+                            if (ri >= subSize) return null;
+                            return fn(sub.positions[ri]!, v, os);
+                          },
+                        ])
+                      );
+                      const routeLabelColor =
+                        sub.routeNum != null
+                          ? (ROUTE_HEADER_COLORS[sub.routeNum] ?? "text-stone-700")
+                          : "text-stone-700";
+                      return (
+                        <div key={sub.routeNum ?? "overig"}>
+                          {sub.routeNum != null && (
+                            <h3 className={`mb-2 text-sm font-semibold ${routeLabelColor}`}>
+                              Route {sub.routeNum}
+                            </h3>
+                          )}
+                          <EditableSheetTable
+                            headers={RITJES_HEADERS}
+                            initialData={subTableRows}
+                            onCellBlur={(ri, header, value) =>
+                              handleCellBlur(sub.positions[ri]!, header, value)
+                            }
+                            dataRowCount={subSize}
+                            rowAction={(ri) => deleteOrder(sub.positions[ri]!)}
+                            cellRenderers={subRenderers}
+                            resetKey={tableResetKey}
+                            showRowNumbers
+                            rowColorClass={(ri) => rowColorClass(sub.positions[ri]!)}
+                          />
+                        </div>
+                      );
+                    })}
                   </div>
-                );
-              })}
+                </div>
+              ))}
             </div>
-          ) : (
-            // ── Routes-tab enkelvoudig ────────────────────────────────────────
-            <EditableSheetTable
-              headers={RITJES_HEADERS}
-              initialData={tableRows}
-              onCellBlur={handleCellBlur}
-              dataRowCount={visibleRows.orders.length}
-              rowAction={deleteOrder}
-              cellRenderers={cellRenderers}
-              resetKey={tableResetKey}
-              showRowNumbers
-              rowColorClass={rowColorClass}
-            />
-          )}
+          ) : null}
         </div>
       </main>
     </>

@@ -108,6 +108,12 @@ export function sortRoutesTabOrders<T extends RitjesOrderFromApi>(orders: T[]): 
     const rankB = db === todayKey ? 0 : 1;
     if (rankA !== rankB) return rankA - rankB;
     if (da !== db) return da.localeCompare(db);
+    // Binnen dezelfde datum: groeperen op route_nummer (0 = geen route → achteraan)
+    const ra = Number((a as Record<string, unknown>).route_nummer ?? 0);
+    const rb = Number((b as Record<string, unknown>).route_nummer ?? 0);
+    const routeA = ra > 0 ? ra : 999;
+    const routeB = rb > 0 ? rb : 999;
+    if (routeA !== routeB) return routeA - routeB;
     return parseSlotMin(a.aankomsttijd_slot) - parseSlotMin(b.aankomsttijd_slot);
   });
 }

@@ -535,11 +535,15 @@ export default function PlanningPage() {
                     }
                     labelColor={
                       section.routeNum != null
-                        ? sidx % 3 === 0
+                        ? section.routeNum === 1
                           ? "text-emerald-800"
-                          : sidx % 3 === 1
+                          : section.routeNum === 2
                             ? "text-sky-800"
-                            : "text-violet-800"
+                            : section.routeNum === 3
+                              ? "text-violet-800"
+                              : section.routeNum === 4
+                                ? "text-amber-800"
+                                : "text-rose-800"
                         : idx === 0
                           ? "text-koopje-black"
                           : "text-koopje-orange"
