@@ -104,21 +104,22 @@ const PAKKETJES_MAX_PRIJS = 450;
 
 function parseSpecialServiceProductFromNote(note: string | null | undefined): string {
   const text = String(note ?? "");
-  // Capture het volledige label inclusief de naam, bijv. "Naleveren: Standaard"
+  // Alleen matchen als de regel BEGINT met het service-keyword + dubbele punt.
   const match = text.match(/^\s*((?:nalevering|naleveren|garantie)\s*:[^\n\r]+)/im);
   return String(match?.[1] ?? "").trim();
 }
 
+// Matcht alleen als de title/name BEGINT met het service-keyword + dubbele punt.
+// Zo wordt "garantie" in het midden van een productnaam (bijv. beschrijving) niet
+// verward met een echte "Garantie: ..." service-order.
+const SPECIAL_SERVICE_START_RE = /^\s*(?:nalevering|naleveren|garantie)\s*:/i;
+
 function parseSpecialServiceFromShippingLines(order: ShopifyOrder): string {
   for (const line of order.shipping_lines ?? []) {
     const title = String(line.title ?? "").trim();
-    if (!title) continue;
-    // Voorbeeld: "Naleveren: Standaard"
-    if (/\b(?:nalevering|naleveren|garantie)\b/i.test(title)) return title;
+    if (SPECIAL_SERVICE_START_RE.test(title)) return title;
     const code = String(line.code ?? "").trim();
-    if (/\b(?:nalevering|naleveren|garantie)\b/i.test(code)) {
-      return code || title;
-    }
+    if (SPECIAL_SERVICE_START_RE.test(code)) return code || title;
   }
   return "";
 }
@@ -126,7 +127,7 @@ function parseSpecialServiceFromShippingLines(order: ShopifyOrder): string {
 function parseSpecialServiceFromLineItems(order: ShopifyOrder): string {
   for (const li of order.line_items ?? []) {
     const name = String(li.name ?? "").trim();
-    if (/\b(?:nalevering|naleveren|garantie)\b/i.test(name)) return name;
+    if (SPECIAL_SERVICE_START_RE.test(name)) return name;
   }
   return "";
 }
@@ -209,7 +210,14 @@ export function passesRitjesFilter(order: ShopifyOrder): boolean {
   const hasReparatieAanHuis = tags.includes("reparatie aan huis");
   const hasProefrit = tags.includes("proefrit");
 
-  if (hasTerugbrengen || hasOphalen || hasReparatieAanHuis || hasProefrit) return true;
+  // Detecteer ook via productnaam: "Ophalen: ...", "Terugbrengen: ...", etc.
+  // zodat orders herkend worden ook als de tag ontbreekt of te laat werd toegevoegd.
+  const SERVICE_NAME_RE = /^\s*(ophalen|terugbrengen|reparatie aan huis|proefrit)\s*:/i;
+  const hasServiceInProductName = (order.line_items ?? []).some((li) =>
+    SERVICE_NAME_RE.test(String(li.name ?? ""))
+  );
+
+  if (hasTerugbrengen || hasOphalen || hasReparatieAanHuis || hasProefrit || hasServiceInProductName) return true;
   if (totalPrice >= 450) return true;
   return false;
 }
@@ -688,13 +696,18 @@ export interface RitjesOrderRow {
   line_items_json: string | null;
 }
 
-/** Bepaal type uit tags */
+/** Bepaal type uit tags, met fallback op productnaam (bijv. "Ophalen: ...") */
 function getOrderType(order: ShopifyOrder): RitjesOrderRow["type"] {
   const tags = (order.tags ?? "").toLowerCase();
   if (tags.includes("ophalen")) return "reparatie_ophalen";
   if (tags.includes("terugbrengen")) return "reparatie_terugbrengen";
   if (tags.includes("reparatie aan huis")) return "reparatie_deur";
   if (tags.includes("proefrit")) return "verkoop";
+  // Fallback: detecteer via productnaam als tag ontbreekt
+  const firstItemName = String((order.line_items ?? [])[0]?.name ?? "").toLowerCase();
+  if (/^\s*ophalen\s*:/i.test(firstItemName)) return "reparatie_ophalen";
+  if (/^\s*terugbrengen\s*:/i.test(firstItemName)) return "reparatie_terugbrengen";
+  if (/^\s*reparatie aan huis\s*:/i.test(firstItemName)) return "reparatie_deur";
   return "verkoop";
 }
 

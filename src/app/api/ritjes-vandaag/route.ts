@@ -39,13 +39,15 @@ export async function GET(request: NextRequest) {
     }
 
     // Sluit naleveren/garantie orders uit — die horen alleen in de pakketjes paklijst.
-    const NALEVEREN_RE = /\b(naleveren|nalevering|garantie)\b/i;
+    // Alleen matchen als het veld BEGINT met het keyword (bijv. "Garantie: koplamp"),
+    // zodat producten die 'garantie' in de beschrijving bevatten niet wegvallen.
+    const NALEVEREN_START_RE = /^\s*(naleveren|nalevering|garantie)\s*:/i;
     const isNaleverenOrder = (o: Record<string, unknown>): boolean => {
       const prijs = parseFloat(String(o.bestelling_totaal_prijs ?? 0));
       if (prijs > 0) return false; // €0-orders zijn de enige kandidaten
       const producten = String(o.producten ?? "");
       const opmerkingen = String(o.opmerkingen_klant ?? "");
-      return NALEVEREN_RE.test(producten) || NALEVEREN_RE.test(opmerkingen);
+      return NALEVEREN_START_RE.test(producten) || NALEVEREN_START_RE.test(opmerkingen);
     };
 
     const orders = sortRitjesOrdersNewestFirst(
