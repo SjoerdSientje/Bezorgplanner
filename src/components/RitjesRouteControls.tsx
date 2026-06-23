@@ -100,6 +100,75 @@ function TijdPicker({ value, onChange }: { value: string; onChange: (v: string) 
   );
 }
 
+function clampFietsen(n: number, min = 1, max = 99): number {
+  return Math.min(max, Math.max(min, n));
+}
+
+function FietsenStepper({
+  value,
+  onChange,
+  min = 1,
+  max = 99,
+}: {
+  value: number;
+  onChange: (n: number) => void;
+  min?: number;
+  max?: number;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const display = draft ?? String(value);
+
+  return (
+    <div className="flex items-center overflow-hidden rounded-lg border border-koopje-black/20 bg-white">
+      <button
+        type="button"
+        onClick={() => {
+          setDraft(null);
+          onChange(clampFietsen(value - 1, min, max));
+        }}
+        disabled={value <= min}
+        className="flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center text-xl font-medium text-koopje-black hover:bg-stone-100 active:bg-stone-200 disabled:opacity-30"
+        aria-label="Minder fietsen"
+      >
+        −
+      </button>
+      <input
+        type="text"
+        inputMode="numeric"
+        pattern="[0-9]*"
+        value={display}
+        onChange={(e) => {
+          const raw = e.target.value.replace(/\D/g, "");
+          setDraft(raw);
+          if (!raw) return;
+          const n = parseInt(raw, 10);
+          if (Number.isFinite(n)) onChange(clampFietsen(n, min, max));
+        }}
+        onBlur={() => {
+          if (draft === "" || draft === null) {
+            onChange(clampFietsen(value, min, max));
+          }
+          setDraft(null);
+        }}
+        className="w-11 border-x border-koopje-black/20 py-2 text-center text-sm font-semibold text-koopje-black focus:outline-none focus:ring-1 focus:ring-inset focus:ring-koopje-orange"
+        aria-label="Maximaal aantal fietsen"
+      />
+      <button
+        type="button"
+        onClick={() => {
+          setDraft(null);
+          onChange(clampFietsen(value + 1, min, max));
+        }}
+        disabled={value >= max}
+        className="flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center text-xl font-medium text-koopje-black hover:bg-stone-100 active:bg-stone-200 disabled:opacity-30"
+        aria-label="Meer fietsen"
+      >
+        +
+      </button>
+    </div>
+  );
+}
+
 interface Props {
   onRouteGenerated?: () => void;
   /** Vertrektijd rechtsboven (context Sientje); eerste route vult hier vaak mee in bij openen. */
@@ -319,23 +388,15 @@ export default function RitjesRouteControls({
                         setRoutes(next);
                       }}
                     />
-                    <label className="flex items-center gap-1 text-sm text-koopje-black">
+                    <label className="flex items-center gap-1.5 text-sm text-koopje-black">
                       <span className="text-koopje-black/60">max.</span>
-                      <input
-                        type="number"
-                        min={1}
-                        max={99}
+                      <FietsenStepper
                         value={row.maxFietsen}
-                        onChange={(e) => {
-                          const n = parseInt(e.target.value, 10);
+                        onChange={(n) => {
                           const next = [...routes];
-                          next[i] = {
-                            ...next[i],
-                            maxFietsen: Number.isFinite(n) ? Math.min(99, Math.max(1, n)) : 1,
-                          };
+                          next[i] = { ...next[i], maxFietsen: n };
                           setRoutes(next);
                         }}
-                        className="w-14 rounded border border-koopje-black/20 px-2 py-1 text-sm"
                       />
                       <span className="text-koopje-black/60">fietsen</span>
                     </label>
