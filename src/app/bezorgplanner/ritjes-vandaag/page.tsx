@@ -5,6 +5,7 @@ import Link from "next/link";
 import Header from "@/components/Header";
 import EditableSheetTable from "@/components/EditableSheetTable";
 import RitjesRouteControls from "@/components/RitjesRouteControls";
+import type { RoutePickOrder } from "@/components/RouteOrderPicker";
 import SparrenMetSientje from "@/components/SparrenMetSientje";
 import ProductenCell from "@/components/ProductenCell";
 import OpmerkingKlantCell from "@/components/OpmerkingKlantCell";
@@ -160,6 +161,19 @@ export default function RitjesVandaagPage() {
     () => ordersToTableRows(visibleRows.orders),
     [visibleRows.orders]
   );
+
+  const sjoerdOrders = useMemo((): RoutePickOrder[] => {
+    return orders
+      .filter((o) => o.in_morgen_tab !== true && o.meenemen_in_planning === true)
+      .map((o) => ({
+        id: String(o.id ?? "").trim(),
+        naam: String(o.naam ?? ""),
+        volledig_adres: String(o.volledig_adres ?? ""),
+        bezorgtijd_voorkeur: (o.bezorgtijd_voorkeur as string | null | undefined) ?? null,
+        aankomsttijd_slot: (o.aankomsttijd_slot as string | null | undefined) ?? null,
+      }))
+      .filter((o) => o.id);
+  }, [orders]);
 
   const ROUTE_HEADER_COLORS: Record<number, string> = {
     1: "text-emerald-700",
@@ -444,6 +458,7 @@ export default function RitjesVandaagPage() {
               vertrektijd={vertrektijd}
               onVertrektijdChange={setVertrektijd}
               onRouteGenerated={fetchRitjes}
+              sjoerdOrders={sjoerdOrders}
             />
           </div>
 

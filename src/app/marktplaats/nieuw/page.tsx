@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Header from "@/components/Header";
 import AdresAutocomplete from "@/components/AdresAutocomplete";
+import ProductAutocomplete from "@/components/ProductAutocomplete";
 
 type Soort = "bezorging" | "afhaal";
 type ProductType = "fiets" | "extra";
@@ -359,16 +360,20 @@ export default function NieuweMarktplaatsOrderPage() {
                       {/* Naam + Prijs */}
                       <div className="mb-3 flex gap-3">
                         <div className="flex-1">
-                          <label className="mb-1 block text-sm font-medium text-koopje-black">
-                            {product.type === "fiets" ? "Fietsnaam" : "Productnaam"}
-                            <span className="ml-1 text-koopje-orange">*</span>
-                          </label>
-                          <input
-                            type="text"
+                          <ProductAutocomplete
+                            label={product.type === "fiets" ? "Fietsnaam" : "Productnaam"}
+                            required
                             value={product.naam}
-                            onChange={(e) => updateProduct(product.id, { naam: e.target.value })}
-                            placeholder={product.type === "fiets" ? "bijv. V20 PRO Fatbike 2026" : "bijv. telefoonhouder"}
-                            className="w-full rounded-xl border border-koopje-black/20 px-3 py-2.5 text-sm text-koopje-black placeholder:text-koopje-black/30 focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
+                            onChange={(naam, prijs) => {
+                              const patch: Partial<ProductRegel> = { naam };
+                              if (prijs != null && prijs !== "") patch.prijs = prijs;
+                              updateProduct(product.id, patch);
+                            }}
+                            placeholder={
+                              product.type === "fiets"
+                                ? "bijv. V20 PRO Fatbike 2026"
+                                : "bijv. telefoonhouder"
+                            }
                           />
                         </div>
                         <div className="w-28 shrink-0">

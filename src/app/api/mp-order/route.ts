@@ -10,6 +10,7 @@ import {
 import type { ProductDefaultItemsRulesV1 } from "@/lib/product-default-items-rules";
 import { loadProductDefaultItemsRules } from "@/lib/product-rules-server";
 import { isDatumOpmerkingVandaagOfMorgen } from "@/lib/planning-date";
+import { deductInventoryForMpOrder } from "@/lib/inventory";
 
 /** Extraheer fietsmodel: 'V20 PRO Fatbike 2026 + ringslot | Combi-Deal 🔥' → 'V20 PRO' */
 function extractModel(producten: string | null): string | null {
@@ -302,6 +303,19 @@ export async function POST(request: NextRequest) {
       );
     }
     console.log("[api/mp-order] INSERT gelukt, id:", data.id, "order_nummer:", data.order_nummer);
+
+    try {
+      await deductInventoryForMpOrder(
+        supabase,
+        ownerEmail,
+        data.id,
+        data.order_nummer ?? "",
+        lineItemsJson,
+        producten
+      );
+    } catch (invErr) {
+      console.error("[api/mp-order] inventory deduct:", invErr);
+    }
 
     // Bij afhaal-order: PDF garantiebewijs genereren, opslaan in Supabase Storage, email met bijlage.
     let garantieError: string | null = null;

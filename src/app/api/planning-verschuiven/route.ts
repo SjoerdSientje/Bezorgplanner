@@ -15,10 +15,11 @@ function shiftTimeSlot(slot: string, delayMinutes: number): string {
 
 /**
  * POST /api/planning-verschuiven
- * Body: { vertragingMinuten: number }
+ * Body: { vertragingMinuten: number, routeNummers?: number[] }
  *
- * Verschuift alle actieve planning-slots (status != afgerond) met N minuten
- * en stuurt een nieuw_tijdslot WhatsApp naar elke betrokken order.
+ * Verschuift actieve planning-slots (status != afgerond) met N minuten.
+ * Optioneel alleen orders van opgegeven route_nummer(s).
+ * Stuurt een nieuw_tijdslot WhatsApp naar elke betrokken order.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -39,6 +40,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const routeNummersRaw = body.routeNummers ?? body.route_nummers;
+    const routeNummersFilter: number[] | null = Array.isArray(routeNummersRaw)
+      ? routeNummersRaw
+          .map((n: unknown) => Number(n))
+          .filter((n) => Number.isFinite(n) && n > 0)
+      : null;
+
     const supabase = createClient(supabaseUrl, serviceKey);
 
     // Haal alle actieve planning_slots op
@@ -56,8 +64,41 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, message: "Geen actieve planning gevonden.", count: 0 });
     }
 
+    const slotOrderIds = slots
+      .map((s: Record<string, unknown>) => String(s.order_id ?? "").trim())
+      .filter(Boolean);
+
+    const { data: ordersRouteMeta } = await supabase
+      .from("orders")
+      .select("id, route_nummer")
+      .eq("owner_email", ownerEmail)
+      .in("id", slotOrderIds);
+
+    const routeNummerByOrderId = new Map(
+      (ordersRouteMeta ?? []).map((o: Record<string, unknown>) => [
+        String(o.id ?? ""),
+        o.route_nummer != null ? Number(o.route_nummer) : null,
+      ])
+    );
+
+    let slotsToShift = slots as Record<string, unknown>[];
+    if (routeNummersFilter && routeNummersFilter.length > 0) {
+      const allowed = new Set(routeNummersFilter);
+      slotsToShift = slotsToShift.filter((s) => {
+        const oid = String(s.order_id ?? "");
+        const rn = routeNummerByOrderId.get(oid);
+        return rn != null && allowed.has(rn);
+      });
+      if (slotsToShift.length === 0) {
+        return NextResponse.json(
+          { error: "Geen orders gevonden voor de geselecteerde routes." },
+          { status: 400 }
+        );
+      }
+    }
+
     // Bereken nieuwe tijdsloten
-    const updated = slots.map((s: Record<string, unknown>) => ({
+    const updated = slotsToShift.map((s: Record<string, unknown>) => ({
       id: s.id,
       order_id: String(s.order_id ?? ""),
       datum: String(s.datum ?? ""),

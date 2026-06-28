@@ -1,17 +1,24 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import RouteOrderPicker, { type RoutePickOrder } from "@/components/RouteOrderPicker";
+import { routeStyleForIndex } from "@/lib/route-colors";
 
-const ROUTES_LS = "bezorgplanner.routes.v2";
+const ROUTES_LS = "bezorgplanner.routes.v3";
 
-export type RouteRow = { vertrektijd: string; maxFietsen: number; meerdereRitten: boolean };
+export type RouteRow = {
+  vertrektijd: string;
+  maxFietsen: number;
+  meerdereRitten: boolean;
+  orderIds: string[];
+};
 
 function loadRoutesDefault(): RouteRow[] {
   if (typeof window === "undefined") {
-    return [{ vertrektijd: "10:30", maxFietsen: 11, meerdereRitten: false }];
+    return [{ vertrektijd: "10:30", maxFietsen: 11, meerdereRitten: false, orderIds: [] }];
   }
   try {
-    const raw = localStorage.getItem(ROUTES_LS);
+    const raw = localStorage.getItem(ROUTES_LS) ?? localStorage.getItem("bezorgplanner.routes.v2");
     if (raw) {
       const p = JSON.parse(raw) as unknown;
       if (Array.isArray(p) && p.length > 0) {
@@ -24,8 +31,11 @@ function loadRoutesDefault(): RouteRow[] {
               ? o.maxFietsen
               : parseInt(String(o.maxFietsen ?? "11"), 10);
           const mr = Boolean(o.meerdereRitten ?? false);
+          const orderIds = Array.isArray(o.orderIds)
+            ? o.orderIds.map((id) => String(id).trim()).filter(Boolean)
+            : [];
           if (/^\d{1,2}:\d{2}$/.test(vt) && Number.isFinite(mf) && mf >= 1 && mf <= 99) {
-            rows.push({ vertrektijd: vt, maxFietsen: mf, meerdereRitten: mr });
+            rows.push({ vertrektijd: vt, maxFietsen: mf, meerdereRitten: mr, orderIds });
           }
         }
         if (rows.length > 0) return rows;
@@ -34,7 +44,7 @@ function loadRoutesDefault(): RouteRow[] {
   } catch {
     // ignore
   }
-  return [{ vertrektijd: "10:30", maxFietsen: 11, meerdereRitten: false }];
+  return [{ vertrektijd: "10:30", maxFietsen: 11, meerdereRitten: false, orderIds: [] }];
 }
 
 const TIJDOPTIES: string[] = [];
@@ -171,20 +181,22 @@ function FietsenStepper({
 
 interface Props {
   onRouteGenerated?: () => void;
-  /** Vertrektijd rechtsboven (context Sientje); eerste route vult hier vaak mee in bij openen. */
   vertrektijd: string;
   onVertrektijdChange: (v: string) => void;
+  sjoerdOrders: RoutePickOrder[];
 }
 
 export default function RitjesRouteControls({
   onRouteGenerated,
   vertrektijd,
   onVertrektijdChange,
+  sjoerdOrders,
 }: Props) {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: "ok" | "warning" | "error"; text: string } | null>(null);
   const [showDialog, setShowDialog] = useState(false);
   const [routes, setRoutes] = useState<RouteRow[]>(() => loadRoutesDefault());
+  const [pickerRouteIndex, setPickerRouteIndex] = useState<number | null>(null);
 
   const [goedkeurenLoading, setGoedkeurenLoading] = useState(false);
   const [goedkeurenMessage, setGoedkeurenMessage] = useState<{ type: "ok" | "error"; text: string } | null>(null);
@@ -202,17 +214,28 @@ export default function RitjesRouteControls({
     }
   }, []);
 
-  /** Alleen bij openen: eerste route syncen met het vertrek-contextveld (Sientje / gemiddelde start). */
   useEffect(() => {
     if (!showDialog) return;
     setRoutes((prev) => {
-      if (prev.length === 0) return [{ vertrektijd: vertrektijd || "10:30", maxFietsen: 11, meerdereRitten: false }];
+      if (prev.length === 0) {
+        return [{ vertrektijd: vertrektijd || "10:30", maxFietsen: 11, meerdereRitten: false, orderIds: [] }];
+      }
       const next = [...prev];
       next[0] = { ...next[0], vertrektijd: vertrektijd || next[0].vertrektijd };
       return next;
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- alleen trigger bij openen, niet bij typen in dialoog
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showDialog]);
+
+  const assignedElsewhereForPicker = useMemo(() => {
+    if (pickerRouteIndex == null) return new Map<string, number>();
+    const m = new Map<string, number>();
+    routes.forEach((r, i) => {
+      if (i === pickerRouteIndex) return;
+      for (const id of r.orderIds) m.set(id, i);
+    });
+    return m;
+  }, [routes, pickerRouteIndex]);
 
   async function handleRoutesBerekenen() {
     const cleaned = routes.filter((r) => r.vertrektijd.trim() && r.maxFietsen >= 1);
@@ -229,11 +252,26 @@ export default function RitjesRouteControls({
         return;
       }
     }
+
+    const multiRoute = cleaned.length > 1;
+    if (multiRoute) {
+      for (let i = 0; i < cleaned.length; i++) {
+        if (cleaned[i]!.orderIds.length === 0) {
+          setMessage({
+            type: "error",
+            text: `Route ${i + 1} heeft geen adressen. Klik op 'Kies adressen'.`,
+          });
+          return;
+        }
+      }
+    }
+
     persistRoutes(cleaned);
     setShowDialog(false);
     setLoading(true);
     setMessage(null);
     try {
+      const useManual = multiRoute || cleaned.some((r) => r.orderIds.length > 0);
       const res = await fetch("/api/routific/route", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -242,6 +280,7 @@ export default function RitjesRouteControls({
             vertrektijd: r.vertrektijd.trim(),
             maxFietsen: r.maxFietsen,
             meerdereRitten: r.meerdereRitten,
+            ...(useManual ? { orderIds: r.orderIds } : {}),
           })),
         }),
       });
@@ -286,10 +325,7 @@ export default function RitjesRouteControls({
             ? ` Appjes: ${wa.sent} verzonden, ${wa.failed} mislukt.`
             : ` Appjes: ${wa.sent} verzonden.`;
         const details = Array.isArray(wa.details) ? (wa.details as string[]) : [];
-        const detailBlock =
-          details.length > 0
-            ? "\n\n" + details.join("\n")
-            : "";
+        const detailBlock = details.length > 0 ? "\n\n" + details.join("\n") : "";
         setGoedkeurenMessage({
           type: wa.failed > 0 ? "error" : "ok",
           text: (data.message || "Planning goedgekeurd.") + suffix + detailBlock,
@@ -364,74 +400,96 @@ export default function RitjesRouteControls({
             onClick={() => setShowDialog(false)}
           />
           <div className="fixed inset-0 z-50 flex max-h-[100dvh] items-center justify-center overflow-y-auto px-4 py-8">
-            <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+            <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
               <h2 className="mb-2 text-base font-semibold text-koopje-black">Routes</h2>
               <p className="mb-4 text-sm text-koopje-black/70">
-                Je kiest <strong>per route</strong> vertrektijd en max. fietsen. Zonder vinkje onder{" "}
-                <strong>Voertuig mag terug naar depot</strong> = één rit, vaste capaciteit. Met vinkje
-                mag het voertuig na een volle lading terug naar depot en daarna weer uit. Bijvoorbeeld
-                grote bus max. 12 zonder vinkje, kleine bus max. 4 mét vinkje. Opgeslagen op dit
-                apparaat.
+                Stel per route vertrektijd en max. fietsen in. Bij <strong>meerdere routes</strong>{" "}
+                kies je via <strong>Kies adressen</strong> welke orders op welke bezorger rijden
+                (uit Lijst Sjoerd). Elke route heeft een eigen kleur.
               </p>
               <div className="mb-4 max-h-[40vh] space-y-3 overflow-y-auto pr-1">
-                {routes.map((row, i) => (
-                  <div
-                    key={i}
-                    className="flex flex-wrap items-center gap-2 rounded-lg border border-stone-200 bg-stone-50/80 px-3 py-2"
-                  >
-                    <span className="text-xs font-medium text-stone-600">Route {i + 1}</span>
-                    <TijdPicker
-                      value={row.vertrektijd}
-                      onChange={(v) => {
-                        const next = [...routes];
-                        next[i] = { ...next[i], vertrektijd: v };
-                        setRoutes(next);
-                      }}
-                    />
-                    <label className="flex items-center gap-1.5 text-sm text-koopje-black">
-                      <span className="text-koopje-black/60">max.</span>
-                      <FietsenStepper
-                        value={row.maxFietsen}
-                        onChange={(n) => {
-                          const next = [...routes];
-                          next[i] = { ...next[i], maxFietsen: n };
-                          setRoutes(next);
-                        }}
-                      />
-                      <span className="text-koopje-black/60">fietsen</span>
-                    </label>
-                    <label className="flex items-center gap-2 rounded-md bg-white/80 px-2 py-1 text-xs text-koopje-black">
-                      <input
-                        type="checkbox"
-                        checked={row.meerdereRitten}
-                        onChange={(e) => {
-                          const next = [...routes];
-                          next[i] = { ...next[i], meerdereRitten: e.target.checked };
-                          setRoutes(next);
-                        }}
-                        className="h-4 w-4 accent-koopje-orange"
-                      />
-                      <span>
-                        Voertuig mag terug naar depot
-                        <span className="text-koopje-black/60"> (meerdere ritten)</span>
-                      </span>
-                    </label>
-                    {routes.length > 1 && (
-                      <button
-                        type="button"
-                        className="ml-auto text-xs text-red-600 hover:underline"
-                        onClick={() => setRoutes(routes.filter((_, j) => j !== i))}
-                      >
-                        Verwijderen
-                      </button>
-                    )}
-                  </div>
-                ))}
+                {routes.map((row, i) => {
+                  const style = routeStyleForIndex(i);
+                  return (
+                    <div
+                      key={i}
+                      className={`rounded-lg border border-stone-200 border-l-4 px-3 py-2 ${style.border} ${style.bg}`}
+                    >
+                      <div className="mb-2 flex flex-wrap items-center gap-2">
+                        <span className={`text-xs font-semibold ${style.header}`}>
+                          {style.label}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setPickerRouteIndex(i)}
+                          className={`ml-auto rounded-lg border px-2.5 py-1 text-xs font-medium transition hover:opacity-90 ${style.header} border-current bg-white`}
+                        >
+                          Kies adressen ({row.orderIds.length})
+                        </button>
+                        {routes.length > 1 && (
+                          <button
+                            type="button"
+                            className="text-xs text-red-600 hover:underline"
+                            onClick={() => setRoutes(routes.filter((_, j) => j !== i))}
+                          >
+                            Verwijderen
+                          </button>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <TijdPicker
+                          value={row.vertrektijd}
+                          onChange={(v) => {
+                            const next = [...routes];
+                            next[i] = { ...next[i], vertrektijd: v };
+                            setRoutes(next);
+                          }}
+                        />
+                        <label className="flex items-center gap-1.5 text-sm text-koopje-black">
+                          <span className="text-koopje-black/60">max.</span>
+                          <FietsenStepper
+                            value={row.maxFietsen}
+                            onChange={(n) => {
+                              const next = [...routes];
+                              next[i] = { ...next[i], maxFietsen: n };
+                              setRoutes(next);
+                            }}
+                          />
+                          <span className="text-koopje-black/60">fietsen</span>
+                        </label>
+                      </div>
+                      <label className="mt-2 flex items-center gap-2 rounded-md bg-white/80 px-2 py-1 text-xs text-koopje-black">
+                        <input
+                          type="checkbox"
+                          checked={row.meerdereRitten}
+                          onChange={(e) => {
+                            const next = [...routes];
+                            next[i] = { ...next[i], meerdereRitten: e.target.checked };
+                            setRoutes(next);
+                          }}
+                          className="h-4 w-4 accent-koopje-orange"
+                        />
+                        <span>
+                          Voertuig mag terug naar depot
+                          <span className="text-koopje-black/60"> (meerdere ritten)</span>
+                        </span>
+                      </label>
+                    </div>
+                  );
+                })}
               </div>
               <button
                 type="button"
                 onClick={() =>
-                  setRoutes((prev) => [...prev, { vertrektijd: vertrektijd || "10:30", maxFietsen: 11, meerdereRitten: false }])
+                  setRoutes((prev) => [
+                    ...prev,
+                    {
+                      vertrektijd: vertrektijd || "10:30",
+                      maxFietsen: 11,
+                      meerdereRitten: false,
+                      orderIds: [],
+                    },
+                  ])
                 }
                 className="mb-4 w-full rounded-lg border border-dashed border-stone-300 py-2 text-sm text-koopje-black/70 hover:bg-stone-50"
               >
@@ -457,6 +515,23 @@ export default function RitjesRouteControls({
             </div>
           </div>
         </>
+      )}
+
+      {pickerRouteIndex != null && (
+        <RouteOrderPicker
+          routeIndex={pickerRouteIndex}
+          orders={sjoerdOrders}
+          selectedIds={routes[pickerRouteIndex]?.orderIds ?? []}
+          assignedElsewhere={assignedElsewhereForPicker}
+          onChange={(ids) => {
+            setRoutes((prev) => {
+              const next = [...prev];
+              next[pickerRouteIndex] = { ...next[pickerRouteIndex]!, orderIds: ids };
+              return next;
+            });
+          }}
+          onClose={() => setPickerRouteIndex(null)}
+        />
       )}
     </>
   );

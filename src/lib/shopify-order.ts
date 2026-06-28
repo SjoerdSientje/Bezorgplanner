@@ -41,6 +41,8 @@ export interface ShopifyLineItem {
   price?: string | number | null;
   /** Aantal stuks; ontbreekt in sommige payloads → 1. */
   quantity?: number | null;
+  product_id?: string | number | null;
+  variant_id?: string | number | null;
   /**
    * Totale korting op deze regel (string/number). Wordt afgetrokken van price×quantity.
    * @see https://shopify.dev/docs/api/admin-rest/latest/resources/order

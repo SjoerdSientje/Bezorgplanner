@@ -12,6 +12,7 @@ import {
 } from "@/lib/shopify-order";
 import { allAccountEmails, shopifyWebhookOrderAppliesToOwner } from "@/lib/account";
 import { loadProductDefaultItemsRules } from "@/lib/product-rules-server";
+import { deductInventoryForShopifyOrder } from "@/lib/inventory";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -22,6 +23,12 @@ export async function POST(request: NextRequest) {
     const order = JSON.parse(raw) as ShopifyOrder;
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+    try {
+      await deductInventoryForShopifyOrder(supabase, order);
+    } catch (invErr) {
+      console.error("[webhooks/shopify] inventory deduct:", invErr);
+    }
 
     const { data: cutoffRows } = await supabase
       .from("pakketjes_owner_cutoff")

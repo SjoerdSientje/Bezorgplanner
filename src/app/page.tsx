@@ -64,6 +64,22 @@ export default function Home() {
 
             <li>
               <Link
+                href="/voorraadbeheer"
+                className="group flex flex-col rounded-xl border border-koopje-black/10 bg-white p-6 shadow-sm transition hover:border-koopje-orange hover:shadow-md focus:outline-none focus:ring-2 focus:ring-koopje-orange focus:ring-offset-2"
+              >
+                <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-koopje-orange-light text-koopje-orange transition group-hover:bg-koopje-orange group-hover:text-white">
+                  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                      d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                  </svg>
+                </span>
+                <span className="mt-4 font-medium text-koopje-black">Voorraadbeheer</span>
+                <span className="mt-1 text-sm text-koopje-black/60">Voorraad bijhouden en mutaties loggen</span>
+              </Link>
+            </li>
+
+            <li>
+              <Link
                 href="/afgeronde-orders"
                 className="group flex flex-col rounded-xl border border-koopje-black/10 bg-white p-6 shadow-sm transition hover:border-koopje-orange hover:shadow-md focus:outline-none focus:ring-2 focus:ring-koopje-orange focus:ring-offset-2"
               >

@@ -88,7 +88,11 @@ export async function POST(request: NextRequest) {
         );
       }
       const meerdereRitten = Boolean(r.meerdereRitten ?? r.meerdere_ritten ?? false);
-      parallelRoutes.push({ shift_start: ts, capacity: cap, meerdereRitten });
+      const orderIdsRaw = r.orderIds ?? r.order_ids;
+      const orderIds = Array.isArray(orderIdsRaw)
+        ? orderIdsRaw.map((id) => String(id).trim()).filter(Boolean)
+        : undefined;
+      parallelRoutes.push({ shift_start: ts, capacity: cap, meerdereRitten, orderIds });
     }
 
     const vertrektijd = parallelRoutes[0]!.shift_start;
@@ -164,7 +168,40 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const payload = buildRoutificPayloadFromRoutes(rows, parallelRoutes);
+    const manualMode = parallelRoutes.some((r) => (r.orderIds?.length ?? 0) > 0);
+    let rowsForRouting = rows;
+
+    if (manualMode) {
+      const assignedIds = new Set(parallelRoutes.flatMap((r) => r.orderIds ?? []));
+      rowsForRouting = rows.filter((o) => assignedIds.has(o.id));
+
+      if (rowsForRouting.length === 0) {
+        return NextResponse.json(
+          { error: "Geen geldige orders geselecteerd voor de routes." },
+          { status: 400 }
+        );
+      }
+
+      for (let i = 0; i < parallelRoutes.length; i++) {
+        const ids = parallelRoutes[i]!.orderIds ?? [];
+        if (ids.length === 0) {
+          return NextResponse.json(
+            { error: `Route ${i + 1} heeft geen adressen. Kies orders via 'Kies adressen'.` },
+            { status: 400 }
+          );
+        }
+      }
+
+      const allIds = parallelRoutes.flatMap((r) => r.orderIds ?? []);
+      if (new Set(allIds).size !== allIds.length) {
+        return NextResponse.json(
+          { error: "Een order staat op meerdere routes. Elke order mag maar op één route." },
+          { status: 400 }
+        );
+      }
+    }
+
+    const payload = buildRoutificPayloadFromRoutes(rowsForRouting, parallelRoutes);
 
     const res = await fetch(ROUTIFIC_VRP_URL, {
       method: "POST",
@@ -204,7 +241,7 @@ export async function POST(request: NextRequest) {
     const solution = output?.solution as Record<string, Array<{ location_id?: string; arrival_time?: string }>> | undefined;
     const sanitizeId = (id: string) => id.replace(/[.$]/g, "_");
     const orderByVisitId = new Map<string, OrderForRoute>();
-    for (const o of rows) {
+    for (const o of rowsForRouting) {
       orderByVisitId.set(o.id, o);
       orderByVisitId.set(sanitizeId(o.id), o);
     }
@@ -272,7 +309,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    if (slotsToInsert.length === 0 && rows.length > 0) {
+    if (slotsToInsert.length === 0 && rowsForRouting.length > 0) {
       const unservedRaw = output?.unserved as Record<string, unknown> | null | undefined;
       const unservedIds = unservedRaw ? Object.keys(unservedRaw) : [];
       return NextResponse.json({
@@ -281,7 +318,7 @@ export async function POST(request: NextRequest) {
           `Routific heeft geen stops ingepland. ${unservedIds.length > 0 ? `${unservedIds.length} order(s) staan als onbereikbaar: ${unservedIds.join(", ")}` : "Controleer adressen in Routific."}`,
         planningDate,
         vertrektijd,
-        visitCount: rows.length,
+        visitCount: rowsForRouting.length,
         slotsWritten: 0,
         job_id,
         solution: output?.solution ?? null,
@@ -292,7 +329,7 @@ export async function POST(request: NextRequest) {
     // Altijd alle orders in de batch resetten (ook aankomsttijd_slot), zodat geen
     // verouderde tijdsloten van een vorige run zichtbaar blijven voor unserved orders.
     const clearErrors: string[] = [];
-    for (const o of rows) {
+    for (const o of rowsForRouting) {
       const err = await patchOrder(o.id, { aankomsttijd_slot: null, rit_nummer: null, route_nummer: null });
       if (err) clearErrors.push(`${o.id}: ${err.message}`);
     }
@@ -344,7 +381,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       ok: true,
-      message: `Route berekend en ${slotsToInsert.length} tijdsloten opgeslagen (van ${rows.length} orders).`,
+      message: `Route berekend en ${slotsToInsert.length} tijdsloten opgeslagen (van ${rowsForRouting.length} orders).`,
       planningDate,
       vertrektijd,
       visitCount: rows.length,

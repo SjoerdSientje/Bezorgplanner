@@ -111,6 +111,8 @@ type VehicleConfig = {
   shift_end: string;
   capacity: number;
   strict_start: boolean;
+  /** Routific: alleen visits met dezelfde type mogen op dit voertuig. */
+  type?: string;
   /** Minuten laden op het depot na terugkomst; weglaten = geen depot-reload (één rit). */
   reload_service_time?: number;
 };
@@ -123,7 +125,8 @@ export interface RoutificPayload {
       load: number;
       duration: number;
       start: string;
-      end?: string; // weglaten = "anytime after start"
+      end?: string;
+      type?: string;
     }
   >;
   fleet: Record<string, VehicleConfig>;
@@ -136,40 +139,48 @@ export type ParallelRouteSpec = {
   capacity: number;
   /**
    * true  → voertuig mag terug naar depot als vol en meerdere ritten rijden.
-   *         Routific bepaalt zelf wanneer de volgende rit start.
-   * false → één rit, geen depot-return. Max capaciteit is hard.
+   * false → één rit, geen depot-return.
    */
   meerdereRitten?: boolean;
+  /** Handmatig gekozen orders voor deze route (Routific type-koppeling). */
+  orderIds?: string[];
 };
 
 function sanitizeVisitId(id: string): string {
   return id.replace(/[.$]/g, "_");
 }
 
+function buildVisitForOrder(
+  o: OrderForRoute,
+  defaultStartForNoPreference: string,
+  vehicleType?: string
+): RoutificPayload["visits"][string] {
+  const address = (o.volledig_adres || "").trim() || "Onbekend adres";
+  const baseFietsen = Math.max(1, Number(o.aantal_fietsen) || 1);
+  const unitSize = isGroteFiets(o.producten) ? 2 : 1;
+  const load = baseFietsen * unitSize;
+  const window = parseBezorgtijdVoorkeur(o.bezorgtijd_voorkeur);
+  const start = window ? window.start : defaultStartForNoPreference;
+  const end = window && window.end !== null ? window.end : DEFAULT_SHIFT_END;
+
+  return {
+    location: { address },
+    load,
+    duration: DEFAULT_DURATION,
+    start,
+    end,
+    ...(vehicleType ? { type: vehicleType } : {}),
+  };
+}
+
 function buildVisits(
   orders: OrderForRoute[],
-  defaultStartForNoPreference: string,
+  defaultStartForNoPreference: string
 ): RoutificPayload["visits"] {
   const visits: RoutificPayload["visits"] = {};
   for (const o of orders) {
-    const address = (o.volledig_adres || "").trim() || "Onbekend adres";
-    const baseFietsen = Math.max(1, Number(o.aantal_fietsen) || 1);
-    // Grote fietsen (GT2000, Engwe E26, Qibbel etc.) nemen 2 laadplekken in beslag.
-    // Gewone fietsen tellen als 1. De gebruiker stelt zelf de max capaciteit in.
-    const unitSize = isGroteFiets(o.producten) ? 2 : 1;
-    const load = baseFietsen * unitSize;
-    const window = parseBezorgtijdVoorkeur(o.bezorgtijd_voorkeur);
-    const start = window ? window.start : defaultStartForNoPreference;
-    const end = window && window.end !== null ? window.end : DEFAULT_SHIFT_END;
-
     const visitId = sanitizeVisitId(o.id);
-    visits[visitId] = {
-      location: { address },
-      load,
-      duration: DEFAULT_DURATION,
-      start,
-      end,
-    };
+    visits[visitId] = buildVisitForOrder(o, defaultStartForNoPreference);
   }
   return visits;
 }
@@ -207,11 +218,27 @@ export function buildRoutificPayloadFromRoutes(
     throw new Error("Minimaal één route nodig.");
   }
   const defaultStart = earliestParallelShiftStart(routes);
-  const visits = buildVisits(orders, defaultStart);
+  const manualMode = routes.some((r) => (r.orderIds?.length ?? 0) > 0);
+  const orderById = new Map(orders.map((o) => [o.id, o]));
+
+  const visits: RoutificPayload["visits"] = {};
+  if (manualMode) {
+    routes.forEach((r, i) => {
+      const vehicleType = `route_${i + 1}`;
+      for (const orderId of r.orderIds ?? []) {
+        const o = orderById.get(orderId);
+        if (!o) continue;
+        visits[sanitizeVisitId(o.id)] = buildVisitForOrder(o, defaultStart, vehicleType);
+      }
+    });
+  } else {
+    Object.assign(visits, buildVisits(orders, defaultStart));
+  }
 
   const fleet: Record<string, VehicleConfig> = {};
   routes.forEach((r, i) => {
     const cap = Math.max(1, Math.min(99, Math.floor(Number(r.capacity) || 0)));
+    const vehicleType = manualMode ? `route_${i + 1}` : undefined;
     fleet[`vehicle_${i + 1}`] = {
       start_location: { address: DEPOT_ADDRESS },
       end_location: { address: DEPOT_ADDRESS },
@@ -219,8 +246,7 @@ export function buildRoutificPayloadFromRoutes(
       shift_end: DEFAULT_SHIFT_END,
       capacity: cap,
       strict_start: true,
-      // Alleen reload_service_time instellen als meerdere ritten expliciet gewenst zijn.
-      // Zonder deze veld doet Routific één rit en is max-capaciteit hard.
+      ...(vehicleType ? { type: vehicleType } : {}),
       ...(r.meerdereRitten ? { reload_service_time: RELOAD_TIME_MINUTEN } : {}),
     };
   });
