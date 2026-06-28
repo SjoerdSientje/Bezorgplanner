@@ -172,28 +172,10 @@ export async function POST(request: NextRequest) {
     let rowsForRouting = rows;
 
     if (manualMode) {
-      const assignedIds = new Set(parallelRoutes.flatMap((r) => r.orderIds ?? []));
-      rowsForRouting = rows.filter((o) => assignedIds.has(o.id));
-
-      if (rowsForRouting.length === 0) {
-        return NextResponse.json(
-          { error: "Geen geldige orders geselecteerd voor de routes." },
-          { status: 400 }
-        );
-      }
-
-      for (let i = 0; i < parallelRoutes.length; i++) {
-        const ids = parallelRoutes[i]!.orderIds ?? [];
-        if (ids.length === 0) {
-          return NextResponse.json(
-            { error: `Route ${i + 1} heeft geen adressen. Kies orders via 'Kies adressen'.` },
-            { status: 400 }
-          );
-        }
-      }
-
       const allIds = parallelRoutes.flatMap((r) => r.orderIds ?? []);
-      if (new Set(allIds).size !== allIds.length) {
+      if (allIds.length === 0) {
+        rowsForRouting = rows;
+      } else if (new Set(allIds).size !== allIds.length) {
         return NextResponse.json(
           { error: "Een order staat op meerdere routes. Elke order mag maar op één route." },
           { status: 400 }

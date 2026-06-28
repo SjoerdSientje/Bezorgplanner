@@ -220,6 +220,7 @@ export function buildRoutificPayloadFromRoutes(
   const defaultStart = earliestParallelShiftStart(routes);
   const manualMode = routes.some((r) => (r.orderIds?.length ?? 0) > 0);
   const orderById = new Map(orders.map((o) => [o.id, o]));
+  const assignedOrderIds = new Set(routes.flatMap((r) => r.orderIds ?? []));
 
   const visits: RoutificPayload["visits"] = {};
   if (manualMode) {
@@ -231,6 +232,10 @@ export function buildRoutificPayloadFromRoutes(
         visits[sanitizeVisitId(o.id)] = buildVisitForOrder(o, defaultStart, vehicleType);
       }
     });
+    for (const o of orders) {
+      if (assignedOrderIds.has(o.id)) continue;
+      visits[sanitizeVisitId(o.id)] = buildVisitForOrder(o, defaultStart);
+    }
   } else {
     Object.assign(visits, buildVisits(orders, defaultStart));
   }
@@ -238,7 +243,8 @@ export function buildRoutificPayloadFromRoutes(
   const fleet: Record<string, VehicleConfig> = {};
   routes.forEach((r, i) => {
     const cap = Math.max(1, Math.min(99, Math.floor(Number(r.capacity) || 0)));
-    const vehicleType = manualMode ? `route_${i + 1}` : undefined;
+    const routeHasOrders = (r.orderIds?.length ?? 0) > 0;
+    const vehicleType = manualMode && routeHasOrders ? `route_${i + 1}` : undefined;
     fleet[`vehicle_${i + 1}`] = {
       start_location: { address: DEPOT_ADDRESS },
       end_location: { address: DEPOT_ADDRESS },

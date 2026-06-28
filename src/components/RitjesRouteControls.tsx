@@ -253,25 +253,12 @@ export default function RitjesRouteControls({
       }
     }
 
-    const multiRoute = cleaned.length > 1;
-    if (multiRoute) {
-      for (let i = 0; i < cleaned.length; i++) {
-        if (cleaned[i]!.orderIds.length === 0) {
-          setMessage({
-            type: "error",
-            text: `Route ${i + 1} heeft geen adressen. Klik op 'Kies adressen'.`,
-          });
-          return;
-        }
-      }
-    }
-
     persistRoutes(cleaned);
     setShowDialog(false);
     setLoading(true);
     setMessage(null);
     try {
-      const useManual = multiRoute || cleaned.some((r) => r.orderIds.length > 0);
+      const hasManualSelection = cleaned.some((r) => r.orderIds.length > 0);
       const res = await fetch("/api/routific/route", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -280,7 +267,7 @@ export default function RitjesRouteControls({
             vertrektijd: r.vertrektijd.trim(),
             maxFietsen: r.maxFietsen,
             meerdereRitten: r.meerdereRitten,
-            ...(useManual ? { orderIds: r.orderIds } : {}),
+            ...(hasManualSelection ? { orderIds: r.orderIds } : {}),
           })),
         }),
       });
@@ -403,9 +390,10 @@ export default function RitjesRouteControls({
             <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
               <h2 className="mb-2 text-base font-semibold text-koopje-black">Routes</h2>
               <p className="mb-4 text-sm text-koopje-black/70">
-                Stel per route vertrektijd en max. fietsen in. Bij <strong>meerdere routes</strong>{" "}
-                kies je via <strong>Kies adressen</strong> welke orders op welke bezorger rijden
-                (uit Lijst Sjoerd). Elke route heeft een eigen kleur.
+                Stel per route vertrektijd en max. fietsen in. Via <strong>Kies adressen</strong> kun
+                je optioneel zelf bepalen welke orders op welke bezorger rijden (uit Lijst Sjoerd).
+                Laat je dat leeg, dan verdeelt Routific de stops automatisch. Elke route heeft een
+                eigen kleur.
               </p>
               <div className="mb-4 max-h-[40vh] space-y-3 overflow-y-auto pr-1">
                 {routes.map((row, i) => {
