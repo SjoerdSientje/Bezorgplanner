@@ -3,7 +3,7 @@
  * Geen ChatGPT: structuur en tijdvenster-parsing zijn hardcoded (minder foutgevoelig).
  */
 
-const DEPOT_ADDRESS = "Kapelweg 2, 3732 GS, De Bilt, Netherlands";
+export const DEPOT_ADDRESS = "Kapelweg 2, 3732 GS, De Bilt, Netherlands";
 const DEFAULT_DURATION = 20;
 const DEFAULT_SHIFT_END = "23:59";
 /** Minuten op het depot tussen twee ritten; stelt Routific in staat meerdere laadrondes te plannen. */

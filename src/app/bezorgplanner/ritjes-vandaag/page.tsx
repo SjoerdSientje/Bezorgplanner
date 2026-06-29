@@ -107,6 +107,20 @@ export default function RitjesVandaagPage() {
     [fetchRitjes]
   );
 
+  const handleReorderComplete = useCallback(
+    (updates: Array<{ id: string; route_nummer: number | null; aankomsttijd_slot: string }>) => {
+      setOrders((prev) =>
+        prev.map((o) => {
+          const u = updates.find((x) => x.id === String(o.id ?? ""));
+          return u
+            ? { ...o, route_nummer: u.route_nummer, aankomsttijd_slot: u.aankomsttijd_slot }
+            : o;
+        })
+      );
+    },
+    []
+  );
+
   /** Verwijder order op ID (voor AlleRittenTabel). */
   const deleteOrderById = useCallback(
     async (id: string) => {
@@ -521,6 +535,8 @@ export default function RitjesVandaagPage() {
             <LijstSjoerd
               orders={orders.filter((o) => o.in_morgen_tab !== true) as AlleRittenOrder[]}
               onPatch={patchOrderById}
+              onReorderComplete={handleReorderComplete}
+              defaultVertrektijd={vertrektijd}
             />
           ) : activeTab === "morgen" && routesGroups ? (
             // ── Routes-tab: gegroepeerd op datum én route ─────────────────────
