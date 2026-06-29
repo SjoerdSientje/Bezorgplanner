@@ -6,7 +6,8 @@ import {
   DragOverlay,
   KeyboardSensor,
   PointerSensor,
-  closestCorners,
+  TouchSensor,
+  closestCenter,
   useDroppable,
   useSensor,
   useSensors,
@@ -26,6 +27,9 @@ import ProductenCell from "@/components/ProductenCell";
 import OpmerkingKlantCell from "@/components/OpmerkingKlantCell";
 import type { AlleRittenOrder } from "@/components/AlleRittenTabel";
 import { routeStyleForIndex } from "@/lib/route-colors";
+
+const GRID_COLS =
+  "grid-cols-[2.5rem_minmax(9rem,1fr)_minmax(7rem,0.8fr)_minmax(12rem,1.4fr)_minmax(9rem,1fr)_minmax(9rem,1fr)_minmax(9rem,1fr)]";
 
 function parseSlotMin(slot: string | null | undefined): number {
   const t = String(slot ?? "").split(" - ")[0].replace(".", ":").trim();
@@ -64,6 +68,10 @@ function loadRouteVertrektijden(defaultTijd: string): Record<number, string> {
   return map;
 }
 
+function stopDragPointer(e: React.PointerEvent) {
+  e.stopPropagation();
+}
+
 function EditableCell({
   value,
   onSave,
@@ -91,6 +99,7 @@ function EditableCell({
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
+        onPointerDown={stopDragPointer}
         onKeyDown={(e) => {
           if (e.key === "Enter") commit();
           if (e.key === "Escape") {
@@ -106,6 +115,7 @@ function EditableCell({
     <button
       type="button"
       className={`w-full text-left text-sm hover:underline hover:decoration-dotted ${fontMedium ? "font-medium text-koopje-black" : "text-stone-600"}`}
+      onPointerDown={stopDragPointer}
       onClick={() => {
         setDraft(value);
         setEditing(true);
@@ -115,6 +125,57 @@ function EditableCell({
         <span className="text-stone-300 font-normal text-xs">{placeholder ?? "—"}</span>
       )}
     </button>
+  );
+}
+
+function DraggableAddress({
+  value,
+  onSave,
+}: {
+  value: string;
+  onSave: (v: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        className="w-full rounded border border-koopje-orange px-1 py-0.5 text-sm focus:outline-none"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          setEditing(false);
+          if (draft.trim() !== value) onSave(draft.trim());
+        }}
+        onPointerDown={stopDragPointer}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            setEditing(false);
+            if (draft.trim() !== value) onSave(draft.trim());
+          }
+          if (e.key === "Escape") {
+            setEditing(false);
+            setDraft(value);
+          }
+        }}
+      />
+    );
+  }
+
+  return (
+    <span
+      className="block cursor-grab touch-manipulation text-sm text-stone-700 active:cursor-grabbing"
+      title="Vasthouden en slepen om te verplaatsen · dubbelklik om te bewerken"
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        setDraft(value);
+        setEditing(true);
+      }}
+    >
+      {value || <span className="text-stone-300 text-xs">—</span>}
+    </span>
   );
 }
 
@@ -215,65 +276,58 @@ function SortableOrderRow({
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isDragging ? 0.45 : 1,
+    zIndex: isDragging ? 10 : undefined,
+    opacity: isDragging ? 0.85 : 1,
   };
 
   return (
-    <tr
+    <div
       ref={setNodeRef}
       style={style}
-      className={`border-b border-stone-100 last:border-0 ${rowClassName ?? "even:bg-stone-50/50"}`}
+      className={`grid ${GRID_COLS} border-b border-stone-100 last:border-0 ${
+        rowClassName ?? "bg-white even:bg-stone-50/50"
+      } ${dragEnabled ? "cursor-grab touch-manipulation active:cursor-grabbing hover:shadow-sm" : ""} ${
+        isDragging ? "shadow-md ring-2 ring-koopje-orange/40" : ""
+      }`}
+      {...(dragEnabled ? { ...attributes, ...listeners } : {})}
     >
-      <td className="border border-stone-200 px-1 py-1.5 text-center">
-        {dragEnabled ? (
-          <button
-            type="button"
-            className="flex w-full cursor-grab touch-manipulation flex-col items-center gap-0.5 rounded p-0.5 text-stone-400 hover:bg-stone-100 hover:text-stone-600 active:cursor-grabbing"
-            aria-label={`Versleep adres ${rowNum}`}
-            {...attributes}
-            {...listeners}
-          >
-            <svg className="h-4 w-4" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
-              <circle cx="5" cy="4" r="1.25" />
-              <circle cx="11" cy="4" r="1.25" />
-              <circle cx="5" cy="8" r="1.25" />
-              <circle cx="11" cy="8" r="1.25" />
-              <circle cx="5" cy="12" r="1.25" />
-              <circle cx="11" cy="12" r="1.25" />
-            </svg>
-            <span className="text-[10px] leading-none">{rowNum}</span>
-          </button>
-        ) : (
-          <span className="text-xs text-stone-500">{rowNum}</span>
-        )}
-      </td>
+      <div className="flex items-center justify-center border border-stone-200 px-1 py-2 text-xs text-stone-500">
+        {rowNum}
+      </div>
 
-      <td className="border border-stone-200 px-3 py-1.5 whitespace-nowrap min-w-[10rem]">
+      <div className="border border-stone-200 px-3 py-2" onPointerDown={stopDragPointer}>
         <EditableCell
           value={String(order.aankomsttijd_slot ?? "")}
           onSave={(v) => onPatch(String(order.id), { aankomsttijd_slot: v || null })}
           placeholder="Klik om in te vullen"
           fontMedium
         />
-      </td>
+      </div>
 
-      <td className="border border-stone-200 px-3 py-1.5 whitespace-nowrap min-w-[8rem]">
+      <div className="border border-stone-200 px-3 py-2" onPointerDown={stopDragPointer}>
         <EditableCell
           value={String(order.bezorgtijd_voorkeur ?? "")}
           onSave={(v) => onPatch(String(order.id), { bezorgtijd_voorkeur: v || null })}
           placeholder="—"
         />
-      </td>
+      </div>
 
-      <td className="border border-stone-200 px-3 py-1.5 min-w-[14rem]">
-        <EditableCell
-          value={String(order.volledig_adres ?? "")}
-          onSave={(v) => onPatch(String(order.id), { volledig_adres: v || null })}
-          placeholder="—"
-        />
-      </td>
+      <div className="border border-stone-200 px-3 py-2 min-w-0">
+        {dragEnabled ? (
+          <DraggableAddress
+            value={String(order.volledig_adres ?? "")}
+            onSave={(v) => onPatch(String(order.id), { volledig_adres: v || null })}
+          />
+        ) : (
+          <EditableCell
+            value={String(order.volledig_adres ?? "")}
+            onSave={(v) => onPatch(String(order.id), { volledig_adres: v || null })}
+            placeholder="—"
+          />
+        )}
+      </div>
 
-      <td className="border border-stone-200 p-0 min-w-[10rem]">
+      <div className="border border-stone-200 p-0 min-w-0" onPointerDown={stopDragPointer}>
         <ProductenCell
           value={String(order.producten ?? "")}
           lineItemsJson={(order.line_items_json as string | null | undefined) ?? null}
@@ -282,44 +336,45 @@ function SortableOrderRow({
           }
           onSaveMulti={async (fields) => onPatch(String(order.id), fields)}
         />
-      </td>
+      </div>
 
-      <td className="border border-stone-200 p-0 min-w-[10rem] max-w-[18rem]">
+      <div className="border border-stone-200 p-0 min-w-0" onPointerDown={stopDragPointer}>
         <OpmerkingKlantCell
           value={String(order.opmerkingen_klant ?? "")}
           onSave={async (v) => onPatch(String(order.id), { opmerkingen_klant: v.trim() || null })}
         />
-      </td>
+      </div>
 
-      <td className="border border-stone-200 px-3 py-1.5 min-w-[12rem]">
+      <div className="border border-stone-200 px-3 py-2 min-w-0" onPointerDown={stopDragPointer}>
         <EditableCell
           value={String(order.email ?? "")}
           onSave={(v) => onPatch(String(order.id), { email: v || null })}
           placeholder="—"
         />
-      </td>
-    </tr>
+      </div>
+    </div>
   );
 }
 
 function DroppableRouteHeader({
   containerId,
-  colSpan,
   className,
   children,
 }: {
   containerId: string;
-  colSpan: number;
   className: string;
   children: React.ReactNode;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: containerId });
   return (
-    <tr ref={setNodeRef} className={`${className} ${isOver ? "ring-2 ring-inset ring-koopje-orange/50" : ""}`}>
-      <td colSpan={colSpan} className="border border-stone-200 px-3 py-2">
-        {children}
-      </td>
-    </tr>
+    <div
+      ref={setNodeRef}
+      className={`border border-stone-200 px-3 py-2 ${className} ${
+        isOver ? "ring-2 ring-inset ring-koopje-orange/60" : ""
+      }`}
+    >
+      {children}
+    </div>
   );
 }
 
@@ -340,7 +395,6 @@ export default function LijstSjoerd({
     [orders]
   );
 
-  const hasRoutes = groups.some((g) => g.routeNum != null);
   const sjoerdCount = orders.filter((o) => o.meenemen_in_planning === true).length;
   const hasSlots = orders.some(
     (o) => o.meenemen_in_planning === true && String(o.aankomsttijd_slot ?? "").trim() !== ""
@@ -367,7 +421,8 @@ export default function LijstSjoerd({
   }, [groups]);
 
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
@@ -421,14 +476,14 @@ export default function LijstSjoerd({
     const { active, over } = event;
     if (!over) return;
 
-    const activeContainer = findContainer(String(active.id), containers);
-    const overContainer =
-      findContainer(String(over.id), containers) ??
-      (String(over.id) in containers ? String(over.id) : null);
-
-    if (!activeContainer || !overContainer || activeContainer === overContainer) return;
-
     setContainers((prev) => {
+      const activeContainer = findContainer(String(active.id), prev);
+      const overContainer =
+        findContainer(String(over.id), prev) ??
+        (String(over.id) in prev ? String(over.id) : null);
+
+      if (!activeContainer || !overContainer || activeContainer === overContainer) return prev;
+
       const activeItems = [...(prev[activeContainer] ?? [])];
       const overItems = [...(prev[overContainer] ?? [])];
       const activeIndex = activeItems.indexOf(String(active.id));
@@ -461,7 +516,10 @@ export default function LijstSjoerd({
     setActiveId(null);
 
     const { active, over } = event;
-    if (!over) return;
+    if (!over) {
+      setContainers(groupsToContainers(groups));
+      return;
+    }
 
     let nextContainers = { ...containersRef.current };
     const activeContainer = findContainer(String(active.id), nextContainers);
@@ -499,7 +557,6 @@ export default function LijstSjoerd({
 
   const totalCount = Object.values(containers).reduce((n, ids) => n + ids.length, 0);
   const showRouteHeaders = groups.some((g) => g.routeNum != null);
-  const colSpan = HEADERS.length + 1;
 
   const containerEntries = useMemo(() => {
     const entries: { containerId: string; routeNum: number | null; orderIds: string[] }[] = [];
@@ -516,62 +573,50 @@ export default function LijstSjoerd({
 
   const activeOrder = activeId ? orderById.get(activeId) : null;
 
-  const tableInner = (
-    <table className="w-full min-w-max border-collapse text-left text-sm">
-      <thead>
-        <tr className="bg-stone-100">
-          <th className="w-10 border border-stone-200 px-1 py-2 text-center text-xs font-medium text-stone-700">
-            #
-          </th>
-          {HEADERS.map((h) => (
-            <th
-              key={h}
-              className="whitespace-nowrap border border-stone-200 px-3 py-2 text-xs font-medium text-stone-700"
-            >
-              {h}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {totalCount === 0 ? (
-          <tr>
-            <td
-              colSpan={colSpan}
-              className="border border-stone-200 px-3 py-4 text-center text-sm text-stone-400"
-            >
-              Geen orders met meenemen = ja. Genereer eerst een route.
-            </td>
-          </tr>
-        ) : (
-          containerEntries.map(({ containerId, routeNum, orderIds }) => {
-            const style = routeNum != null ? routeStyleForIndex(routeNum - 1) : null;
-            return (
-              <RouteGroupRows
-                key={containerId}
-                containerId={containerId}
-                routeNum={routeNum}
-                orderIds={orderIds}
-                style={style}
-                showRouteHeader={showRouteHeaders}
-                colSpan={colSpan}
-                orderById={orderById}
-                dragEnabled={dragEnabled && !recalculating}
-                onPatch={onPatch}
-              />
-            );
-          })
-        )}
-      </tbody>
-    </table>
+  const listInner = (
+    <div className="min-w-max">
+      <div
+        className={`grid ${GRID_COLS} border-b border-stone-200 bg-stone-100 text-xs font-medium text-stone-700`}
+      >
+        <div className="border border-stone-200 px-1 py-2 text-center">#</div>
+        {HEADERS.map((h) => (
+          <div key={h} className="whitespace-nowrap border border-stone-200 px-3 py-2">
+            {h}
+          </div>
+        ))}
+      </div>
+
+      {totalCount === 0 ? (
+        <p className="px-3 py-4 text-center text-sm text-stone-400">
+          Geen orders met meenemen = ja. Genereer eerst een route.
+        </p>
+      ) : (
+        containerEntries.map(({ containerId, routeNum, orderIds }) => {
+          const style = routeNum != null ? routeStyleForIndex(routeNum - 1) : null;
+          return (
+            <RouteGroupRows
+              key={containerId}
+              containerId={containerId}
+              routeNum={routeNum}
+              orderIds={orderIds}
+              style={style}
+              showRouteHeader={showRouteHeaders}
+              orderById={orderById}
+              dragEnabled={dragEnabled && !recalculating}
+              onPatch={onPatch}
+            />
+          );
+        })
+      )}
+    </div>
   );
 
   return (
     <div className="space-y-2">
       {dragEnabled && (
         <p className="text-xs text-stone-500">
-          Sleep adressen om volgorde of route te wijzigen. Tijdsloten worden herberekend via Google
-          Maps (reistijd + 20 min uitladen).
+          <strong>Vasthouden op een rij of adres</strong> en slepen om volgorde of route te wijzigen
+          (op telefoon: ~0,2 sec vasthouden). Tijdsloten worden herberekend via Google Maps.
           {recalculating && (
             <span className="ml-2 font-medium text-koopje-orange">Bezig met herberekenen…</span>
           )}
@@ -587,26 +632,29 @@ export default function LijstSjoerd({
         {dragEnabled ? (
           <DndContext
             sensors={sensors}
-            collisionDetection={closestCorners}
+            collisionDetection={closestCenter}
             onDragStart={handleDragStart}
             onDragOver={handleDragOver}
             onDragEnd={handleDragEnd}
             onDragCancel={handleDragCancel}
           >
-            {tableInner}
-            <DragOverlay>
+            {listInner}
+            <DragOverlay dropAnimation={null}>
               {activeOrder ? (
-                <div className="rounded-lg border border-koopje-orange bg-white px-3 py-2 text-sm shadow-lg">
-                  <span className="font-medium">{String(activeOrder.naam ?? "Order")}</span>
-                  <span className="ml-2 text-xs text-stone-500">
-                    {String(activeOrder.volledig_adres ?? "").slice(0, 40)}
-                  </span>
+                <div className="max-w-sm rounded-lg border-2 border-koopje-orange bg-white px-4 py-3 text-sm shadow-xl">
+                  <p className="font-semibold text-koopje-black">
+                    {String(activeOrder.naam ?? "Order")}
+                  </p>
+                  <p className="mt-1 text-stone-600">{String(activeOrder.volledig_adres ?? "")}</p>
+                  <p className="mt-1 text-xs text-stone-400">
+                    {String(activeOrder.aankomsttijd_slot ?? "")}
+                  </p>
                 </div>
               ) : null}
             </DragOverlay>
           </DndContext>
         ) : (
-          tableInner
+          listInner
         )}
       </div>
     </div>
@@ -619,7 +667,6 @@ function RouteGroupRows({
   orderIds,
   style,
   showRouteHeader,
-  colSpan,
   orderById,
   dragEnabled,
   onPatch,
@@ -629,17 +676,15 @@ function RouteGroupRows({
   orderIds: string[];
   style: ReturnType<typeof routeStyleForIndex> | null;
   showRouteHeader: boolean;
-  colSpan: number;
   orderById: Map<string, AlleRittenOrder>;
   dragEnabled: boolean;
   onPatch: (id: string, fields: Record<string, unknown>) => void;
 }) {
   return (
-    <SortableContext items={orderIds} strategy={verticalListSortingStrategy}>
+    <div>
       {showRouteHeader && routeNum != null && style && (
         <DroppableRouteHeader
           containerId={containerId}
-          colSpan={colSpan}
           className={`${style.bg} border-l-4 ${style.border}`}
         >
           <span className={`text-sm font-semibold ${style.header}`}>{style.label}</span>
@@ -649,28 +694,30 @@ function RouteGroupRows({
         </DroppableRouteHeader>
       )}
       {showRouteHeader && routeNum == null && orderIds.length > 0 && (
-        <DroppableRouteHeader containerId={containerId} colSpan={colSpan} className="bg-stone-50">
+        <DroppableRouteHeader containerId={containerId} className="bg-stone-50">
           <span className="text-sm font-semibold text-stone-600">Overig</span>
           <span className="ml-2 text-xs font-normal text-stone-500">
             ({orderIds.length} order{orderIds.length === 1 ? "" : "s"})
           </span>
         </DroppableRouteHeader>
       )}
-      {orderIds.map((id, i) => {
-        const order = orderById.get(id);
-        if (!order) return null;
-        return (
-          <SortableOrderRow
-            key={id}
-            id={id}
-            order={order}
-            rowNum={i + 1}
-            rowClassName={style?.bg}
-            dragEnabled={dragEnabled}
-            onPatch={onPatch}
-          />
-        );
-      })}
-    </SortableContext>
+      <SortableContext items={orderIds} strategy={verticalListSortingStrategy}>
+        {orderIds.map((id, i) => {
+          const order = orderById.get(id);
+          if (!order) return null;
+          return (
+            <SortableOrderRow
+              key={id}
+              id={id}
+              order={order}
+              rowNum={i + 1}
+              rowClassName={style?.bg}
+              dragEnabled={dragEnabled}
+              onPatch={onPatch}
+            />
+          );
+        })}
+      </SortableContext>
+    </div>
   );
 }
