@@ -296,13 +296,18 @@ export async function searchShopifyProducts(
 
   if (products.length > 0) return products;
 
-  // Fallback: bredere zoekactie en lokaal filteren.
+  // Fallback: bredere zoekactie — alle woorden moeten ergens in titel/tags/vendor staan.
   const all = await fetchAllShopifyProducts({ maxPages: 5, status: options?.status ?? "active" });
-  const needle = q.toLowerCase();
+  const tokens = q
+    .toLowerCase()
+    .split(/[\s/|,+\-–—]+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2);
   return all
     .filter((p) => {
       const hay = `${p.title} ${p.product_type} ${p.tags} ${p.vendor}`.toLowerCase();
-      return hay.includes(needle);
+      if (tokens.length > 0) return tokens.every((t) => hay.includes(t));
+      return hay.includes(q.toLowerCase());
     })
     .slice(0, limit);
 }

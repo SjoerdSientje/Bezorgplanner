@@ -580,17 +580,25 @@ export async function deductInventoryForMpOrder(
   orderId: string,
   orderNummer: string,
   lineItemsJson: string | null,
-  productenText: string | null
+  productenText: string | null,
+  deductionLineItems?: LineItemForDeduction[]
 ): Promise<void> {
-  let lineItems: LineItemForDeduction[] = [];
+  let lineItems: LineItemForDeduction[] = deductionLineItems ?? [];
 
-  if (lineItemsJson) {
+  if (lineItems.length === 0 && lineItemsJson) {
     try {
-      const parsed = JSON.parse(lineItemsJson) as { name?: string; quantity?: number }[];
+      const parsed = JSON.parse(lineItemsJson) as {
+        name?: string;
+        quantity?: number;
+        variant_id?: string | number;
+        product_id?: string | number;
+      }[];
       if (Array.isArray(parsed)) {
         lineItems = parsed.map((li) => ({
           name: li.name,
           quantity: li.quantity ?? 1,
+          variant_id: li.variant_id,
+          product_id: li.product_id,
         }));
       }
     } catch {

@@ -5,15 +5,26 @@ import { useEffect, useRef, useState } from "react";
 type SearchResult = {
   title: string;
   price: string | null;
-  stock_quantity: number | null;
+  stock_quantity?: number | null;
+  shopify_product_id?: number;
+  shopify_variant_id?: number;
 };
+
+export type ProductAutocompleteMeta = {
+  shopify_product_id?: number;
+  shopify_variant_id?: number;
+};
+
+type SearchSource = "inventory" | "shopify";
 
 interface Props {
   label: string;
   value: string;
-  onChange: (naam: string, prijs?: string) => void;
+  onChange: (naam: string, prijs?: string, meta?: ProductAutocompleteMeta) => void;
   placeholder?: string;
   required?: boolean;
+  /** inventory = voorraadgroepen; shopify = live Shopify-producten (MP-orders). */
+  searchSource?: SearchSource;
 }
 
 const DEBOUNCE_MS = 280;
@@ -25,6 +36,7 @@ export default function ProductAutocomplete({
   onChange,
   placeholder,
   required,
+  searchSource = "inventory",
 }: Props) {
   const [suggestions, setSuggestions] = useState<SearchResult[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -32,6 +44,9 @@ export default function ProductAutocomplete({
   const [loading, setLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  const searchPath =
+    searchSource === "shopify" ? "/api/shopify/product-search" : "/api/inventory/search";
 
   useEffect(() => {
     function handler(e: MouseEvent) {
@@ -51,7 +66,7 @@ export default function ProductAutocomplete({
     }
 
     setLoading(true);
-    fetch(`/api/inventory/search?q=${encodeURIComponent(query)}`)
+    fetch(`${searchPath}?q=${encodeURIComponent(query)}`)
       .then((res) => res.json())
       .then((data: { results?: SearchResult[] }) => {
         const results = data?.results ?? [];
@@ -79,14 +94,22 @@ export default function ProductAutocomplete({
     setSuggestions([]);
     setActiveIndex(-1);
     const prijs = item.price != null && item.price !== "" ? item.price : undefined;
-    onChange(item.title, prijs);
-    if (prijs == null) {
+    const meta: ProductAutocompleteMeta | undefined =
+      item.shopify_product_id != null || item.shopify_variant_id != null
+        ? {
+            shopify_product_id: item.shopify_product_id,
+            shopify_variant_id: item.shopify_variant_id,
+          }
+        : undefined;
+    onChange(item.title, prijs, meta);
+
+    if (prijs == null && searchSource === "inventory") {
       fetch(`/api/inventory/search?q=${encodeURIComponent(item.title)}`)
         .then((res) => res.json())
         .then((data: { results?: SearchResult[] }) => {
           const match =
             (data.results ?? []).find((r) => r.title === item.title) ?? (data.results ?? [])[0];
-          if (match?.price) onChange(item.title, match.price);
+          if (match?.price) onChange(item.title, match.price, meta);
         })
         .catch(() => {});
     }
@@ -142,7 +165,7 @@ export default function ProductAutocomplete({
         {showSuggestions && suggestions.length > 0 && (
           <ul className="absolute left-0 top-full z-50 mt-1 max-h-60 w-full overflow-y-auto rounded-xl border border-stone-200 bg-white shadow-xl">
             {suggestions.map((item, idx) => (
-              <li key={`${item.title}-${idx}`}>
+              <li key={`${item.shopify_variant_id ?? item.title}-${idx}`}>
                 <button
                   type="button"
                   onMouseDown={(e) => {
@@ -158,7 +181,9 @@ export default function ProductAutocomplete({
                   <span className="min-w-0 truncate">{item.title}</span>
                   <span className="shrink-0 text-xs text-stone-400">
                     {item.price != null && item.price !== "" ? `€${item.price}` : ""}
-                    {item.stock_quantity != null ? ` · ${item.stock_quantity} op voorraad` : ""}
+                    {searchSource === "inventory" && item.stock_quantity != null
+                      ? ` · ${item.stock_quantity} op voorraad`
+                      : ""}
                   </span>
                 </button>
               </li>

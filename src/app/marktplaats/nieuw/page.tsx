@@ -28,6 +28,8 @@ interface ProductRegel {
   achterzitjeGemonteerd: JaNee;
   voorrekje: JaNee;
   voorrekjeGemonteerd: JaNee;
+  shopify_product_id: number | null;
+  shopify_variant_id: number | null;
 }
 
 interface FormData {
@@ -67,6 +69,7 @@ function defaultProduct(): ProductRegel {
     montageOpmerking: "",
     achterzitje: null, achterzitjeGemonteerd: null,
     voorrekje: null, voorrekjeGemonteerd: null,
+    shopify_product_id: null, shopify_variant_id: null,
   };
 }
 
@@ -412,11 +415,16 @@ export default function NieuweMarktplaatsOrderPage() {
                       <div className="mb-3 flex gap-3">
                         <div className="flex-1">
                           <ProductAutocomplete
+                            searchSource="shopify"
                             label={product.type === "fiets" ? "Fietsnaam" : "Productnaam"}
                             required
                             value={product.naam}
-                            onChange={(naam, prijs) => {
-                              const patch: Partial<ProductRegel> = { naam };
+                            onChange={(naam, prijs, meta) => {
+                              const patch: Partial<ProductRegel> = {
+                                naam,
+                                shopify_product_id: meta?.shopify_product_id ?? null,
+                                shopify_variant_id: meta?.shopify_variant_id ?? null,
+                              };
                               if (prijs != null && prijs !== "") patch.prijs = prijs;
                               updateProduct(product.id, patch);
                             }}

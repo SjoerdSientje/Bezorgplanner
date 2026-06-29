@@ -10,7 +10,7 @@ import {
 import type { ProductDefaultItemsRulesV1 } from "@/lib/product-default-items-rules";
 import { loadProductDefaultItemsRules } from "@/lib/product-rules-server";
 import { isDatumOpmerkingVandaagOfMorgen } from "@/lib/planning-date";
-import { deductInventoryForMpOrder } from "@/lib/inventory";
+import { deductInventoryForMpOrder, type LineItemForDeduction } from "@/lib/inventory";
 
 /** Extraheer fietsmodel: 'V20 PRO Fatbike 2026 + ringslot | Combi-Deal 🔥' → 'V20 PRO' */
 function extractModel(producten: string | null): string | null {
@@ -30,6 +30,8 @@ interface ProductRegel {
   achterzitjeGemonteerd?: "ja" | "nee" | null;
   voorrekje?: "ja" | "nee" | null;
   voorrekjeGemonteerd?: "ja" | "nee" | null;
+  shopify_product_id?: number | null;
+  shopify_variant_id?: number | null;
 }
 
 function buildMpFietsNaamMetMontage(p: ProductRegel): string {
@@ -108,6 +110,37 @@ function buildMpLineItemsJson(
   }
 
   return buildLineItemsJson({ line_items: lineItems }, rules);
+}
+
+/** Voorraadaftrek: Shopify variant-id koppelt aan voorraadgroep. */
+function buildMpDeductionLineItems(productenLijst: ProductRegel[]): LineItemForDeduction[] {
+  const items: LineItemForDeduction[] = [];
+
+  for (const p of productenLijst) {
+    if (p.type === "fiets") {
+      items.push({
+        name: buildMpFietsNaamMetMontage(p),
+        quantity: 1,
+        product_id: p.shopify_product_id ?? undefined,
+        variant_id: p.shopify_variant_id ?? undefined,
+      });
+      if (p.achterzitje === "ja" && p.achterzitjeGemonteerd === "nee") {
+        items.push({ name: "achterzitje", quantity: 1 });
+      }
+      if (p.voorrekje === "ja" && p.voorrekjeGemonteerd === "nee") {
+        items.push({ name: "voorrekje", quantity: 1 });
+      }
+    } else {
+      items.push({
+        name: String(p.naam ?? "").trim(),
+        quantity: 1,
+        product_id: p.shopify_product_id ?? undefined,
+        variant_id: p.shopify_variant_id ?? undefined,
+      });
+    }
+  }
+
+  return items.filter((li) => li.name);
 }
 
 /**
@@ -305,13 +338,17 @@ export async function POST(request: NextRequest) {
     console.log("[api/mp-order] INSERT gelukt, id:", data.id, "order_nummer:", data.order_nummer);
 
     try {
+      const deductionLineItems = productenLijst.length
+        ? buildMpDeductionLineItems(productenLijst)
+        : undefined;
       await deductInventoryForMpOrder(
         supabase,
         ownerEmail,
         data.id,
         data.order_nummer ?? "",
         lineItemsJson,
-        producten
+        producten,
+        deductionLineItems
       );
     } catch (invErr) {
       console.error("[api/mp-order] inventory deduct:", invErr);
