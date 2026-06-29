@@ -189,6 +189,16 @@ export default function RitjesVandaagPage() {
       .filter((o) => o.id);
   }, [orders]);
 
+  const alleRittenOpen = useMemo(
+    () => orders.filter((o) => o.in_morgen_tab !== true) as AlleRittenOrder[],
+    [orders]
+  );
+
+  const alleRittenKlaarzetten = useMemo(
+    () => orders.filter((o) => o.in_morgen_tab === true) as AlleRittenOrder[],
+    [orders]
+  );
+
   const ROUTE_HEADER_COLORS: Record<number, string> = {
     1: "text-emerald-700",
     2: "text-sky-700",
@@ -500,7 +510,7 @@ export default function RitjesVandaagPage() {
             {(["alle", "sjoerd", "morgen"] as const).map((tab) => {
               const label =
                 tab === "alle"
-                  ? `Alle ritten (${orders.filter((o) => o.in_morgen_tab !== true).length})`
+                  ? `Alle ritten (${orders.length})`
                   : tab === "sjoerd"
                   ? `Lijst Sjoerd (${orders.filter((o) => o.in_morgen_tab !== true && o.meenemen_in_planning === true).length})`
                   : `Routes (${orders.filter((o) => o.in_morgen_tab === true).length})`;
@@ -524,12 +534,40 @@ export default function RitjesVandaagPage() {
           {loading ? (
             <p className="text-sm text-koopje-black/60">Laden…</p>
           ) : activeTab === "alle" ? (
-            // ── Alle ritten: nieuwe tabel met kleurmarkering ──────────────────
-            <AlleRittenTabel
-              orders={orders.filter((o) => o.in_morgen_tab !== true) as AlleRittenOrder[]}
-              onPatch={patchOrderById}
-              onDelete={deleteOrderById}
-            />
+            <div className="space-y-8">
+              <section>
+                <h2 className="mb-3 text-sm font-semibold text-koopje-black">
+                  Openstaande ritten
+                  <span className="ml-2 font-normal text-stone-500">
+                    ({alleRittenOpen.length})
+                  </span>
+                </h2>
+                {alleRittenOpen.length > 0 ? (
+                  <AlleRittenTabel
+                    orders={alleRittenOpen}
+                    onPatch={patchOrderById}
+                    onDelete={deleteOrderById}
+                  />
+                ) : (
+                  <p className="text-sm text-stone-400">Geen openstaande ritten.</p>
+                )}
+              </section>
+              {alleRittenKlaarzetten.length > 0 && (
+                <section>
+                  <h2 className="mb-3 text-sm font-semibold text-koopje-black">
+                    Klaarzetten route
+                    <span className="ml-2 font-normal text-stone-500">
+                      ({alleRittenKlaarzetten.length})
+                    </span>
+                  </h2>
+                  <AlleRittenTabel
+                    orders={alleRittenKlaarzetten}
+                    onPatch={patchOrderById}
+                    onDelete={deleteOrderById}
+                  />
+                </section>
+              )}
+            </div>
           ) : activeTab === "sjoerd" ? (
             // ── Lijst Sjoerd: meenemen=ja orders ─────────────────────────────
             <LijstSjoerd
