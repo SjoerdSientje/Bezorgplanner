@@ -1,11 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Header from "@/components/Header";
 import AdresAutocomplete from "@/components/AdresAutocomplete";
 import ProductAutocomplete from "@/components/ProductAutocomplete";
+import {
+  applyProductDefaultItemsRules,
+  DEFAULT_PRODUCT_RULES_V1,
+  type ProductDefaultItemsRulesV1,
+} from "@/lib/product-default-items-rules";
 
 type Soort = "bezorging" | "afhaal";
 type ProductType = "fiets" | "extra";
@@ -139,6 +144,42 @@ function LeveringKeuze({ value, onChange }: { value: Levering; onChange: (v: Lev
   );
 }
 
+function StandaardProductenLijst({
+  naam,
+  levering,
+  rules,
+}: {
+  naam: string;
+  levering: Levering;
+  rules: ProductDefaultItemsRulesV1;
+}) {
+  const trimmed = naam.trim();
+  if (!trimmed) return null;
+
+  const items = applyProductDefaultItemsRules(
+    trimmed,
+    [{ name: "Levering", value: levering }],
+    rules
+  );
+  if (items.length === 0) return null;
+
+  return (
+    <div className="mb-3 rounded-lg border border-dashed border-stone-200 bg-white/80 p-3">
+      <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-stone-400">
+        Standaard inbegrepen bij deze fiets
+      </p>
+      <ul className="space-y-0.5">
+        {items.map((item, i) => (
+          <li key={i} className="flex items-center gap-1.5 text-xs text-stone-600">
+            <span className="text-[10px]">📦</span>
+            {item}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export default function NieuweMarktplaatsOrderPage() {
   const router = useRouter();
   const [soort, setSoort] = useState<Soort | null>(null);
@@ -148,6 +189,16 @@ export default function NieuweMarktplaatsOrderPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [garantieWarning, setGarantieWarning] = useState<string | null>(null);
+  const [productRules, setProductRules] = useState<ProductDefaultItemsRulesV1>(DEFAULT_PRODUCT_RULES_V1);
+
+  useEffect(() => {
+    fetch("/api/product-rules")
+      .then((res) => res.json())
+      .then((data: { rules?: ProductDefaultItemsRulesV1 }) => {
+        if (data.rules) setProductRules(data.rules);
+      })
+      .catch(() => {});
+  }, []);
 
   function setField(id: keyof FormData, value: string) {
     setForm((prev) => ({ ...prev, [id]: value }));
@@ -404,6 +455,14 @@ export default function NieuweMarktplaatsOrderPage() {
                             onChange={(v) => updateProduct(product.id, { levering: v })}
                           />
                         </div>
+                      )}
+
+                      {product.type === "fiets" && (
+                        <StandaardProductenLijst
+                          naam={product.naam}
+                          levering={product.levering}
+                          rules={productRules}
+                        />
                       )}
 
                       {/* Achterzitje + Voorrekje — fiets + bezorging */}

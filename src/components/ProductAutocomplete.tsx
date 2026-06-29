@@ -80,6 +80,16 @@ export default function ProductAutocomplete({
     setActiveIndex(-1);
     const prijs = item.price != null && item.price !== "" ? item.price : undefined;
     onChange(item.title, prijs);
+    if (prijs == null) {
+      fetch(`/api/inventory/search?q=${encodeURIComponent(item.title)}`)
+        .then((res) => res.json())
+        .then((data: { results?: SearchResult[] }) => {
+          const match =
+            (data.results ?? []).find((r) => r.title === item.title) ?? (data.results ?? [])[0];
+          if (match?.price) onChange(item.title, match.price);
+        })
+        .catch(() => {});
+    }
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {

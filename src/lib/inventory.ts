@@ -4,6 +4,7 @@ import {
   fetchInventoryCollectionProductIds,
   isShopifyProductActive,
   searchShopifyProducts,
+  shopifyAdminJson,
   type ShopifyAdminProduct,
   type ShopifyAdminProductVariant,
 } from "@/lib/shopify-admin";
@@ -663,7 +664,9 @@ export async function searchProductsForInventory(
     });
   }
 
-  if (results.length >= 25) return results;
+  if (results.length >= 25) {
+    return enrichSearchResultsWithShopifyPrices(results);
+  }
 
   const shopifyProducts = await searchShopifyProducts(q, 20, { status: "active" });
   const categoryMap = await fetchInventoryCollectionProductIds();
@@ -728,5 +731,38 @@ export async function searchProductsForInventory(
     }
   }
 
-  return results.slice(0, 25);
+  const enriched = await enrichSearchResultsWithShopifyPrices(results);
+  return enriched.slice(0, 25);
+}
+
+/** Vul ontbrekende prijzen aan via Shopify variant-data (lokale voorraad heeft geen prijskolom). */
+async function enrichSearchResultsWithShopifyPrices(
+  results: ShopifySearchResult[]
+): Promise<ShopifySearchResult[]> {
+  const missing = results.filter((r) => (r.price == null || r.price === "") && r.shopify_variant_id);
+  if (missing.length === 0) return results;
+
+  const productIds = Array.from(new Set(missing.map((r) => r.shopify_product_id)));
+  const priceByVariant = new Map<number, string>();
+
+  await Promise.all(
+    productIds.map(async (productId) => {
+      try {
+        const data = await shopifyAdminJson<{ product?: ShopifyAdminProduct }>(
+          `/products/${productId}.json`
+        );
+        for (const v of data.product?.variants ?? []) {
+          priceByVariant.set(v.id, v.price);
+        }
+      } catch (e) {
+        console.warn("[inventory] variant price fetch", productId, e);
+      }
+    })
+  );
+
+  return results.map((r) =>
+    r.price == null || r.price === ""
+      ? { ...r, price: priceByVariant.get(r.shopify_variant_id) ?? null }
+      : r
+  );
 }
