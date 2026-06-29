@@ -13,6 +13,7 @@ type RouteInput = {
 type OrderUpdate = {
   id: string;
   route_nummer: number | null;
+  rit_nummer: number;
   aankomsttijd_slot: string;
   arrivalTime: string;
 };
@@ -118,10 +119,12 @@ export async function POST(request: NextRequest) {
           ? route.routeNummer
           : null;
 
-      for (const stop of recalculated) {
+      for (let i = 0; i < recalculated.length; i++) {
+        const stop = recalculated[i]!;
         updates.push({
           id: stop.id,
           route_nummer: routeNummerDb,
+          rit_nummer: i + 1,
           aankomsttijd_slot: stop.aankomsttijd_slot,
           arrivalTime: stop.arrivalTime,
         });
@@ -130,7 +133,7 @@ export async function POST(request: NextRequest) {
 
     const patchOrder = async (
       orderId: string,
-      payload: { route_nummer: number | null; aankomsttijd_slot: string }
+      payload: { route_nummer: number | null; rit_nummer: number; aankomsttijd_slot: string }
     ) => {
       let { error } = await supabase
         .from("orders")
@@ -148,6 +151,7 @@ export async function POST(request: NextRequest) {
     for (const u of updates) {
       const err = await patchOrder(u.id, {
         route_nummer: u.route_nummer,
+        rit_nummer: u.rit_nummer,
         aankomsttijd_slot: u.aankomsttijd_slot,
       });
       if (err) {

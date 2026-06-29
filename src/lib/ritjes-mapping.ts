@@ -94,12 +94,6 @@ export function sortRitjesOrdersNewestFirst<T extends RitjesOrderFromApi>(orders
  */
 export function sortRoutesTabOrders<T extends RitjesOrderFromApi>(orders: T[]): T[] {
   const todayKey = getAmsterdamCalendarDate(0);
-  const parseSlotMin = (value: unknown): number => {
-    const t = String(value ?? "").split(" - ")[0].replace(".", ":").trim();
-    const [h, m] = t.split(":").map((x) => parseInt(x, 10));
-    if (!Number.isFinite(h)) return 9999;
-    return h * 60 + (Number.isFinite(m) ? m : 0);
-  };
 
   return [...orders].sort((a, b) => {
     const da = String(a.planning_slot_datum ?? "9999-99-99");
@@ -114,8 +108,29 @@ export function sortRoutesTabOrders<T extends RitjesOrderFromApi>(orders: T[]): 
     const routeA = ra > 0 ? ra : 999;
     const routeB = rb > 0 ? rb : 999;
     if (routeA !== routeB) return routeA - routeB;
-    return parseSlotMin(a.aankomsttijd_slot) - parseSlotMin(b.aankomsttijd_slot);
+    return compareOrdersOnRoute(a, b);
   });
+}
+
+/** Sorteer orders binnen dezelfde route: eerst Routific-stopvolgorde (rit_nummer), anders tijdslot. */
+export function compareOrdersOnRoute(
+  a: RitjesOrderFromApi,
+  b: RitjesOrderFromApi
+): number {
+  const parseSlotMin = (value: unknown): number => {
+    const t = String(value ?? "").split(" - ")[0].replace(".", ":").trim();
+    const [h, m] = t.split(":").map((x) => parseInt(x, 10));
+    if (!Number.isFinite(h)) return 9999;
+    return h * 60 + (Number.isFinite(m) ? m : 0);
+  };
+
+  const ra = Number((a as Record<string, unknown>).rit_nummer ?? 0);
+  const rb = Number((b as Record<string, unknown>).rit_nummer ?? 0);
+  const hasRa = ra > 0;
+  const hasRb = rb > 0;
+  if (hasRa && hasRb && ra !== rb) return ra - rb;
+  if (hasRa !== hasRb) return hasRa ? -1 : 1;
+  return parseSlotMin(a.aankomsttijd_slot) - parseSlotMin(b.aankomsttijd_slot);
 }
 
 /** Boolean-kolommen in de ritjes-tabel */

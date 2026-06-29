@@ -8,9 +8,8 @@ import {
   type OrderForRoute,
   type ParallelRouteSpec,
 } from "@/lib/routific-payload";
-import { maakTijdslot } from "@/lib/tijdslot";
-import { parseRoutificArrivalTime } from "@/lib/routific-arrival";
 import { geocodeOrdersForRouting } from "@/lib/pdok-geocode";
+import { buildRouteSlotsFromRoutificStops } from "@/lib/routific-slots";
 import { SERVICE_TIME_MINUTES } from "@/lib/routific-payload";
 import { supabaseMissingOrdersRouteNummerColumn } from "@/lib/orders-route-nummer-supabase";
 
@@ -276,24 +275,21 @@ export async function POST(request: NextRequest) {
 
     for (let vi = 0; vi < vehicleKeys.length; vi++) {
       const vehicleKey = vehicleKeys[vi]!;
-      const routeNummerVoertuig = vi + 1;
-      const stops = solution?.[vehicleKey] ?? [];
-      for (const stop of stops) {
-        const locId = stop.location_id ?? "";
-        if (locId === "depot") continue;
-        const order = orderByVisitId.get(locId);
-        if (!order) continue;
-        const arrivalTime = parseRoutificArrivalTime(stop.arrival_time);
-        if (!arrivalTime) continue;
-        const slotStr = maakTijdslot(arrivalTime, order.bezorgtijd_voorkeur);
+      const routeNummerVoertuig = meerDanEenRoute ? vi + 1 : null;
+      const built = buildRouteSlotsFromRoutificStops(
+        solution?.[vehicleKey] ?? [],
+        orderByVisitId,
+        routeNummerVoertuig
+      );
+      for (const slot of built) {
         volgorde += 1;
         slotsToInsert.push({
-          order_id: order.id,
+          order_id: slot.order_id,
           volgorde,
-          aankomsttijd: slotStr,
-          tijd_opmerking: arrivalTime,
-          rit_nummer: null,
-          route_nummer: meerDanEenRoute ? routeNummerVoertuig : null,
+          aankomsttijd: slot.aankomsttijd,
+          tijd_opmerking: slot.arrivalTime,
+          rit_nummer: slot.rit_nummer,
+          route_nummer: slot.route_nummer,
         });
       }
     }

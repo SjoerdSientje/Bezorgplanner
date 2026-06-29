@@ -26,6 +26,7 @@ import { CSS } from "@dnd-kit/utilities";
 import ProductenCell from "@/components/ProductenCell";
 import OpmerkingKlantCell from "@/components/OpmerkingKlantCell";
 import type { AlleRittenOrder } from "@/components/AlleRittenTabel";
+import { compareOrdersOnRoute } from "@/lib/ritjes-mapping";
 import { routeStyleForIndex } from "@/lib/route-colors";
 
 const GRID_COLS =
@@ -186,11 +187,8 @@ type RouteGroup = {
   orders: AlleRittenOrder[];
 };
 
-function sortBySlot(orders: AlleRittenOrder[]): AlleRittenOrder[] {
-  return [...orders].sort(
-    (a, b) =>
-      parseSlotMin(a.aankomsttijd_slot as string) - parseSlotMin(b.aankomsttijd_slot as string)
-  );
+function sortRouteOrders(orders: AlleRittenOrder[]): AlleRittenOrder[] {
+  return [...orders].sort((a, b) => compareOrdersOnRoute(a, b));
 }
 
 function groupByRoute(orders: AlleRittenOrder[]): RouteGroup[] {
@@ -198,7 +196,7 @@ function groupByRoute(orders: AlleRittenOrder[]): RouteGroup[] {
   const hasRoutes = filtered.some((o) => Number(o.route_nummer ?? 0) > 0);
 
   if (!hasRoutes) {
-    return [{ routeNum: null, orders: sortBySlot(filtered) }];
+    return [{ routeNum: null, orders: sortRouteOrders(filtered) }];
   }
 
   const routeMap = new Map<number, AlleRittenOrder[]>();
@@ -218,11 +216,11 @@ function groupByRoute(orders: AlleRittenOrder[]): RouteGroup[] {
     .sort(([a], [b]) => a - b)
     .map(([routeNum, routeOrders]) => ({
       routeNum,
-      orders: sortBySlot(routeOrders),
+      orders: sortRouteOrders(routeOrders),
     }));
 
   if (loose.length > 0) {
-    groups.push({ routeNum: null, orders: sortBySlot(loose) });
+    groups.push({ routeNum: null, orders: sortRouteOrders(loose) });
   }
 
   return groups;

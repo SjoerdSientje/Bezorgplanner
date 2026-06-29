@@ -30,7 +30,7 @@ export async function POST(request: NextRequest) {
     const { data: orders, error: queryError } = await supabase
       .from("orders")
       .select(
-        "id, order_nummer, aankomsttijd_slot, route_nummer, bestelling_totaal_prijs, naam, telefoon_e164, telefoon_nummer, type, betaald, mp_tags, datum, datum_opmerking, meenemen_in_planning, opmerkingen_klant, bezorgtijd_voorkeur, email, producten, serienummer, aantal_fietsen, link_aankoopbewijs"
+        "id, order_nummer, aankomsttijd_slot, route_nummer, rit_nummer, bestelling_totaal_prijs, naam, telefoon_e164, telefoon_nummer, type, betaald, mp_tags, datum, datum_opmerking, meenemen_in_planning, opmerkingen_klant, bezorgtijd_voorkeur, email, producten, serienummer, aantal_fietsen, link_aankoopbewijs"
       )
       .eq("owner_email", ownerEmail)
       .eq("status", "ritjes_vandaag")
@@ -90,6 +90,9 @@ export async function POST(request: NextRequest) {
       const rb =
         b.route_nummer != null && Number(b.route_nummer) > 0 ? Number(b.route_nummer) : 9999;
       if (ra !== rb) return ra - rb;
+      const sa = a.rit_nummer != null && Number(a.rit_nummer) > 0 ? Number(a.rit_nummer) : 9999;
+      const sb = b.rit_nummer != null && Number(b.rit_nummer) > 0 ? Number(b.rit_nummer) : 9999;
+      if (sa !== sb) return sa - sb;
       return (
         parseMin((a.aankomsttijd_slot ?? "").toString()) -
         parseMin((b.aankomsttijd_slot ?? "").toString())

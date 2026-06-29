@@ -5,6 +5,7 @@ import Link from "next/link";
 import Header from "@/components/Header";
 import ProductenCell from "@/components/ProductenCell";
 import OpmerkingKlantCell from "@/components/OpmerkingKlantCell";
+import { compareOrdersOnRoute } from "@/lib/ritjes-mapping";
 const PLANNING_HEADERS = [
   "Order nummer",
   "Naam",
@@ -30,6 +31,7 @@ type PlanningRow = {
   datum: string;
   /** Parallelle Routific-voertuigen; null = geen splitsing */
   route_nummer?: number | null;
+  rit_nummer?: number | null;
   order_nummer: string;
   naam: string;
   aankomsttijd: string;
@@ -427,21 +429,11 @@ export default function PlanningPage() {
       map.get(key)!.push(r);
     }
 
-    const parseMinutes = (t: string): number => {
-      const clean = t.replace(".", ":").trim();
-      const [h, m] = clean.split(":").map(Number);
-      if (!Number.isFinite(h)) return Infinity;
-      return h * 60 + (Number.isFinite(m) ? m : 0);
-    };
-
-    const sortByTijd = (a: PlanningRow, b: PlanningRow) => {
-      const ta = String(a.aankomsttijd ?? "").split(" - ")[0].trim();
-      const tb = String(b.aankomsttijd ?? "").split(" - ")[0].trim();
-      if (!ta && !tb) return 0;
-      if (!ta) return 1;
-      if (!tb) return -1;
-      return parseMinutes(ta) - parseMinutes(tb);
-    };
+    const sortOnRoute = (a: PlanningRow, b: PlanningRow) =>
+      compareOrdersOnRoute(
+        { rit_nummer: a.rit_nummer, aankomsttijd_slot: a.aankomsttijd },
+        { rit_nummer: b.rit_nummer, aankomsttijd_slot: b.aankomsttijd }
+      );
 
     type DatumGroup = {
       datum: string;
@@ -451,7 +443,7 @@ export default function PlanningPage() {
     const out: DatumGroup[] = Array.from(map.entries())
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([datum, datumRows]) => {
-        const sorted = [...datumRows].sort(sortByTijd);
+        const sorted = [...datumRows].sort(sortOnRoute);
         const hasParallelRoutes = sorted.some(
           (row) => row.route_nummer != null && Number(row.route_nummer) > 0
         );
@@ -473,10 +465,10 @@ export default function PlanningPage() {
         const keys = Array.from(byRoute.keys()).sort((a, b) => a - b);
         const sections: { routeNum: number | null; rows: PlanningRow[] }[] = keys.map((k) => ({
           routeNum: k,
-          rows: (byRoute.get(k) ?? []).sort(sortByTijd),
+          rows: (byRoute.get(k) ?? []).sort(sortOnRoute),
         }));
         if (loose.length > 0) {
-          sections.push({ routeNum: null, rows: loose.sort(sortByTijd) });
+          sections.push({ routeNum: null, rows: loose.sort(sortOnRoute) });
         }
         return { datum, sections };
       });

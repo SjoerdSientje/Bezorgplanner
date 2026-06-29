@@ -82,6 +82,7 @@ export async function GET(request: NextRequest) {
           aankomsttijd: slot.aankomsttijd ?? "",
           /** Parallelle routes (1, 2, …) of null bij één bus / grote bus */
           route_nummer: o.route_nummer != null ? Number(o.route_nummer) : null,
+          rit_nummer: o.rit_nummer,
           tijd_opmerking: tijdOpmerking,
           order_nummer: o.order_nummer ?? "",
           naam: o.naam ?? "",
