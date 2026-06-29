@@ -108,7 +108,7 @@ export default function RitjesVandaagPage() {
   );
 
   const handleReorderComplete = useCallback(
-    (
+    async (
       updates: Array<{
         id: string;
         route_nummer: number | null;
@@ -116,21 +116,24 @@ export default function RitjesVandaagPage() {
         aankomsttijd_slot: string;
       }>
     ) => {
-      setOrders((prev) =>
-        prev.map((o) => {
-          const u = updates.find((x) => x.id === String(o.id ?? ""));
-          return u
-            ? {
-                ...o,
-                route_nummer: u.route_nummer,
-                rit_nummer: u.rit_nummer ?? (o as { rit_nummer?: number }).rit_nummer,
-                aankomsttijd_slot: u.aankomsttijd_slot,
-              }
-            : o;
-        })
-      );
+      if (updates.length > 0) {
+        setOrders((prev) =>
+          prev.map((o) => {
+            const u = updates.find((x) => x.id === String(o.id ?? ""));
+            return u
+              ? {
+                  ...o,
+                  route_nummer: u.route_nummer,
+                  rit_nummer: u.rit_nummer ?? (o as { rit_nummer?: number }).rit_nummer,
+                  aankomsttijd_slot: u.aankomsttijd_slot,
+                }
+              : o;
+          })
+        );
+      }
+      await fetchRitjes();
     },
-    []
+    [fetchRitjes]
   );
 
   /** Verwijder order op ID (voor AlleRittenTabel). */

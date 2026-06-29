@@ -269,6 +269,21 @@ function groupsToContainers(groups: RouteGroup[]): Record<string, string[]> {
   return out;
 }
 
+/** Routes waar de stopvolgorde (of inhoud) is gewijzigd. */
+function containerIdsWithChangedOrder(
+  prev: Record<string, string[]>,
+  next: Record<string, string[]>
+): Set<string> {
+  const changed = new Set<string>();
+  const keys = Array.from(new Set([...Object.keys(prev), ...Object.keys(next)]));
+  for (const key of keys) {
+    if (JSON.stringify(prev[key] ?? []) !== JSON.stringify(next[key] ?? [])) {
+      changed.add(key);
+    }
+  }
+  return changed;
+}
+
 function findContainer(
   itemId: string,
   containers: Record<string, string[]>
@@ -614,7 +629,7 @@ export default function LijstSjoerd({
 }: {
   orders: AlleRittenOrder[];
   onPatch: (id: string, fields: Record<string, unknown>) => void;
-  onReorderComplete?: (updates: ReorderUpdate[]) => void;
+  onReorderComplete?: (updates: ReorderUpdate[]) => void | Promise<void>;
   defaultVertrektijd?: string;
 }) {
   const groups = useMemo(() => groupByRoute(orders), [orders]);
@@ -638,6 +653,7 @@ export default function LijstSjoerd({
   const [recalculating, setRecalculating] = useState(false);
   const [reorderError, setReorderError] = useState<string | null>(null);
   const isDraggingRef = useRef(false);
+  const containersAtDragStartRef = useRef<Record<string, string[]> | null>(null);
 
   const dragEnabled = reorderEnabled && !touchReorder && !recalculating;
   const buttonReorderEnabled = reorderEnabled && touchReorder && !recalculating;
@@ -649,7 +665,7 @@ export default function LijstSjoerd({
   useEffect(() => {
     if (recalculating || isDraggingRef.current) return;
     setContainers(groupsToContainers(groups));
-  }, [groups, recalculating]);
+  }, [groups]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -658,10 +674,16 @@ export default function LijstSjoerd({
   );
 
   const submitReorder = useCallback(
-    async (nextContainers: Record<string, string[]>) => {
+    async (
+      nextContainers: Record<string, string[]>,
+      prevContainers: Record<string, string[]>
+    ) => {
+      const changedContainerIds = containerIdsWithChangedOrder(prevContainers, nextContainers);
+      if (changedContainerIds.size === 0) return;
+
       const vertrektijden = loadRouteVertrektijden(defaultVertrektijd);
       const routes = Object.entries(nextContainers)
-        .filter(([, ids]) => ids.length > 0)
+        .filter(([containerId, ids]) => ids.length > 0 && changedContainerIds.has(containerId))
         .map(([containerId, orderIds]) => {
           const routeNummer = parseContainerRoute(containerId);
           const rn = routeNummer ?? 1;
@@ -676,6 +698,8 @@ export default function LijstSjoerd({
           const nb = b.routeNummer ?? 9999;
           return na - nb;
         });
+
+      if (routes.length === 0) return;
 
       setRecalculating(true);
       setReorderError(null);
@@ -693,9 +717,11 @@ export default function LijstSjoerd({
         }
         setContainers(nextContainers);
         containersRef.current = nextContainers;
-        onReorderComplete?.((data.updates ?? []) as ReorderUpdate[]);
+        const updates = (data.updates ?? []) as ReorderUpdate[];
+        await Promise.resolve(onReorderComplete?.(updates));
       } catch (e) {
         setContainers(groupsToContainers(groups));
+        containersRef.current = groupsToContainers(groups);
         setReorderError(e instanceof Error ? e.message : "Herberekenen mislukt.");
       } finally {
         setRecalculating(false);
@@ -712,19 +738,27 @@ export default function LijstSjoerd({
   }, [groups]);
 
   const applyReorder = useCallback(
-    async (next: Record<string, string[]> | null) => {
+    async (
+      next: Record<string, string[]> | null,
+      prevContainers?: Record<string, string[]>
+    ) => {
       if (!next) return;
-      const before = groupsToContainers(groups);
+      const before = prevContainers ?? containersRef.current;
       if (JSON.stringify(before) === JSON.stringify(next)) return;
       setContainers(next);
       containersRef.current = next;
-      await submitReorder(next);
+      await submitReorder(next, before);
     },
-    [groups, submitReorder]
+    [submitReorder]
   );
 
   const handleDragStart = (event: DragStartEvent) => {
     isDraggingRef.current = true;
+    containersAtDragStartRef.current = {
+      ...Object.fromEntries(
+        Object.entries(containersRef.current).map(([k, v]) => [k, [...v]])
+      ),
+    };
     setActiveId(String(event.active.id));
     setReorderError(null);
   };
@@ -800,14 +834,18 @@ export default function LijstSjoerd({
       }
     }
 
-    const before = groupsToContainers(groups);
-    if (JSON.stringify(before) !== JSON.stringify(nextContainers)) {
-      await submitReorder(nextContainers);
+    const prevContainers =
+      containersAtDragStartRef.current ?? groupsToContainers(groups);
+    containersAtDragStartRef.current = null;
+
+    if (JSON.stringify(prevContainers) !== JSON.stringify(nextContainers)) {
+      await submitReorder(nextContainers, prevContainers);
     }
   };
 
   const handleDragCancel = () => {
     isDraggingRef.current = false;
+    containersAtDragStartRef.current = null;
     setActiveId(null);
     setContainers(groupsToContainers(groups));
   };
@@ -915,7 +953,7 @@ export default function LijstSjoerd({
                 if (!order) return null;
                 return (
                   <TouchOrderRow
-                    key={orderId}
+                    key={`${orderId}-${order.aankomsttijd_slot ?? ""}-${(order as { rit_nummer?: number }).rit_nummer ?? ""}`}
                     order={order}
                     rowNum={i + 1}
                     rowClassName={style?.bg}
@@ -926,15 +964,30 @@ export default function LijstSjoerd({
                     onPatch={onPatch}
                     canMoveUp={i > 0}
                     canMoveDown={i < orderIds.length - 1}
-                    onMoveUp={() =>
-                      applyReorder(moveWithinContainer(containers, orderId, "up"))
-                    }
-                    onMoveDown={() =>
-                      applyReorder(moveWithinContainer(containers, orderId, "down"))
-                    }
-                    onChangeRoute={(targetId) =>
-                      applyReorder(moveToContainer(containers, orderId, targetId))
-                    }
+                    onMoveUp={() => {
+                      const prev = {
+                        ...Object.fromEntries(
+                          Object.entries(containersRef.current).map(([k, v]) => [k, [...v]])
+                        ),
+                      };
+                      applyReorder(moveWithinContainer(containersRef.current, orderId, "up"), prev);
+                    }}
+                    onMoveDown={() => {
+                      const prev = {
+                        ...Object.fromEntries(
+                          Object.entries(containersRef.current).map(([k, v]) => [k, [...v]])
+                        ),
+                      };
+                      applyReorder(moveWithinContainer(containersRef.current, orderId, "down"), prev);
+                    }}
+                    onChangeRoute={(targetId) => {
+                      const prev = {
+                        ...Object.fromEntries(
+                          Object.entries(containersRef.current).map(([k, v]) => [k, [...v]])
+                        ),
+                      };
+                      applyReorder(moveToContainer(containersRef.current, orderId, targetId), prev);
+                    }}
                   />
                 );
               })}
@@ -1053,7 +1106,7 @@ function RouteGroupRows({
           if (!order) return null;
           return (
             <SortableOrderRow
-              key={id}
+              key={`${id}-${order.aankomsttijd_slot ?? ""}-${(order as { rit_nummer?: number }).rit_nummer ?? ""}`}
               id={id}
               order={order}
               rowNum={i + 1}
