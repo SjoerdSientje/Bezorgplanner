@@ -3,48 +3,19 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import RouteOrderPicker, { type RoutePickOrder } from "@/components/RouteOrderPicker";
 import { routeStyleForIndex } from "@/lib/route-colors";
+import {
+  ROUTES_LS,
+  defaultRouteRowsForDialog,
+  readSavedRoutesFromStorage,
+  type SavedRouteRow,
+} from "@/lib/route-vertrektijden";
 
-const ROUTES_LS = "bezorgplanner.routes.v3";
-
-export type RouteRow = {
-  vertrektijd: string;
-  maxFietsen: number;
-  meerdereRitten: boolean;
-  orderIds: string[];
-};
+export type RouteRow = SavedRouteRow;
 
 function loadRoutesDefault(): RouteRow[] {
-  if (typeof window === "undefined") {
-    return [{ vertrektijd: "10:30", maxFietsen: 11, meerdereRitten: false, orderIds: [] }];
-  }
-  try {
-    const raw = localStorage.getItem(ROUTES_LS) ?? localStorage.getItem("bezorgplanner.routes.v2");
-    if (raw) {
-      const p = JSON.parse(raw) as unknown;
-      if (Array.isArray(p) && p.length > 0) {
-        const rows: RouteRow[] = [];
-        for (const x of p) {
-          const o = x as Record<string, unknown>;
-          const vt = String(o.vertrektijd ?? "10:30").trim();
-          const mf =
-            typeof o.maxFietsen === "number"
-              ? o.maxFietsen
-              : parseInt(String(o.maxFietsen ?? "11"), 10);
-          const mr = Boolean(o.meerdereRitten ?? false);
-          const orderIds = Array.isArray(o.orderIds)
-            ? o.orderIds.map((id) => String(id).trim()).filter(Boolean)
-            : [];
-          if (/^\d{1,2}:\d{2}$/.test(vt) && Number.isFinite(mf) && mf >= 1 && mf <= 99) {
-            rows.push({ vertrektijd: vt, maxFietsen: mf, meerdereRitten: mr, orderIds });
-          }
-        }
-        if (rows.length > 0) return rows;
-      }
-    }
-  } catch {
-    // ignore
-  }
-  return [{ vertrektijd: "10:30", maxFietsen: 11, meerdereRitten: false, orderIds: [] }];
+  if (typeof window === "undefined") return defaultRouteRowsForDialog();
+  const rows = readSavedRoutesFromStorage();
+  return rows.length > 0 ? rows : defaultRouteRowsForDialog();
 }
 
 const TIJDOPTIES: string[] = [];
@@ -181,15 +152,11 @@ function FietsenStepper({
 
 interface Props {
   onRouteGenerated?: () => void;
-  vertrektijd: string;
-  onVertrektijdChange: (v: string) => void;
   sjoerdOrders: RoutePickOrder[];
 }
 
 export default function RitjesRouteControls({
   onRouteGenerated,
-  vertrektijd,
-  onVertrektijdChange,
   sjoerdOrders,
 }: Props) {
   const [loading, setLoading] = useState(false);
@@ -213,19 +180,6 @@ export default function RitjesRouteControls({
       // ignore
     }
   }, []);
-
-  useEffect(() => {
-    if (!showDialog) return;
-    setRoutes((prev) => {
-      if (prev.length === 0) {
-        return [{ vertrektijd: vertrektijd || "10:30", maxFietsen: 11, meerdereRitten: false, orderIds: [] }];
-      }
-      const next = [...prev];
-      next[0] = { ...next[0], vertrektijd: vertrektijd || next[0].vertrektijd };
-      return next;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showDialog]);
 
   const assignedElsewhereForPicker = useMemo(() => {
     if (pickerRouteIndex == null) return new Map<string, number>();
@@ -331,12 +285,6 @@ export default function RitjesRouteControls({
     <>
       <div className="flex flex-col items-end gap-3">
         <div className="flex flex-col items-end gap-3 sm:flex-row sm:items-center">
-          <div className="flex items-center gap-2">
-            <label htmlFor="vertrektijd" className="text-sm font-medium text-koopje-black">
-              Vertrektijd
-            </label>
-            <TijdPicker value={vertrektijd} onChange={onVertrektijdChange} />
-          </div>
           <button
             type="button"
             onClick={() => {
@@ -472,7 +420,7 @@ export default function RitjesRouteControls({
                   setRoutes((prev) => [
                     ...prev,
                     {
-                      vertrektijd: vertrektijd || "10:30",
+                      vertrektijd: prev[prev.length - 1]?.vertrektijd || "10:30",
                       maxFietsen: 11,
                       meerdereRitten: false,
                       orderIds: [],

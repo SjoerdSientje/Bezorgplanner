@@ -65,9 +65,6 @@ export default function RitjesVandaagPage() {
   // Verhoog dit ALLEEN na een echte server-fetch zodat EditableSheetTable zijn waarden reset.
   // Cel-edits mogen dit NIET verhogen (dat veroorzaakt de page-flash).
   const [tableResetKey, setTableResetKey] = useState(0);
-  /** Gedeeld met Route genereren en Sparren met Sientje (OpenAI-context). */
-  const [vertrektijd, setVertrektijd] = useState("10:30");
-
   const fetchRitjes = useCallback(async () => {
     setLoading(true);
     try {
@@ -494,8 +491,6 @@ export default function RitjesVandaagPage() {
               </h1>
             </div>
             <RitjesRouteControls
-              vertrektijd={vertrektijd}
-              onVertrektijdChange={setVertrektijd}
               onRouteGenerated={fetchRitjes}
               sjoerdOrders={sjoerdOrders}
             />
@@ -504,7 +499,6 @@ export default function RitjesVandaagPage() {
           <div className="mb-4 flex flex-wrap items-center gap-3">
             <SparrenMetSientje
               ritjesOrders={visibleRows.orders}
-              vertrektijd={vertrektijd}
               onSlotsUpdated={fetchRitjes}
             />
             <StuurAppjesButton
@@ -589,7 +583,6 @@ export default function RitjesVandaagPage() {
               orders={orders.filter((o) => o.in_morgen_tab !== true) as AlleRittenOrder[]}
               onPatch={patchOrderById}
               onReorderComplete={handleReorderComplete}
-              defaultVertrektijd={vertrektijd}
             />
           ) : activeTab === "morgen" && routesGroups ? (
             // ── Routes-tab: gegroepeerd op datum én route ─────────────────────

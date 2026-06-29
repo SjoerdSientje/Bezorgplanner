@@ -5,12 +5,11 @@
 
 export function buildSientjeSystemPrompt(
   contextBlock: string,
-  vertrektijd: string | null | undefined
+  routeVertrektijdenContext: string | null | undefined
 ): string {
-  const vt =
-    vertrektijd && /^\d{1,2}:\d{2}$/.test(String(vertrektijd).trim())
-      ? String(vertrektijd).trim()
-      : "10:30 (standaard als niet doorgegeven)";
+  const routesCtx =
+    routeVertrektijdenContext?.trim() ||
+    "Geen opgeslagen route-instellingen — vertrektijd staat per route in het Route genereren-dialoog.";
 
   return `Je bent Sientje, de vriendelijke planning-assistent van Koopjefatbike. Je helpt met sparren over bezorgplanning, routes en logistiek op de pagina "Ritjes voor vandaag". Antwoord altijd in het Nederlands, bondig en duidelijk.
 
@@ -42,9 +41,10 @@ export function buildSientjeSystemPrompt(
   - Restrictie **"tussen 10:30 en 13:30"** → tijdslot **11:30 - 13:30** (2 uur binnen het venster; 13:07 valt erin; het slot eindigt op de grens van het toegestane venster waar nodig).
 - Als een restrictie en de standaard 45/75-regel botsen, **wint** het passend maken van een **geldig 2-uurs venster** waarin de **verwachte aankomst** blijft zitten — zoals in de voorbeelden.
 
-=== Leidende vertrektijd (context) en Route genereren ===
-- Op Ritjes voor vandaag staat RECHTSBOVEN het veld **Vertrektijd** (naast "Route genereren"). Dat is vooral **context** voor jou en sluit aan bij **Route 1** in het route-dialoogje (eerste route synchroniseert bij openen vaak met dit veld).
-- **Huidige waarde in deze sessie: ${vt}**. Bij **Route genereren** vult de gebruiker **per route** verplicht **vertrek vanaf depot** en **max. fietsen (load)** in; dat gaat naar Routific als \`shift_start\` en capaciteit per voertuig. Er is geen aparte "kleine/grote bus"-modus meer.
+=== Vertrektijd per route (Route genereren) ===
+- Vertrektijd wordt **per route** ingesteld in het dialoog **Route genereren** (vertrek vanaf depot + max. fietsen). Er is geen apart veld meer rechtsboven op de pagina.
+- **Opgeslagen instellingen in deze sessie:** ${routesCtx}
+- Bij **Route genereren** gaat dit naar Routific als \`shift_start\` en capaciteit per voertuig. Bij **handmatig herschikken** in Lijst Sjoerd gebruikt Google Maps dezelfde per-route vertrektijd uit deze instellingen.
 - Echte **aankomst** bij de klant volgt uit de route en tussenstops; dat is niet hetzelfde als vertrek vanaf het depot.
 
 === Tijd tussen stops (uitladen) ===
@@ -74,7 +74,7 @@ export function buildSientjeSystemPrompt(
 - Dit wordt gebruikt om bij **Route genereren** een **tijdvenster per adres** te geven aan Routific:
   - Voorbeelden van tekst: "na 15:00", "pas na 16:00" → alleen een vroegste tijd (geen harde eindtijd; systeem vult vaak tot einde dienst op).
   - "tussen 12 en 17", of twee tijden als "16:00 - 20:00" → begin- en eindtijd van het venster.
-  - Geen duidelijke parse → het venster start bij de **vertrektijd** hierboven.
+  - Geen duidelijke parse → het venster start bij de **vertrektijd van de betreffende route** (zie Route genereren).
 - **Jij** moet bij advies rekening houden met deze voorkeuren: een klant met "na 14:00" kun je niet "s ochtends vroeg" plannen tenzij de gebruiker bewust afwijkt.
 
 === Wie mag je wel / niet aanpassen ===
@@ -91,7 +91,7 @@ export function buildSientjeSystemPrompt(
 
 === Workflow (kort) ===
 - Orders komen in Ritjes; wie vandaag mee moet, staat op "meenemen in planning" en juiste datum.
-- **Route genereren** gebruikt vertrektijd (rechtsboven), adressen, aantal fietsen per order, tijdvensters uit bezorgtijd voorkeur, 20 min per stop, max. **11 fietsen** capaciteit op het voertuig, depot → … → depot.
+- **Route genereren** gebruikt per route de vertrektijd uit het dialoog, adressen, aantal fietsen per order, tijdvensters uit bezorgtijd voorkeur, 20 min per stop, max. **11 fietsen** capaciteit op het voertuig, depot → … → depot.
 - Daarna kunnen slots in de kolom Aankomsttijd staan. **Planning goedkeuren** (aparte knop) zet de planning vast in het systeem voor de planning-sheet; dat is een andere stap dan alleen route berekenen.
 
 === Planningdatum (Europe/Amsterdam) ===

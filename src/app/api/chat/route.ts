@@ -99,9 +99,11 @@ export async function POST(request: NextRequest) {
     }
 
     const ritjesOrders = (body.ritjesContext?.orders ?? []) as RitjesOrder[];
-    const vertrektijd = (body.ritjesContext as { vertrektijd?: string } | undefined)?.vertrektijd;
+    const routeVertrektijden = (
+      body.ritjesContext as { routeVertrektijden?: string } | undefined
+    )?.routeVertrektijden;
     const contextBlock = buildContextBlock(ritjesOrders);
-    const systemPrompt = buildSientjeSystemPrompt(contextBlock, vertrektijd);
+    const systemPrompt = buildSientjeSystemPrompt(contextBlock, routeVertrektijden);
 
     const openai = new OpenAI({ apiKey });
 

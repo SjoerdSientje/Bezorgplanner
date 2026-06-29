@@ -28,6 +28,7 @@ import OpmerkingKlantCell from "@/components/OpmerkingKlantCell";
 import type { AlleRittenOrder } from "@/components/AlleRittenTabel";
 import { compareOrdersOnRoute } from "@/lib/ritjes-mapping";
 import { routeStyleForIndex } from "@/lib/route-colors";
+import { getVertrektijdForRoute } from "@/lib/route-vertrektijden";
 
 const GRID_COLS =
   "grid-cols-[2.5rem_minmax(9rem,1fr)_minmax(7rem,0.8fr)_minmax(12rem,1.4fr)_minmax(9rem,1fr)_minmax(9rem,1fr)_minmax(9rem,1fr)]";
@@ -82,26 +83,6 @@ function parseContainerRoute(containerId: string): number | null {
   if (containerId === "route-overig") return null;
   const n = parseInt(containerId.replace("route-", ""), 10);
   return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-function loadRouteVertrektijden(defaultTijd: string): Record<number, string> {
-  const map: Record<number, string> = { 1: defaultTijd };
-  if (typeof window === "undefined") return map;
-  try {
-    const raw =
-      localStorage.getItem("bezorgplanner.routes.v3") ??
-      localStorage.getItem("bezorgplanner.routes.v2");
-    if (!raw) return map;
-    const arr = JSON.parse(raw) as unknown;
-    if (!Array.isArray(arr)) return map;
-    arr.forEach((r, i) => {
-      const vt = String((r as Record<string, unknown>)?.vertrektijd ?? "").trim();
-      if (/^\d{1,2}:\d{2}$/.test(vt)) map[i + 1] = vt;
-    });
-  } catch {
-    // ignore
-  }
-  return map;
 }
 
 function stopDragPointer(e: React.PointerEvent) {
@@ -625,12 +606,10 @@ export default function LijstSjoerd({
   orders,
   onPatch,
   onReorderComplete,
-  defaultVertrektijd = "10:30",
 }: {
   orders: AlleRittenOrder[];
   onPatch: (id: string, fields: Record<string, unknown>) => void;
   onReorderComplete?: (updates: ReorderUpdate[]) => void | Promise<void>;
-  defaultVertrektijd?: string;
 }) {
   const groups = useMemo(() => groupByRoute(orders), [orders]);
   const orderById = useMemo(
@@ -681,17 +660,12 @@ export default function LijstSjoerd({
       const changedContainerIds = containerIdsWithChangedOrder(prevContainers, nextContainers);
       if (changedContainerIds.size === 0) return;
 
-      const vertrektijden = loadRouteVertrektijden(defaultVertrektijd);
-      const routes = Object.entries(nextContainers)
+      const routeEntries = Object.entries(nextContainers)
         .filter(([containerId, ids]) => ids.length > 0 && changedContainerIds.has(containerId))
         .map(([containerId, orderIds]) => {
           const routeNummer = parseContainerRoute(containerId);
           const rn = routeNummer ?? 1;
-          return {
-            routeNummer,
-            orderIds,
-            vertrektijd: vertrektijden[rn] ?? defaultVertrektijd,
-          };
+          return { routeNummer, rn, orderIds };
         })
         .sort((a, b) => {
           const na = a.routeNummer ?? 9999;
@@ -699,7 +673,23 @@ export default function LijstSjoerd({
           return na - nb;
         });
 
-      if (routes.length === 0) return;
+      if (routeEntries.length === 0) return;
+
+      const routes = [];
+      for (const entry of routeEntries) {
+        const vertrektijd = getVertrektijdForRoute(entry.rn);
+        if (!vertrektijd) {
+          setReorderError(
+            `Geen vertrektijd voor route ${entry.rn}. Stel deze in via Route genereren en bereken de route opnieuw.`
+          );
+          return;
+        }
+        routes.push({
+          routeNummer: entry.routeNummer,
+          orderIds: entry.orderIds,
+          vertrektijd,
+        });
+      }
 
       setRecalculating(true);
       setReorderError(null);
@@ -727,7 +717,7 @@ export default function LijstSjoerd({
         setRecalculating(false);
       }
     },
-    [defaultVertrektijd, groups, onReorderComplete]
+    [groups, onReorderComplete]
   );
 
   const routeOptions = useMemo((): RouteOption[] => {
