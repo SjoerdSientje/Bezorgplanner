@@ -15,9 +15,14 @@ function toMinutes(hhmm: string): number {
 }
 
 function fromMinutes(total: number): string {
-  const h = Math.floor(total / 60) % 24;
-  const m = total % 60;
+  const normalized = ((total % (24 * 60)) + 24 * 60) % (24 * 60);
+  const h = Math.floor(normalized / 60);
+  const m = normalized % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function formatSlotRange(slotStart: number): string {
+  return `${fromMinutes(slotStart)} - ${fromMinutes(slotStart + SLOT_DURATION_MIN)}`;
 }
 
 /** Parsed tijdsrestrictie: "na X", "voor X", of "tussen A en B" */
@@ -89,43 +94,33 @@ export function maakTijdslot(
   const res = parseRestriction(tijdsrestrictieOpmerking);
 
   if (!res) {
-    const start = arrival - DEFAULT_BEFORE_MIN;
-    const end = arrival + DEFAULT_AFTER_MIN;
-    return `${fromMinutes(start)} - ${fromMinutes(end)}`;
+    return formatSlotRange(arrival - DEFAULT_BEFORE_MIN);
   }
 
   if (res.type === "na") {
     const minStart = toMinutes(res.minStart);
-    // Slot gecentreerd rond aankomst (45 min voor, 75 min na), maar nooit eerder dan minStart.
-    // "na 14:00" betekent: niet vóór 14:00 — niet dat de bezorging altijd precies om 14:00 is.
     const slotStart = Math.max(minStart, arrival - DEFAULT_BEFORE_MIN);
-    const slotEnd = slotStart + SLOT_DURATION_MIN;
-    return `${fromMinutes(slotStart)} - ${fromMinutes(slotEnd)}`;
+    return formatSlotRange(slotStart);
   }
 
   if (res.type === "voor") {
     const maxEnd = toMinutes(res.maxEnd);
-    // Slot gecentreerd rond aankomst, maar nooit later dan maxEnd.
     const slotEnd = Math.min(maxEnd, arrival + DEFAULT_AFTER_MIN);
     const slotStart = slotEnd - SLOT_DURATION_MIN;
-    return `${fromMinutes(slotStart)} - ${fromMinutes(slotEnd)}`;
+    return formatSlotRange(slotStart);
   }
 
-  // tussen A en B: 2h binnen [A,B] met aankomst erin; eindig bij B als aankomst dicht bij B, anders start bij A
+  // tussen A en B: 2h binnen [A,B] met aankomst erin
   const minStart = toMinutes(res.minStart);
   const maxEnd = toMinutes(res.maxEnd);
   let slotStart: number;
-  let slotEnd: number;
   if (arrival >= maxEnd - SLOT_DURATION_MIN) {
-    slotEnd = maxEnd;
     slotStart = maxEnd - SLOT_DURATION_MIN;
   } else {
-    slotStart = Math.max(minStart, arrival - SLOT_DURATION_MIN);
-    slotEnd = slotStart + SLOT_DURATION_MIN;
-    if (slotEnd > maxEnd) {
-      slotEnd = maxEnd;
+    slotStart = Math.max(minStart, arrival - DEFAULT_BEFORE_MIN);
+    if (slotStart + SLOT_DURATION_MIN > maxEnd) {
       slotStart = maxEnd - SLOT_DURATION_MIN;
     }
   }
-  return `${fromMinutes(slotStart)} - ${fromMinutes(slotEnd)}`;
+  return formatSlotRange(slotStart);
 }

@@ -4,7 +4,9 @@
  */
 
 export const DEPOT_ADDRESS = "Kapelweg 2, 3732 GS, De Bilt, Netherlands";
-const DEFAULT_DURATION = 20;
+/** Uitladen per bezorgstop (minuten) — Routific duration + tijd tussen stops. */
+export const SERVICE_TIME_MINUTES = 20;
+const DEFAULT_DURATION = SERVICE_TIME_MINUTES;
 const DEFAULT_SHIFT_END = "23:59";
 /** Minuten op het depot tussen twee ritten; stelt Routific in staat meerdere laadrondes te plannen. */
 const RELOAD_TIME_MINUTEN = 30;
@@ -16,6 +18,9 @@ export interface OrderForRoute {
   aantal_fietsen: number | null;
   bezorgtijd_voorkeur: string | null;
   producten: string | null;
+  /** PDOK-coördinaten voor Routific (nauwkeurigere reistijden). */
+  lat?: number | null;
+  lng?: number | null;
 }
 
 /** GT2000, Engwe E26 en Qibbel/family/kinderzitje zijn breder/groter; bij max. load ≤ 4 tellen alle fietsen dubbel qua load. */
@@ -104,9 +109,11 @@ export function parseBezorgtijdVoorkeur(
   return null;
 }
 
+type RoutificLocation = { address: string; lat?: number; lng?: number };
+
 type VehicleConfig = {
-  start_location: { address: string };
-  end_location: { address: string };
+  start_location: RoutificLocation;
+  end_location: RoutificLocation;
   shift_start: string;
   shift_end: string;
   capacity: number;
@@ -121,7 +128,7 @@ export interface RoutificPayload {
   visits: Record<
     string,
     {
-      location: { address: string };
+      location: RoutificLocation;
       load: number;
       duration: number;
       start: string;
@@ -150,6 +157,15 @@ function sanitizeVisitId(id: string): string {
   return id.replace(/[.$]/g, "_");
 }
 
+function buildLocation(address: string, lat?: number | null, lng?: number | null): RoutificLocation {
+  const loc: RoutificLocation = { address };
+  if (lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)) {
+    loc.lat = lat;
+    loc.lng = lng;
+  }
+  return loc;
+}
+
 function buildVisitForOrder(
   o: OrderForRoute,
   defaultStartForNoPreference: string,
@@ -164,7 +180,7 @@ function buildVisitForOrder(
   const end = window && window.end !== null ? window.end : DEFAULT_SHIFT_END;
 
   return {
-    location: { address },
+    location: buildLocation(address, o.lat, o.lng),
     load,
     duration: DEFAULT_DURATION,
     start,

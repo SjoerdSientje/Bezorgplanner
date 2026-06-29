@@ -30,7 +30,7 @@ export async function POST(request: NextRequest) {
     const { data: orders, error: queryError } = await supabase
       .from("orders")
       .select(
-        "id, order_nummer, aankomsttijd_slot, bestelling_totaal_prijs, naam, telefoon_e164, telefoon_nummer, type, betaald, mp_tags, datum, datum_opmerking, meenemen_in_planning, opmerkingen_klant, bezorgtijd_voorkeur, email, producten, serienummer, aantal_fietsen, link_aankoopbewijs"
+        "id, order_nummer, aankomsttijd_slot, route_nummer, bestelling_totaal_prijs, naam, telefoon_e164, telefoon_nummer, type, betaald, mp_tags, datum, datum_opmerking, meenemen_in_planning, opmerkingen_klant, bezorgtijd_voorkeur, email, producten, serienummer, aantal_fietsen, link_aankoopbewijs"
       )
       .eq("owner_email", ownerEmail)
       .eq("status", "ritjes_vandaag")
@@ -84,11 +84,17 @@ export async function POST(request: NextRequest) {
       if (!Number.isFinite(h)) return 9999;
       return h * 60 + (Number.isFinite(m) ? m : 0);
     };
-    const batchOrders = [...rows].sort(
-      (a, b) =>
+    const batchOrders = [...rows].sort((a, b) => {
+      const ra =
+        a.route_nummer != null && Number(a.route_nummer) > 0 ? Number(a.route_nummer) : 9999;
+      const rb =
+        b.route_nummer != null && Number(b.route_nummer) > 0 ? Number(b.route_nummer) : 9999;
+      if (ra !== rb) return ra - rb;
+      return (
         parseMin((a.aankomsttijd_slot ?? "").toString()) -
         parseMin((b.aankomsttijd_slot ?? "").toString())
-    );
+      );
+    });
 
     // Verwijder alleen de slots voor orders in deze batch (niet alle slots voor targetDate —
     // andere orders die al gepland staan voor die datum blijven onberoerd).
@@ -102,14 +108,38 @@ export async function POST(request: NextRequest) {
         .in("order_id", batchOrderIds);
     }
 
-    const slotsToInsert = batchOrders.map((o, i) => ({
-      owner_email: ownerEmail,
-      datum: targetDate,
-      order_id: o.id,
-      volgorde: i + 1,
-      aankomsttijd: (o.aankomsttijd_slot ?? "").toString().trim(),
-      tijd_opmerking: String(o.bezorgtijd_voorkeur ?? "").toString().trim(),
-    }));
+    const slotsToInsert: {
+      owner_email: string;
+      datum: string;
+      order_id: string;
+      volgorde: number;
+      aankomsttijd: string;
+      tijd_opmerking: string;
+    }[] = [];
+
+    let volgordeInRoute = 0;
+    let lastRouteKey: string | null = null;
+
+    for (const o of batchOrders) {
+      const routeKey =
+        o.route_nummer != null && Number(o.route_nummer) > 0
+          ? String(o.route_nummer)
+          : "single";
+      if (routeKey !== lastRouteKey) {
+        volgordeInRoute = 0;
+        lastRouteKey = routeKey;
+      }
+      volgordeInRoute += 1;
+
+      slotsToInsert.push({
+        owner_email: ownerEmail,
+        datum: targetDate,
+        order_id: o.id,
+        volgorde: volgordeInRoute,
+        aankomsttijd: (o.aankomsttijd_slot ?? "").toString().trim(),
+        tijd_opmerking: String(o.bezorgtijd_voorkeur ?? "").toString().trim(),
+      });
+    }
 
     const { error: insertErr } = await supabase.from("planning_slots").insert(slotsToInsert);
     if (insertErr) {

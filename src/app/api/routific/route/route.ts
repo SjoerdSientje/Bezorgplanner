@@ -9,6 +9,9 @@ import {
   type ParallelRouteSpec,
 } from "@/lib/routific-payload";
 import { maakTijdslot } from "@/lib/tijdslot";
+import { parseRoutificArrivalTime } from "@/lib/routific-arrival";
+import { geocodeOrdersForRouting } from "@/lib/pdok-geocode";
+import { SERVICE_TIME_MINUTES } from "@/lib/routific-payload";
 import { supabaseMissingOrdersRouteNummerColumn } from "@/lib/orders-route-nummer-supabase";
 
 const ROUTIFIC_VRP_URL = "https://api.routific.com/v1/vrp-long";
@@ -183,7 +186,9 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const payload = buildRoutificPayloadFromRoutes(rowsForRouting, parallelRoutes);
+    const rowsGeocoded = await geocodeOrdersForRouting(rowsForRouting);
+
+    const payload = buildRoutificPayloadFromRoutes(rowsGeocoded, parallelRoutes);
 
     const res = await fetch(ROUTIFIC_VRP_URL, {
       method: "POST",
@@ -220,10 +225,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const solution = output?.solution as Record<string, Array<{ location_id?: string; arrival_time?: string }>> | undefined;
+    const solution = output?.solution as
+      | Record<string, Array<{ location_id?: string; arrival_time?: string; finish_time?: string }>>
+      | undefined;
     const sanitizeId = (id: string) => id.replace(/[.$]/g, "_");
     const orderByVisitId = new Map<string, OrderForRoute>();
-    for (const o of rowsForRouting) {
+    for (const o of rowsGeocoded) {
       orderByVisitId.set(o.id, o);
       orderByVisitId.set(sanitizeId(o.id), o);
     }
@@ -268,7 +275,7 @@ export async function POST(request: NextRequest) {
     const meerDanEenRoute = vehicleKeys.length > 1;
 
     for (let vi = 0; vi < vehicleKeys.length; vi++) {
-      const vehicleKey = vehicleKeys[vi];
+      const vehicleKey = vehicleKeys[vi]!;
       const routeNummerVoertuig = vi + 1;
       const stops = solution?.[vehicleKey] ?? [];
       for (const stop of stops) {
@@ -276,7 +283,7 @@ export async function POST(request: NextRequest) {
         if (locId === "depot") continue;
         const order = orderByVisitId.get(locId);
         if (!order) continue;
-        const arrivalTime = stop.arrival_time ?? "";
+        const arrivalTime = parseRoutificArrivalTime(stop.arrival_time);
         if (!arrivalTime) continue;
         const slotStr = maakTijdslot(arrivalTime, order.bezorgtijd_voorkeur);
         volgorde += 1;
@@ -363,7 +370,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       ok: true,
-      message: `Route berekend en ${slotsToInsert.length} tijdsloten opgeslagen (van ${rowsForRouting.length} orders).`,
+      message: `Route berekend en ${slotsToInsert.length} tijdsloten opgeslagen (van ${rowsForRouting.length} orders, ${SERVICE_TIME_MINUTES} min uitladen per stop).`,
       planningDate,
       vertrektijd,
       visitCount: rows.length,

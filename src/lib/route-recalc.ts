@@ -2,12 +2,12 @@
  * Herbereken aankomsttijden en tijdsloten langs een route (na handmatig herschikken).
  */
 
-import { DEPOT_ADDRESS } from "@/lib/routific-payload";
+import { DEPOT_ADDRESS, SERVICE_TIME_MINUTES } from "@/lib/routific-payload";
 import { maakTijdslot } from "@/lib/tijdslot";
 import { getChainTravelMinutes } from "@/lib/google-travel-times";
 
 /** Uitladen per stop (zelfde als Routific duration). */
-export const SERVICE_TIME_MINUTES = 20;
+export { SERVICE_TIME_MINUTES };
 
 export type RouteStop = {
   id: string;

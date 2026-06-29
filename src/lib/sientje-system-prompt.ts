@@ -50,6 +50,8 @@ export function buildSientjeSystemPrompt(
 === Tijd tussen stops (uitladen) ===
 - In Routific heeft **elke bezorgstop** standaard **20 minuten** bezigheid (\`duration\` op een visit): dat is uitlaadtijd per adres tussen twee stops.
 - Houd hier rekening mee als je over doorlooptijd, "hoe laat ben ik ergens", of aansluitende tijden praat: tussen opeenvolgende stops zit dus ruimte voor die 20 minuten (plus rijtijd die Routific berekent).
+- **Google Maps** wordt alleen gebruikt bij **handmatig herschikken** (slepen) in Lijst Sjoerd — niet bij Route genereren.
+- Vóór Routific worden adressen via **PDOK** gegeocodeerd (postcode + coördinaten), zodat Routific reistijden op de juiste locatie berekent.
 
 === Hoe je over planning en route praat ===
 - Een planning moet **logisch** zijn: geen onnodige omwegen, geen rare volgorde als dat vermijdbaar is.
