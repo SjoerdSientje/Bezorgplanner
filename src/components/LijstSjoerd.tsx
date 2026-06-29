@@ -1,35 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  DndContext,
-  DragOverlay,
-  KeyboardSensor,
-  PointerSensor,
-  TouchSensor,
-  closestCenter,
-  useDroppable,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-  type DragOverEvent,
-  type DragStartEvent,
-} from "@dnd-kit/core";
-import {
-  SortableContext,
-  arrayMove,
-  sortableKeyboardCoordinates,
-  useSortable,
-  verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import ProductenCell from "@/components/ProductenCell";
 import OpmerkingKlantCell from "@/components/OpmerkingKlantCell";
 import type { AlleRittenOrder } from "@/components/AlleRittenTabel";
 import { routeStyleForIndex } from "@/lib/route-colors";
 
 const GRID_COLS =
-  "grid-cols-[2.5rem_minmax(9rem,1fr)_minmax(7rem,0.8fr)_minmax(12rem,1.4fr)_minmax(9rem,1fr)_minmax(9rem,1fr)_minmax(9rem,1fr)]";
+  "grid-cols-[2.75rem_minmax(5.5rem,6.5rem)_2rem_minmax(9rem,1fr)_minmax(7rem,0.8fr)_minmax(12rem,1.4fr)_minmax(9rem,1fr)_minmax(9rem,1fr)_minmax(9rem,1fr)]";
 
 function parseSlotMin(slot: string | null | undefined): number {
   const t = String(slot ?? "").split(" - ")[0].replace(".", ":").trim();
@@ -68,10 +46,6 @@ function loadRouteVertrektijden(defaultTijd: string): Record<number, string> {
   return map;
 }
 
-function stopDragPointer(e: React.PointerEvent) {
-  e.stopPropagation();
-}
-
 function EditableCell({
   value,
   onSave,
@@ -99,7 +73,6 @@ function EditableCell({
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
-        onPointerDown={stopDragPointer}
         onKeyDown={(e) => {
           if (e.key === "Enter") commit();
           if (e.key === "Escape") {
@@ -115,7 +88,6 @@ function EditableCell({
     <button
       type="button"
       className={`w-full text-left text-sm hover:underline hover:decoration-dotted ${fontMedium ? "font-medium text-koopje-black" : "text-stone-600"}`}
-      onPointerDown={stopDragPointer}
       onClick={() => {
         setDraft(value);
         setEditing(true);
@@ -128,58 +100,17 @@ function EditableCell({
   );
 }
 
-function DraggableAddress({
-  value,
-  onSave,
-}: {
-  value: string;
-  onSave: (v: string) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value);
-
-  if (editing) {
-    return (
-      <input
-        autoFocus
-        className="w-full rounded border border-koopje-orange px-1 py-0.5 text-sm focus:outline-none"
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={() => {
-          setEditing(false);
-          if (draft.trim() !== value) onSave(draft.trim());
-        }}
-        onPointerDown={stopDragPointer}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            setEditing(false);
-            if (draft.trim() !== value) onSave(draft.trim());
-          }
-          if (e.key === "Escape") {
-            setEditing(false);
-            setDraft(value);
-          }
-        }}
-      />
-    );
-  }
-
-  return (
-    <span
-      className="block cursor-grab touch-manipulation text-sm text-stone-700 active:cursor-grabbing"
-      title="Vasthouden en slepen om te verplaatsen · dubbelklik om te bewerken"
-      onDoubleClick={(e) => {
-        e.stopPropagation();
-        setDraft(value);
-        setEditing(true);
-      }}
-    >
-      {value || <span className="text-stone-300 text-xs">—</span>}
-    </span>
-  );
-}
-
-const HEADERS = ["Tijdslot", "Voorkeurstijd", "Adres", "Model / Product", "Opmerking klant", "Email"];
+const HEADERS = [
+  "Volgorde",
+  "Route",
+  "#",
+  "Tijdslot",
+  "Voorkeurstijd",
+  "Adres",
+  "Model / Product",
+  "Opmerking klant",
+  "Email",
+];
 
 type RouteGroup = {
   routeNum: number | null;
@@ -247,133 +178,202 @@ function findContainer(
   return null;
 }
 
+function moveWithinContainer(
+  containers: Record<string, string[]>,
+  orderId: string,
+  direction: "up" | "down"
+): Record<string, string[]> | null {
+  const containerId = findContainer(orderId, containers);
+  if (!containerId) return null;
+
+  const items = [...(containers[containerId] ?? [])];
+  const idx = items.indexOf(orderId);
+  if (idx < 0) return null;
+
+  const swapIdx = direction === "up" ? idx - 1 : idx + 1;
+  if (swapIdx < 0 || swapIdx >= items.length) return null;
+
+  [items[idx], items[swapIdx]] = [items[swapIdx]!, items[idx]!];
+  return { ...containers, [containerId]: items };
+}
+
+function moveToContainer(
+  containers: Record<string, string[]>,
+  orderId: string,
+  targetContainerId: string
+): Record<string, string[]> | null {
+  const sourceContainerId = findContainer(orderId, containers);
+  if (!sourceContainerId || sourceContainerId === targetContainerId) return null;
+  if (!(targetContainerId in containers)) return null;
+
+  const sourceItems = [...(containers[sourceContainerId] ?? [])];
+  const targetItems = [...(containers[targetContainerId] ?? [])];
+  const idx = sourceItems.indexOf(orderId);
+  if (idx < 0) return null;
+
+  sourceItems.splice(idx, 1);
+  const insertAt = Math.min(idx, targetItems.length);
+  targetItems.splice(insertAt, 0, orderId);
+
+  return {
+    ...containers,
+    [sourceContainerId]: sourceItems,
+    [targetContainerId]: targetItems,
+  };
+}
+
 type ReorderUpdate = {
   id: string;
   route_nummer: number | null;
   aankomsttijd_slot: string;
 };
 
-function SortableOrderRow({
-  id,
+type RouteOption = { containerId: string; label: string };
+
+function OrderRow({
   order,
   rowNum,
   rowClassName,
-  dragEnabled,
+  reorderEnabled,
+  routeOptions,
+  currentContainerId,
+  busy,
   onPatch,
+  onMoveUp,
+  onMoveDown,
+  onChangeRoute,
+  canMoveUp,
+  canMoveDown,
 }: {
-  id: string;
   order: AlleRittenOrder;
   rowNum: number;
   rowClassName?: string;
-  dragEnabled: boolean;
+  reorderEnabled: boolean;
+  routeOptions: RouteOption[];
+  currentContainerId: string;
+  busy: boolean;
   onPatch: (id: string, fields: Record<string, unknown>) => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onChangeRoute: (targetContainerId: string) => void;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id,
-    disabled: !dragEnabled,
-  });
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    zIndex: isDragging ? 10 : undefined,
-    opacity: isDragging ? 0.85 : 1,
-  };
+  const id = String(order.id);
 
   return (
     <div
-      ref={setNodeRef}
-      style={style}
       className={`grid ${GRID_COLS} border-b border-stone-100 last:border-0 ${
         rowClassName ?? "bg-white even:bg-stone-50/50"
-      } ${dragEnabled ? "cursor-grab touch-manipulation active:cursor-grabbing hover:shadow-sm" : ""} ${
-        isDragging ? "shadow-md ring-2 ring-koopje-orange/40" : ""
       }`}
-      {...(dragEnabled ? { ...attributes, ...listeners } : {})}
     >
-      <div className="flex items-center justify-center border border-stone-200 px-1 py-2 text-xs text-stone-500">
+      <div className="flex flex-col items-center justify-center gap-0.5 border border-stone-200 px-0.5 py-1">
+        {reorderEnabled ? (
+          <>
+            <button
+              type="button"
+              disabled={busy || !canMoveUp}
+              onClick={onMoveUp}
+              className="flex h-7 w-7 touch-manipulation items-center justify-center rounded text-stone-500 hover:bg-stone-100 hover:text-koopje-orange disabled:opacity-25"
+              aria-label="Eén plek omhoog"
+              title="Omhoog"
+            >
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              disabled={busy || !canMoveDown}
+              onClick={onMoveDown}
+              className="flex h-7 w-7 touch-manipulation items-center justify-center rounded text-stone-500 hover:bg-stone-100 hover:text-koopje-orange disabled:opacity-25"
+              aria-label="Eén plek omlaag"
+              title="Omlaag"
+            >
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+          </>
+        ) : (
+          <span className="text-xs text-stone-300">—</span>
+        )}
+      </div>
+
+      <div className="flex items-center border border-stone-200 px-1 py-1">
+        {reorderEnabled && routeOptions.length > 1 ? (
+          <select
+            disabled={busy}
+            value={currentContainerId}
+            onChange={(e) => onChangeRoute(e.target.value)}
+            className="w-full min-w-0 rounded border border-stone-200 bg-white px-1 py-1 text-xs text-koopje-black focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
+            aria-label="Route kiezen"
+          >
+            {routeOptions.map((opt) => (
+              <option key={opt.containerId} value={opt.containerId}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <span className="px-1 text-xs text-stone-400">—</span>
+        )}
+      </div>
+
+      <div className="flex items-center justify-center border border-stone-200 px-1 py-2 text-xs font-medium text-stone-500">
         {rowNum}
       </div>
 
-      <div className="border border-stone-200 px-3 py-2" onPointerDown={stopDragPointer}>
+      <div className="border border-stone-200 px-3 py-2">
         <EditableCell
           value={String(order.aankomsttijd_slot ?? "")}
-          onSave={(v) => onPatch(String(order.id), { aankomsttijd_slot: v || null })}
+          onSave={(v) => onPatch(id, { aankomsttijd_slot: v || null })}
           placeholder="Klik om in te vullen"
           fontMedium
         />
       </div>
 
-      <div className="border border-stone-200 px-3 py-2" onPointerDown={stopDragPointer}>
+      <div className="border border-stone-200 px-3 py-2">
         <EditableCell
           value={String(order.bezorgtijd_voorkeur ?? "")}
-          onSave={(v) => onPatch(String(order.id), { bezorgtijd_voorkeur: v || null })}
+          onSave={(v) => onPatch(id, { bezorgtijd_voorkeur: v || null })}
           placeholder="—"
         />
       </div>
 
       <div className="border border-stone-200 px-3 py-2 min-w-0">
-        {dragEnabled ? (
-          <DraggableAddress
-            value={String(order.volledig_adres ?? "")}
-            onSave={(v) => onPatch(String(order.id), { volledig_adres: v || null })}
-          />
-        ) : (
-          <EditableCell
-            value={String(order.volledig_adres ?? "")}
-            onSave={(v) => onPatch(String(order.id), { volledig_adres: v || null })}
-            placeholder="—"
-          />
-        )}
+        <EditableCell
+          value={String(order.volledig_adres ?? "")}
+          onSave={(v) => onPatch(id, { volledig_adres: v || null })}
+          placeholder="—"
+        />
       </div>
 
-      <div className="border border-stone-200 p-0 min-w-0" onPointerDown={stopDragPointer}>
+      <div className="border border-stone-200 p-0 min-w-0">
         <ProductenCell
           value={String(order.producten ?? "")}
           lineItemsJson={(order.line_items_json as string | null | undefined) ?? null}
           bestellingTotaalPrijs={
             typeof order.bestelling_totaal_prijs === "number" ? order.bestelling_totaal_prijs : null
           }
-          onSaveMulti={async (fields) => onPatch(String(order.id), fields)}
+          onSaveMulti={async (fields) => onPatch(id, fields)}
         />
       </div>
 
-      <div className="border border-stone-200 p-0 min-w-0" onPointerDown={stopDragPointer}>
+      <div className="border border-stone-200 p-0 min-w-0">
         <OpmerkingKlantCell
           value={String(order.opmerkingen_klant ?? "")}
-          onSave={async (v) => onPatch(String(order.id), { opmerkingen_klant: v.trim() || null })}
+          onSave={async (v) => onPatch(id, { opmerkingen_klant: v.trim() || null })}
         />
       </div>
 
-      <div className="border border-stone-200 px-3 py-2 min-w-0" onPointerDown={stopDragPointer}>
+      <div className="border border-stone-200 px-3 py-2 min-w-0">
         <EditableCell
           value={String(order.email ?? "")}
-          onSave={(v) => onPatch(String(order.id), { email: v || null })}
+          onSave={(v) => onPatch(id, { email: v || null })}
           placeholder="—"
         />
       </div>
-    </div>
-  );
-}
-
-function DroppableRouteHeader({
-  containerId,
-  className,
-  children,
-}: {
-  containerId: string;
-  className: string;
-  children: React.ReactNode;
-}) {
-  const { setNodeRef, isOver } = useDroppable({ id: containerId });
-  return (
-    <div
-      ref={setNodeRef}
-      className={`border border-stone-200 px-3 py-2 ${className} ${
-        isOver ? "ring-2 ring-inset ring-koopje-orange/60" : ""
-      }`}
-    >
-      {children}
     </div>
   );
 }
@@ -399,32 +399,26 @@ export default function LijstSjoerd({
   const hasSlots = orders.some(
     (o) => o.meenemen_in_planning === true && String(o.aankomsttijd_slot ?? "").trim() !== ""
   );
-  const dragEnabled = hasSlots && sjoerdCount >= 1;
+  const reorderEnabled = hasSlots && sjoerdCount >= 1;
 
   const [containers, setContainers] = useState<Record<string, string[]>>(() =>
     groupsToContainers(groups)
   );
-  const containersRef = useRef(containers);
-  const [activeId, setActiveId] = useState<string | null>(null);
   const [recalculating, setRecalculating] = useState(false);
   const [reorderError, setReorderError] = useState<string | null>(null);
-  const isDraggingRef = useRef(false);
 
   useEffect(() => {
-    containersRef.current = containers;
-  }, [containers]);
-
-  useEffect(() => {
-    if (!isDraggingRef.current) {
+    if (!recalculating) {
       setContainers(groupsToContainers(groups));
     }
-  }, [groups]);
+  }, [groups, recalculating]);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 6 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
-  );
+  const routeOptions = useMemo((): RouteOption[] => {
+    return groups.map((g) => ({
+      containerId: routeContainerId(g.routeNum),
+      label: g.routeNum != null ? `Route ${g.routeNum}` : "Overig",
+    }));
+  }, [groups]);
 
   const submitReorder = useCallback(
     async (nextContainers: Record<string, string[]>) => {
@@ -455,6 +449,7 @@ export default function LijstSjoerd({
             [data.error, data.detail].filter(Boolean).join(" — ") || "Herberekenen mislukt."
           );
         }
+        setContainers(nextContainers);
         onReorderComplete?.((data.updates ?? []) as ReorderUpdate[]);
       } catch (e) {
         setContainers(groupsToContainers(groups));
@@ -466,157 +461,37 @@ export default function LijstSjoerd({
     [defaultVertrektijd, groups, onReorderComplete]
   );
 
-  const handleDragStart = (event: DragStartEvent) => {
-    isDraggingRef.current = true;
-    setActiveId(String(event.active.id));
-    setReorderError(null);
-  };
-
-  const handleDragOver = (event: DragOverEvent) => {
-    const { active, over } = event;
-    if (!over) return;
-
-    setContainers((prev) => {
-      const activeContainer = findContainer(String(active.id), prev);
-      const overContainer =
-        findContainer(String(over.id), prev) ??
-        (String(over.id) in prev ? String(over.id) : null);
-
-      if (!activeContainer || !overContainer || activeContainer === overContainer) return prev;
-
-      const activeItems = [...(prev[activeContainer] ?? [])];
-      const overItems = [...(prev[overContainer] ?? [])];
-      const activeIndex = activeItems.indexOf(String(active.id));
-      if (activeIndex < 0) return prev;
-
-      const overIndex = overItems.indexOf(String(over.id));
-      const newIndex =
-        String(over.id) in prev
-          ? overItems.length
-          : overIndex >= 0
-            ? overIndex
-            : overItems.length;
-
-      const next = {
-        ...prev,
-        [activeContainer]: activeItems.filter((id) => id !== String(active.id)),
-        [overContainer]: [
-          ...overItems.slice(0, newIndex),
-          String(active.id),
-          ...overItems.slice(newIndex),
-        ],
-      };
-      containersRef.current = next;
-      return next;
-    });
-  };
-
-  const handleDragEnd = async (event: DragEndEvent) => {
-    isDraggingRef.current = false;
-    setActiveId(null);
-
-    const { active, over } = event;
-    if (!over) {
-      setContainers(groupsToContainers(groups));
-      return;
-    }
-
-    let nextContainers = { ...containersRef.current };
-    const activeContainer = findContainer(String(active.id), nextContainers);
-    const overContainer =
-      findContainer(String(over.id), nextContainers) ??
-      (String(over.id) in nextContainers ? String(over.id) : null);
-
-    if (!activeContainer || !overContainer) return;
-
-    if (activeContainer === overContainer) {
-      const items = nextContainers[activeContainer] ?? [];
-      const oldIndex = items.indexOf(String(active.id));
-      const newIndex = items.indexOf(String(over.id));
-      if (oldIndex >= 0 && newIndex >= 0 && oldIndex !== newIndex) {
-        nextContainers = {
-          ...nextContainers,
-          [activeContainer]: arrayMove(items, oldIndex, newIndex),
-        };
-        setContainers(nextContainers);
-        containersRef.current = nextContainers;
-      }
-    }
-
-    const before = groupsToContainers(groups);
-    if (JSON.stringify(before) !== JSON.stringify(nextContainers)) {
-      await submitReorder(nextContainers);
-    }
-  };
-
-  const handleDragCancel = () => {
-    isDraggingRef.current = false;
-    setActiveId(null);
-    setContainers(groupsToContainers(groups));
-  };
+  const applyReorder = useCallback(
+    async (next: Record<string, string[]> | null) => {
+      if (!next) return;
+      const before = groupsToContainers(groups);
+      if (JSON.stringify(before) === JSON.stringify(next)) return;
+      setContainers(next);
+      await submitReorder(next);
+    },
+    [groups, submitReorder]
+  );
 
   const totalCount = Object.values(containers).reduce((n, ids) => n + ids.length, 0);
   const showRouteHeaders = groups.some((g) => g.routeNum != null);
 
   const containerEntries = useMemo(() => {
-    const entries: { containerId: string; routeNum: number | null; orderIds: string[] }[] = [];
-    for (const g of groups) {
+    return groups.map((g) => {
       const containerId = routeContainerId(g.routeNum);
-      entries.push({
+      return {
         containerId,
         routeNum: g.routeNum,
         orderIds: containers[containerId] ?? [],
-      });
-    }
-    return entries;
+      };
+    });
   }, [groups, containers]);
-
-  const activeOrder = activeId ? orderById.get(activeId) : null;
-
-  const listInner = (
-    <div className="min-w-max">
-      <div
-        className={`grid ${GRID_COLS} border-b border-stone-200 bg-stone-100 text-xs font-medium text-stone-700`}
-      >
-        <div className="border border-stone-200 px-1 py-2 text-center">#</div>
-        {HEADERS.map((h) => (
-          <div key={h} className="whitespace-nowrap border border-stone-200 px-3 py-2">
-            {h}
-          </div>
-        ))}
-      </div>
-
-      {totalCount === 0 ? (
-        <p className="px-3 py-4 text-center text-sm text-stone-400">
-          Geen orders met meenemen = ja. Genereer eerst een route.
-        </p>
-      ) : (
-        containerEntries.map(({ containerId, routeNum, orderIds }) => {
-          const style = routeNum != null ? routeStyleForIndex(routeNum - 1) : null;
-          return (
-            <RouteGroupRows
-              key={containerId}
-              containerId={containerId}
-              routeNum={routeNum}
-              orderIds={orderIds}
-              style={style}
-              showRouteHeader={showRouteHeaders}
-              orderById={orderById}
-              dragEnabled={dragEnabled && !recalculating}
-              onPatch={onPatch}
-            />
-          );
-        })
-      )}
-    </div>
-  );
 
   return (
     <div className="space-y-2">
-      {dragEnabled && (
+      {reorderEnabled && (
         <p className="text-xs text-stone-500">
-          <strong>Vasthouden op een rij of adres</strong> en slepen om volgorde of route te wijzigen
-          (op telefoon: ~0,2 sec vasthouden). Tijdsloten worden herberekend via Google Maps.
+          Gebruik <strong>↑ ↓</strong> voor volgorde en het <strong>Route-menu</strong> om een adres
+          naar een andere bezorger te verplaatsen. Tijdsloten worden automatisch herberekend.
           {recalculating && (
             <span className="ml-2 font-medium text-koopje-orange">Bezig met herberekenen…</span>
           )}
@@ -629,95 +504,81 @@ export default function LijstSjoerd({
       <div
         className={`overflow-x-auto rounded-xl border-2 border-stone-200 bg-white shadow-sm ${recalculating ? "pointer-events-none opacity-70" : ""}`}
       >
-        {dragEnabled ? (
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragStart={handleDragStart}
-            onDragOver={handleDragOver}
-            onDragEnd={handleDragEnd}
-            onDragCancel={handleDragCancel}
+        <div className="min-w-max">
+          <div
+            className={`grid ${GRID_COLS} border-b border-stone-200 bg-stone-100 text-xs font-medium text-stone-700`}
           >
-            {listInner}
-            <DragOverlay dropAnimation={null}>
-              {activeOrder ? (
-                <div className="max-w-sm rounded-lg border-2 border-koopje-orange bg-white px-4 py-3 text-sm shadow-xl">
-                  <p className="font-semibold text-koopje-black">
-                    {String(activeOrder.naam ?? "Order")}
-                  </p>
-                  <p className="mt-1 text-stone-600">{String(activeOrder.volledig_adres ?? "")}</p>
-                  <p className="mt-1 text-xs text-stone-400">
-                    {String(activeOrder.aankomsttijd_slot ?? "")}
-                  </p>
-                </div>
-              ) : null}
-            </DragOverlay>
-          </DndContext>
-        ) : (
-          listInner
-        )}
-      </div>
-    </div>
-  );
-}
+            {HEADERS.map((h) => (
+              <div
+                key={h}
+                className={`border border-stone-200 px-2 py-2 ${h === "#" ? "text-center" : ""}`}
+              >
+                {h}
+              </div>
+            ))}
+          </div>
 
-function RouteGroupRows({
-  containerId,
-  routeNum,
-  orderIds,
-  style,
-  showRouteHeader,
-  orderById,
-  dragEnabled,
-  onPatch,
-}: {
-  containerId: string;
-  routeNum: number | null;
-  orderIds: string[];
-  style: ReturnType<typeof routeStyleForIndex> | null;
-  showRouteHeader: boolean;
-  orderById: Map<string, AlleRittenOrder>;
-  dragEnabled: boolean;
-  onPatch: (id: string, fields: Record<string, unknown>) => void;
-}) {
-  return (
-    <div>
-      {showRouteHeader && routeNum != null && style && (
-        <DroppableRouteHeader
-          containerId={containerId}
-          className={`${style.bg} border-l-4 ${style.border}`}
-        >
-          <span className={`text-sm font-semibold ${style.header}`}>{style.label}</span>
-          <span className="ml-2 text-xs text-stone-500">
-            ({orderIds.length} order{orderIds.length === 1 ? "" : "s"})
-          </span>
-        </DroppableRouteHeader>
-      )}
-      {showRouteHeader && routeNum == null && orderIds.length > 0 && (
-        <DroppableRouteHeader containerId={containerId} className="bg-stone-50">
-          <span className="text-sm font-semibold text-stone-600">Overig</span>
-          <span className="ml-2 text-xs font-normal text-stone-500">
-            ({orderIds.length} order{orderIds.length === 1 ? "" : "s"})
-          </span>
-        </DroppableRouteHeader>
-      )}
-      <SortableContext items={orderIds} strategy={verticalListSortingStrategy}>
-        {orderIds.map((id, i) => {
-          const order = orderById.get(id);
-          if (!order) return null;
-          return (
-            <SortableOrderRow
-              key={id}
-              id={id}
-              order={order}
-              rowNum={i + 1}
-              rowClassName={style?.bg}
-              dragEnabled={dragEnabled}
-              onPatch={onPatch}
-            />
-          );
-        })}
-      </SortableContext>
+          {totalCount === 0 ? (
+            <p className="px-3 py-4 text-center text-sm text-stone-400">
+              Geen orders met meenemen = ja. Genereer eerst een route.
+            </p>
+          ) : (
+            containerEntries.map(({ containerId, routeNum, orderIds }) => {
+              const style = routeNum != null ? routeStyleForIndex(routeNum - 1) : null;
+              return (
+                <div key={containerId}>
+                  {showRouteHeaders && routeNum != null && style && (
+                    <div
+                      className={`border border-stone-200 border-l-4 px-3 py-2 ${style.bg} ${style.border}`}
+                    >
+                      <span className={`text-sm font-semibold ${style.header}`}>{style.label}</span>
+                      <span className="ml-2 text-xs text-stone-500">
+                        ({orderIds.length} order{orderIds.length === 1 ? "" : "s"})
+                      </span>
+                    </div>
+                  )}
+                  {showRouteHeaders && routeNum == null && orderIds.length > 0 && (
+                    <div className="border border-stone-200 bg-stone-50 px-3 py-2">
+                      <span className="text-sm font-semibold text-stone-600">Overig</span>
+                      <span className="ml-2 text-xs font-normal text-stone-500">
+                        ({orderIds.length} order{orderIds.length === 1 ? "" : "s"})
+                      </span>
+                    </div>
+                  )}
+                  {orderIds.map((orderId, i) => {
+                    const order = orderById.get(orderId);
+                    if (!order) return null;
+                    return (
+                      <OrderRow
+                        key={orderId}
+                        order={order}
+                        rowNum={i + 1}
+                        rowClassName={style?.bg}
+                        reorderEnabled={reorderEnabled}
+                        routeOptions={routeOptions}
+                        currentContainerId={containerId}
+                        busy={recalculating}
+                        onPatch={onPatch}
+                        canMoveUp={i > 0}
+                        canMoveDown={i < orderIds.length - 1}
+                        onMoveUp={() =>
+                          applyReorder(moveWithinContainer(containers, orderId, "up"))
+                        }
+                        onMoveDown={() =>
+                          applyReorder(moveWithinContainer(containers, orderId, "down"))
+                        }
+                        onChangeRoute={(targetId) =>
+                          applyReorder(moveToContainer(containers, orderId, targetId))
+                        }
+                      />
+                    );
+                  })}
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
     </div>
   );
 }
