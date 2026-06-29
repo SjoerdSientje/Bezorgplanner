@@ -327,6 +327,7 @@ function moveToContainer(
 type ReorderUpdate = {
   id: string;
   route_nummer: number | null;
+  rit_nummer: number;
   aankomsttijd_slot: string;
 };
 
@@ -646,14 +647,9 @@ export default function LijstSjoerd({
   }, [containers]);
 
   useEffect(() => {
-    if (touchReorder) {
-      if (!recalculating) setContainers(groupsToContainers(groups));
-      return;
-    }
-    if (!isDraggingRef.current) {
-      setContainers(groupsToContainers(groups));
-    }
-  }, [groups, recalculating, touchReorder]);
+    if (recalculating || isDraggingRef.current) return;
+    setContainers(groupsToContainers(groups));
+  }, [groups, recalculating]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -674,6 +670,11 @@ export default function LijstSjoerd({
             orderIds,
             vertrektijd: vertrektijden[rn] ?? defaultVertrektijd,
           };
+        })
+        .sort((a, b) => {
+          const na = a.routeNummer ?? 9999;
+          const nb = b.routeNummer ?? 9999;
+          return na - nb;
         });
 
       setRecalculating(true);
@@ -690,6 +691,8 @@ export default function LijstSjoerd({
             [data.error, data.detail].filter(Boolean).join(" — ") || "Herberekenen mislukt."
           );
         }
+        setContainers(nextContainers);
+        containersRef.current = nextContainers;
         onReorderComplete?.((data.updates ?? []) as ReorderUpdate[]);
       } catch (e) {
         setContainers(groupsToContainers(groups));

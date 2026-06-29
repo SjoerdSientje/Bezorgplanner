@@ -187,6 +187,7 @@ export async function POST(request: NextRequest) {
       updates: updates.map((u) => ({
         id: u.id,
         route_nummer: u.route_nummer,
+        rit_nummer: u.rit_nummer,
         aankomsttijd_slot: u.aankomsttijd_slot,
       })),
     });

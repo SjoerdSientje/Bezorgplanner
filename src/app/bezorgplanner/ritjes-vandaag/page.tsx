@@ -108,12 +108,24 @@ export default function RitjesVandaagPage() {
   );
 
   const handleReorderComplete = useCallback(
-    (updates: Array<{ id: string; route_nummer: number | null; aankomsttijd_slot: string }>) => {
+    (
+      updates: Array<{
+        id: string;
+        route_nummer: number | null;
+        rit_nummer?: number;
+        aankomsttijd_slot: string;
+      }>
+    ) => {
       setOrders((prev) =>
         prev.map((o) => {
           const u = updates.find((x) => x.id === String(o.id ?? ""));
           return u
-            ? { ...o, route_nummer: u.route_nummer, aankomsttijd_slot: u.aankomsttijd_slot }
+            ? {
+                ...o,
+                route_nummer: u.route_nummer,
+                rit_nummer: u.rit_nummer ?? (o as { rit_nummer?: number }).rit_nummer,
+                aankomsttijd_slot: u.aankomsttijd_slot,
+              }
             : o;
         })
       );

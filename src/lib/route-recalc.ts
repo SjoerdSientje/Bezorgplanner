@@ -43,10 +43,14 @@ export function recalculateStopsFromLegMinutes(
   }
 
   let current = toMinutes(vertrektijd);
+  let prevFinishMin: number | null = null;
   const results: RecalculatedStop[] = [];
 
   for (let i = 0; i < stops.length; i++) {
     current += legMinutes[i]!;
+    if (prevFinishMin != null && current < prevFinishMin) {
+      current = prevFinishMin;
+    }
     const arrivalTime = fromMinutes(current);
     const stop = stops[i]!;
     results.push({
@@ -54,7 +58,8 @@ export function recalculateStopsFromLegMinutes(
       arrivalTime,
       aankomsttijd_slot: maakTijdslot(arrivalTime, stop.bezorgtijd_voorkeur),
     });
-    current += SERVICE_TIME_MINUTES;
+    prevFinishMin = current + SERVICE_TIME_MINUTES;
+    current = prevFinishMin;
   }
 
   return results;
