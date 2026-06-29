@@ -32,6 +32,41 @@ import { routeStyleForIndex } from "@/lib/route-colors";
 const GRID_COLS =
   "grid-cols-[2.5rem_minmax(9rem,1fr)_minmax(7rem,0.8fr)_minmax(12rem,1.4fr)_minmax(9rem,1fr)_minmax(9rem,1fr)_minmax(9rem,1fr)]";
 
+/** Extra kolommen op touch/mobiel: pijltjes + route-dropdown i.p.v. slepen. */
+const GRID_COLS_TOUCH =
+  "grid-cols-[2.75rem_minmax(5.5rem,6.5rem)_2rem_minmax(9rem,1fr)_minmax(7rem,0.8fr)_minmax(12rem,1.4fr)_minmax(9rem,1fr)_minmax(9rem,1fr)_minmax(9rem,1fr)]";
+
+const HEADERS_TOUCH = [
+  "Volgorde",
+  "Route",
+  "#",
+  "Tijdslot",
+  "Voorkeurstijd",
+  "Adres",
+  "Model / Product",
+  "Opmerking klant",
+  "Email",
+];
+
+function useTouchReorder(): boolean {
+  const [touch, setTouch] = useState(false);
+
+  useEffect(() => {
+    const coarse = window.matchMedia("(hover: none) and (pointer: coarse)");
+    const narrow = window.matchMedia("(max-width: 768px)");
+    const update = () => setTouch(coarse.matches || narrow.matches);
+    update();
+    coarse.addEventListener("change", update);
+    narrow.addEventListener("change", update);
+    return () => {
+      coarse.removeEventListener("change", update);
+      narrow.removeEventListener("change", update);
+    };
+  }, []);
+
+  return touch;
+}
+
 function parseSlotMin(slot: string | null | undefined): number {
   const t = String(slot ?? "").split(" - ")[0].replace(".", ":").trim();
   const [h, m] = t.split(":").map((x) => parseInt(x, 10));
@@ -245,6 +280,50 @@ function findContainer(
   return null;
 }
 
+function moveWithinContainer(
+  containers: Record<string, string[]>,
+  orderId: string,
+  direction: "up" | "down"
+): Record<string, string[]> | null {
+  const containerId = findContainer(orderId, containers);
+  if (!containerId) return null;
+
+  const items = [...(containers[containerId] ?? [])];
+  const idx = items.indexOf(orderId);
+  if (idx < 0) return null;
+
+  const swapIdx = direction === "up" ? idx - 1 : idx + 1;
+  if (swapIdx < 0 || swapIdx >= items.length) return null;
+
+  [items[idx], items[swapIdx]] = [items[swapIdx]!, items[idx]!];
+  return { ...containers, [containerId]: items };
+}
+
+function moveToContainer(
+  containers: Record<string, string[]>,
+  orderId: string,
+  targetContainerId: string
+): Record<string, string[]> | null {
+  const sourceContainerId = findContainer(orderId, containers);
+  if (!sourceContainerId || sourceContainerId === targetContainerId) return null;
+  if (!(targetContainerId in containers)) return null;
+
+  const sourceItems = [...(containers[sourceContainerId] ?? [])];
+  const targetItems = [...(containers[targetContainerId] ?? [])];
+  const idx = sourceItems.indexOf(orderId);
+  if (idx < 0) return null;
+
+  sourceItems.splice(idx, 1);
+  const insertAt = Math.min(idx, targetItems.length);
+  targetItems.splice(insertAt, 0, orderId);
+
+  return {
+    ...containers,
+    [sourceContainerId]: sourceItems,
+    [targetContainerId]: targetItems,
+  };
+}
+
 type ReorderUpdate = {
   id: string;
   route_nummer: number | null;
@@ -354,6 +433,156 @@ function SortableOrderRow({
   );
 }
 
+type RouteOption = { containerId: string; label: string };
+
+function TouchOrderRow({
+  order,
+  rowNum,
+  rowClassName,
+  reorderEnabled,
+  routeOptions,
+  currentContainerId,
+  busy,
+  onPatch,
+  onMoveUp,
+  onMoveDown,
+  onChangeRoute,
+  canMoveUp,
+  canMoveDown,
+}: {
+  order: AlleRittenOrder;
+  rowNum: number;
+  rowClassName?: string;
+  reorderEnabled: boolean;
+  routeOptions: RouteOption[];
+  currentContainerId: string;
+  busy: boolean;
+  onPatch: (id: string, fields: Record<string, unknown>) => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onChangeRoute: (targetContainerId: string) => void;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+}) {
+  const id = String(order.id);
+
+  return (
+    <div
+      className={`grid ${GRID_COLS_TOUCH} border-b border-stone-100 last:border-0 ${
+        rowClassName ?? "bg-white even:bg-stone-50/50"
+      }`}
+    >
+      <div className="flex flex-col items-center justify-center gap-0.5 border border-stone-200 px-0.5 py-1">
+        {reorderEnabled ? (
+          <>
+            <button
+              type="button"
+              disabled={busy || !canMoveUp}
+              onClick={onMoveUp}
+              className="flex h-8 w-8 touch-manipulation items-center justify-center rounded text-stone-500 hover:bg-stone-100 hover:text-koopje-orange active:bg-stone-200 disabled:opacity-25"
+              aria-label="Eén plek omhoog"
+              title="Omhoog"
+            >
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              disabled={busy || !canMoveDown}
+              onClick={onMoveDown}
+              className="flex h-8 w-8 touch-manipulation items-center justify-center rounded text-stone-500 hover:bg-stone-100 hover:text-koopje-orange active:bg-stone-200 disabled:opacity-25"
+              aria-label="Eén plek omlaag"
+              title="Omlaag"
+            >
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+          </>
+        ) : (
+          <span className="text-xs text-stone-300">—</span>
+        )}
+      </div>
+
+      <div className="flex items-center border border-stone-200 px-1 py-1">
+        {reorderEnabled && routeOptions.length > 1 ? (
+          <select
+            disabled={busy}
+            value={currentContainerId}
+            onChange={(e) => onChangeRoute(e.target.value)}
+            className="w-full min-w-0 rounded border border-stone-200 bg-white px-1 py-1.5 text-xs text-koopje-black focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
+            aria-label="Route kiezen"
+          >
+            {routeOptions.map((opt) => (
+              <option key={opt.containerId} value={opt.containerId}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <span className="px-1 text-xs text-stone-400">—</span>
+        )}
+      </div>
+
+      <div className="flex items-center justify-center border border-stone-200 px-1 py-2 text-xs font-medium text-stone-500">
+        {rowNum}
+      </div>
+
+      <div className="border border-stone-200 px-3 py-2">
+        <EditableCell
+          value={String(order.aankomsttijd_slot ?? "")}
+          onSave={(v) => onPatch(id, { aankomsttijd_slot: v || null })}
+          placeholder="Klik om in te vullen"
+          fontMedium
+        />
+      </div>
+
+      <div className="border border-stone-200 px-3 py-2">
+        <EditableCell
+          value={String(order.bezorgtijd_voorkeur ?? "")}
+          onSave={(v) => onPatch(id, { bezorgtijd_voorkeur: v || null })}
+          placeholder="—"
+        />
+      </div>
+
+      <div className="border border-stone-200 px-3 py-2 min-w-0">
+        <EditableCell
+          value={String(order.volledig_adres ?? "")}
+          onSave={(v) => onPatch(id, { volledig_adres: v || null })}
+          placeholder="—"
+        />
+      </div>
+
+      <div className="border border-stone-200 p-0 min-w-0">
+        <ProductenCell
+          value={String(order.producten ?? "")}
+          lineItemsJson={(order.line_items_json as string | null | undefined) ?? null}
+          bestellingTotaalPrijs={
+            typeof order.bestelling_totaal_prijs === "number" ? order.bestelling_totaal_prijs : null
+          }
+          onSaveMulti={async (fields) => onPatch(id, fields)}
+        />
+      </div>
+
+      <div className="border border-stone-200 p-0 min-w-0">
+        <OpmerkingKlantCell
+          value={String(order.opmerkingen_klant ?? "")}
+          onSave={async (v) => onPatch(id, { opmerkingen_klant: v.trim() || null })}
+        />
+      </div>
+
+      <div className="border border-stone-200 px-3 py-2 min-w-0">
+        <EditableCell
+          value={String(order.email ?? "")}
+          onSave={(v) => onPatch(id, { email: v || null })}
+          placeholder="—"
+        />
+      </div>
+    </div>
+  );
+}
+
 function DroppableRouteHeader({
   containerId,
   className,
@@ -397,7 +626,8 @@ export default function LijstSjoerd({
   const hasSlots = orders.some(
     (o) => o.meenemen_in_planning === true && String(o.aankomsttijd_slot ?? "").trim() !== ""
   );
-  const dragEnabled = hasSlots && sjoerdCount >= 1;
+  const touchReorder = useTouchReorder();
+  const reorderEnabled = hasSlots && sjoerdCount >= 1;
 
   const [containers, setContainers] = useState<Record<string, string[]>>(() =>
     groupsToContainers(groups)
@@ -408,15 +638,22 @@ export default function LijstSjoerd({
   const [reorderError, setReorderError] = useState<string | null>(null);
   const isDraggingRef = useRef(false);
 
+  const dragEnabled = reorderEnabled && !touchReorder && !recalculating;
+  const buttonReorderEnabled = reorderEnabled && touchReorder && !recalculating;
+
   useEffect(() => {
     containersRef.current = containers;
   }, [containers]);
 
   useEffect(() => {
+    if (touchReorder) {
+      if (!recalculating) setContainers(groupsToContainers(groups));
+      return;
+    }
     if (!isDraggingRef.current) {
       setContainers(groupsToContainers(groups));
     }
-  }, [groups]);
+  }, [groups, recalculating, touchReorder]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -462,6 +699,25 @@ export default function LijstSjoerd({
       }
     },
     [defaultVertrektijd, groups, onReorderComplete]
+  );
+
+  const routeOptions = useMemo((): RouteOption[] => {
+    return groups.map((g) => ({
+      containerId: routeContainerId(g.routeNum),
+      label: g.routeNum != null ? `Route ${g.routeNum}` : "Overig",
+    }));
+  }, [groups]);
+
+  const applyReorder = useCallback(
+    async (next: Record<string, string[]> | null) => {
+      if (!next) return;
+      const before = groupsToContainers(groups);
+      if (JSON.stringify(before) === JSON.stringify(next)) return;
+      setContainers(next);
+      containersRef.current = next;
+      await submitReorder(next);
+    },
+    [groups, submitReorder]
   );
 
   const handleDragStart = (event: DragStartEvent) => {
@@ -571,7 +827,7 @@ export default function LijstSjoerd({
 
   const activeOrder = activeId ? orderById.get(activeId) : null;
 
-  const listInner = (
+  const dragListInner = (
     <div className="min-w-max">
       <div
         className={`grid ${GRID_COLS} border-b border-stone-200 bg-stone-100 text-xs font-medium text-stone-700`}
@@ -600,7 +856,7 @@ export default function LijstSjoerd({
               style={style}
               showRouteHeader={showRouteHeaders}
               orderById={orderById}
-              dragEnabled={dragEnabled && !recalculating}
+              dragEnabled={dragEnabled}
               onPatch={onPatch}
             />
           );
@@ -609,12 +865,99 @@ export default function LijstSjoerd({
     </div>
   );
 
+  const touchListInner = (
+    <div className="min-w-max">
+      <div
+        className={`grid ${GRID_COLS_TOUCH} border-b border-stone-200 bg-stone-100 text-xs font-medium text-stone-700`}
+      >
+        {HEADERS_TOUCH.map((h) => (
+          <div
+            key={h}
+            className={`border border-stone-200 px-2 py-2 ${h === "#" ? "text-center" : ""}`}
+          >
+            {h}
+          </div>
+        ))}
+      </div>
+
+      {totalCount === 0 ? (
+        <p className="px-3 py-4 text-center text-sm text-stone-400">
+          Geen orders met meenemen = ja. Genereer eerst een route.
+        </p>
+      ) : (
+        containerEntries.map(({ containerId, routeNum, orderIds }) => {
+          const style = routeNum != null ? routeStyleForIndex(routeNum - 1) : null;
+          return (
+            <div key={containerId}>
+              {showRouteHeaders && routeNum != null && style && (
+                <div
+                  className={`border border-stone-200 border-l-4 px-3 py-2 ${style.bg} ${style.border}`}
+                >
+                  <span className={`text-sm font-semibold ${style.header}`}>{style.label}</span>
+                  <span className="ml-2 text-xs text-stone-500">
+                    ({orderIds.length} order{orderIds.length === 1 ? "" : "s"})
+                  </span>
+                </div>
+              )}
+              {showRouteHeaders && routeNum == null && orderIds.length > 0 && (
+                <div className="border border-stone-200 bg-stone-50 px-3 py-2">
+                  <span className="text-sm font-semibold text-stone-600">Overig</span>
+                  <span className="ml-2 text-xs font-normal text-stone-500">
+                    ({orderIds.length} order{orderIds.length === 1 ? "" : "s"})
+                  </span>
+                </div>
+              )}
+              {orderIds.map((orderId, i) => {
+                const order = orderById.get(orderId);
+                if (!order) return null;
+                return (
+                  <TouchOrderRow
+                    key={orderId}
+                    order={order}
+                    rowNum={i + 1}
+                    rowClassName={style?.bg}
+                    reorderEnabled={buttonReorderEnabled}
+                    routeOptions={routeOptions}
+                    currentContainerId={containerId}
+                    busy={recalculating}
+                    onPatch={onPatch}
+                    canMoveUp={i > 0}
+                    canMoveDown={i < orderIds.length - 1}
+                    onMoveUp={() =>
+                      applyReorder(moveWithinContainer(containers, orderId, "up"))
+                    }
+                    onMoveDown={() =>
+                      applyReorder(moveWithinContainer(containers, orderId, "down"))
+                    }
+                    onChangeRoute={(targetId) =>
+                      applyReorder(moveToContainer(containers, orderId, targetId))
+                    }
+                  />
+                );
+              })}
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+
   return (
     <div className="space-y-2">
-      {dragEnabled && (
+      {reorderEnabled && (
         <p className="text-xs text-stone-500">
-          <strong>Vasthouden op een rij of adres</strong> en slepen om volgorde of route te wijzigen
-          (op telefoon: ~0,2 sec vasthouden). Tijdsloten worden herberekend via Google Maps.
+          {touchReorder ? (
+            <>
+              Gebruik <strong>↑ ↓</strong> voor volgorde en het <strong>Route-menu</strong> om een
+              adres naar een andere bezorger te verplaatsen. Tijdsloten worden herberekend via Google
+              Maps.
+            </>
+          ) : (
+            <>
+              <strong>Vasthouden op een rij of adres</strong> en slepen om volgorde of route te
+              wijzigen. Tijdsloten worden herberekend via Google Maps.
+            </>
+          )}
           {recalculating && (
             <span className="ml-2 font-medium text-koopje-orange">Bezig met herberekenen…</span>
           )}
@@ -627,7 +970,9 @@ export default function LijstSjoerd({
       <div
         className={`overflow-x-auto rounded-xl border-2 border-stone-200 bg-white shadow-sm ${recalculating ? "pointer-events-none opacity-70" : ""}`}
       >
-        {dragEnabled ? (
+        {touchReorder ? (
+          touchListInner
+        ) : dragEnabled || reorderEnabled ? (
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -636,7 +981,7 @@ export default function LijstSjoerd({
             onDragEnd={handleDragEnd}
             onDragCancel={handleDragCancel}
           >
-            {listInner}
+            {dragListInner}
             <DragOverlay dropAnimation={null}>
               {activeOrder ? (
                 <div className="max-w-sm rounded-lg border-2 border-koopje-orange bg-white px-4 py-3 text-sm shadow-xl">
@@ -652,7 +997,7 @@ export default function LijstSjoerd({
             </DragOverlay>
           </DndContext>
         ) : (
-          listInner
+          dragListInner
         )}
       </div>
     </div>
