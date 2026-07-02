@@ -419,14 +419,12 @@ export default function NieuweMarktplaatsOrderPage() {
                             label={product.type === "fiets" ? "Fietsnaam" : "Productnaam"}
                             required
                             value={product.naam}
-                            onChange={(naam, prijs, meta) => {
-                              const patch: Partial<ProductRegel> = {
+                            onChange={(naam, _prijs, meta) => {
+                              updateProduct(product.id, {
                                 naam,
                                 shopify_product_id: meta?.shopify_product_id ?? null,
                                 shopify_variant_id: meta?.shopify_variant_id ?? null,
-                              };
-                              if (prijs != null && prijs !== "") patch.prijs = prijs;
-                              updateProduct(product.id, patch);
+                              });
                             }}
                             placeholder={
                               product.type === "fiets"

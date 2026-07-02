@@ -93,7 +93,6 @@ export default function ProductAutocomplete({
     setShowSuggestions(false);
     setSuggestions([]);
     setActiveIndex(-1);
-    const prijs = item.price != null && item.price !== "" ? item.price : undefined;
     const meta: ProductAutocompleteMeta | undefined =
       item.shopify_product_id != null || item.shopify_variant_id != null
         ? {
@@ -101,6 +100,12 @@ export default function ProductAutocomplete({
             shopify_variant_id: item.shopify_variant_id,
           }
         : undefined;
+    const prijs =
+      searchSource === "shopify"
+        ? undefined
+        : item.price != null && item.price !== ""
+          ? item.price
+          : undefined;
     onChange(item.title, prijs, meta);
 
     if (prijs == null && searchSource === "inventory") {
