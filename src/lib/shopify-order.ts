@@ -488,6 +488,86 @@ function shouldIgnoreExtraProductName(name: string): boolean {
   return false;
 }
 
+const LEVERING_PROPERTY = "levering";
+const VOLLEDIG_RIJKLAAR_LEVERING = "Volledig rijklaar";
+
+function isVolledigRijklaarSurchargeName(name: string): boolean {
+  const n = name.trim().toLowerCase();
+  return n === "volledig rijklaar" || n === "rijklaar";
+}
+
+/** Order bevat losse Shopify-regel "Volledig rijklaar" (toeslag) → fiets is rijklaar, niet in doos. */
+export function orderHasVolledigRijklaarSurcharge(items: ShopifyLineItem[]): boolean {
+  return items.some((item) => {
+    if (isVolledigRijklaarSurchargeName(String(item.name ?? ""))) return true;
+    for (const p of item.properties ?? []) {
+      const pn = String(p.name ?? "").trim().toLowerCase();
+      const pv = String(p.value ?? "").trim().toLowerCase();
+      if (pn === "type" && pv.includes("volledig rijklaar")) return true;
+    }
+    return false;
+  });
+}
+
+function withLeveringOverride(
+  props: ShopifyLineItemProperty[],
+  levering: string
+): ShopifyLineItemProperty[] {
+  const next = (props ?? []).map((p) => ({ ...p }));
+  let found = false;
+  for (const p of next) {
+    if (String(p.name ?? "").trim().toLowerCase() === LEVERING_PROPERTY) {
+      p.value = levering;
+      found = true;
+      break;
+    }
+  }
+  if (!found) next.push({ name: "Levering", value: levering });
+  return next;
+}
+
+function shopifyPropsToStructured(
+  props: ShopifyLineItemProperty[]
+): { name: string; value: string }[] {
+  return props
+    .filter(
+      (p) =>
+        p.name &&
+        p.name !== EXCLUDE_PROPERTY_NAME &&
+        p.value != null &&
+        String(p.value).trim() !== ""
+    )
+    .map((p) => ({ name: p.name!, value: String(p.value!) }));
+}
+
+function fietsLeveringProperties(
+  rawProps: ShopifyLineItemProperty[],
+  montageProperties: { name: string; value: string }[],
+  volledigRijklaarOrder: boolean
+): { name: string; value: string }[] {
+  if (volledigRijklaarOrder) {
+    const structured = shopifyPropsToStructured(
+      withLeveringOverride(rawProps, VOLLEDIG_RIJKLAAR_LEVERING)
+    );
+    const names = new Set(structured.map((p) => p.name.toLowerCase()));
+    for (const m of montageProperties) {
+      if (!names.has(m.name.toLowerCase())) structured.push(m);
+    }
+    return structured;
+  }
+  if (montageProperties.length > 0) return montageProperties;
+  return shopifyPropsToStructured(rawProps);
+}
+
+function propsForDefaultItems(
+  rawProps: ShopifyLineItemProperty[],
+  volledigRijklaarOrder: boolean
+): ShopifyLineItemProperty[] {
+  return volledigRijklaarOrder
+    ? withLeveringOverride(rawProps, VOLLEDIG_RIJKLAAR_LEVERING)
+    : rawProps;
+}
+
 /**
  * Handmatig aangemaakte Shopify orders hebben vaak geen properties.
  * In dat geval staan extra's in de producttitel: '... rijklaar + kettingslot + voorrekje gemonteerd'
@@ -554,6 +634,7 @@ export function buildLineItemsJson(
   const items = order.line_items ?? [];
   if (!items.length) return null;
 
+  const volledigRijklaarOrder = orderHasVolledigRijklaarSurcharge(items);
   const structured: LineItemForJson[] = [];
 
   for (const item of items) {
@@ -562,6 +643,7 @@ export function buildLineItemsJson(
     const rawName = (item.name ?? "").trim();
     const rawProps = item.properties ?? [];
     const hasProps = rawProps.length > 0;
+    const effectiveProps = propsForDefaultItems(rawProps, volledigRijklaarOrder);
 
     // ── '&' in de titel → meerdere fietsen in één line item ──────────────
     if (isFiets && rawName.includes("&")) {
@@ -570,14 +652,17 @@ export function buildLineItemsJson(
 
       for (const bikeTitle of bikeTitles) {
         const parsed = parseExtrasFromManualBikeTitle(bikeTitle);
-        // Zelfde Levering-properties als op het Shopify line item (geldt voor alle fietsen op deze regel).
-        const defaultItems = getDefaultItemsVoorFiets(parsed.baseName, rawProps, rules);
+        const defaultItems = getDefaultItemsVoorFiets(parsed.baseName, effectiveProps, rules);
 
         structured.push({
           name: parsed.baseName,
           price: pricePerBike,
           isFiets: true,
-          properties: parsed.montageProperties,
+          properties: fietsLeveringProperties(
+            rawProps,
+            parsed.montageProperties,
+            volledigRijklaarOrder
+          ),
           defaultItems,
         });
 
@@ -597,13 +682,17 @@ export function buildLineItemsJson(
     // ── Handmatige order zonder properties ('+' in titel) ─────────────────
     if (isFiets && !hasProps) {
       const parsed = parseExtrasFromManualBikeTitle(rawName);
-      const defaultItems = getDefaultItemsVoorFiets(parsed.baseName, rawProps, rules);
+      const defaultItems = getDefaultItemsVoorFiets(parsed.baseName, effectiveProps, rules);
 
       structured.push({
         name: parsed.baseName,
         price: lineTotal,
         isFiets: true,
-        properties: parsed.montageProperties,
+        properties: fietsLeveringProperties(
+          rawProps,
+          parsed.montageProperties,
+          volledigRijklaarOrder
+        ),
         defaultItems,
       });
 
@@ -622,19 +711,11 @@ export function buildLineItemsJson(
 
     // ── Reguliere Shopify order met properties ────────────────────────────
     const properties = isFiets
-      ? rawProps
-          .filter(
-            (p) =>
-              p.name &&
-              p.name !== EXCLUDE_PROPERTY_NAME &&
-              p.value != null &&
-              String(p.value).trim() !== ""
-          )
-          .map((p) => ({ name: p.name!, value: String(p.value!) }))
+      ? fietsLeveringProperties(rawProps, [], volledigRijklaarOrder)
       : [];
 
     const defaultItems = isFiets
-      ? getDefaultItemsVoorFiets(rawName, rawProps, rules)
+      ? getDefaultItemsVoorFiets(rawName, effectiveProps, rules)
       : [];
 
     structured.push({
