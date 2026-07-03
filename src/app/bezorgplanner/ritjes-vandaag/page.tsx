@@ -20,7 +20,7 @@ import {
   sortRoutesTabOrders,
   type RitjesOrderFromApi,
 } from "@/lib/ritjes-mapping";
-import { getAmsterdamCalendarDate } from "@/lib/planning-date";
+import { comparePlanningDatumKeys, planningDatumGroupLabel } from "@/lib/planning-date";
 import StuurAppjesButton from "@/components/StuurAppjesButton";
 
 function normalizeToE164(input: string): string | null {
@@ -222,7 +222,6 @@ export default function RitjesVandaagPage() {
   // Groepeer de Routes-tab op datum én route_nummer voor aparte secties.
   const routesGroups = useMemo(() => {
     if (activeTab !== "morgen") return null;
-    const todayKey = getAmsterdamCalendarDate(0);
 
     // Bouw positiemap: elke positie in visibleRows.orders
     const datumMap = new Map<string, number[]>();
@@ -234,9 +233,9 @@ export default function RitjesVandaagPage() {
     }
 
     return Array.from(datumMap.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
+      .sort(([a], [b]) => comparePlanningDatumKeys(a, b))
       .map(([datum, positions]) => {
-        const isToday = datum === todayKey;
+        const { isToday } = planningDatumGroupLabel(datum);
         const hasRoutes = positions.some((pos) => {
           const rn = Number((visibleRows.orders[pos] as Record<string, unknown>).route_nummer ?? 0);
           return rn > 0;
@@ -591,17 +590,17 @@ export default function RitjesVandaagPage() {
           ) : activeTab === "morgen" && routesGroups ? (
             // ── Routes-tab: gegroepeerd op datum én route ─────────────────────
             <div className="space-y-8">
-              {routesGroups.map((group) => (
+              {routesGroups.map((group) => {
+                const { text: groupTitle, isToday } = planningDatumGroupLabel(group.datum);
+                return (
                 <div key={group.datum}>
                   {routesGroups.length > 1 && (
                     <h2
                       className={`mb-4 text-base font-semibold ${
-                        group.isToday ? "text-koopje-black" : "text-koopje-orange"
+                        isToday ? "text-koopje-black" : "text-koopje-orange"
                       }`}
                     >
-                      {group.isToday
-                        ? `Ritjes vandaag — ${group.datum}`
-                        : `Ritjes voor morgen — ${group.datum}`}
+                      {groupTitle}
                     </h2>
                   )}
                   <div className="space-y-6">
@@ -647,7 +646,8 @@ export default function RitjesVandaagPage() {
                     })}
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           ) : null}
         </div>

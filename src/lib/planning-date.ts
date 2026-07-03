@@ -48,6 +48,40 @@ export function getAmsterdamCalendarDate(offsetDays = 0): string {
 }
 
 /**
+ * Sorteer planning-datums: vandaag eerst, daarna toekomst oplopend, verleden als laatste.
+ */
+export function comparePlanningDatumKeys(a: string, b: string): number {
+  const today = getAmsterdamCalendarDate(0);
+  const tier = (d: string) => {
+    if (!d || d === "9999-99-99" || d === "onbekend") return 3;
+    if (d === today) return 0;
+    if (d > today) return 1;
+    return 2;
+  };
+  const ta = tier(a);
+  const tb = tier(b);
+  if (ta !== tb) return ta - tb;
+  return a.localeCompare(b);
+}
+
+export function planningDatumGroupLabel(datum: string): {
+  text: string;
+  isToday: boolean;
+  isTomorrow: boolean;
+} {
+  const today = getAmsterdamCalendarDate(0);
+  const tomorrow = getAmsterdamCalendarDate(1);
+  const isToday = datum === today;
+  const isTomorrow = datum === tomorrow;
+  let text: string;
+  if (isToday) text = `Ritjes vandaag — ${datum}`;
+  else if (isTomorrow) text = `Ritjes voor morgen — ${datum}`;
+  else if (datum < today) text = `Eerdere planning — ${datum}`;
+  else text = `Ritjes — ${datum}`;
+  return { text, isToday, isTomorrow };
+}
+
+/**
  * Of deze order bij `targetDate` (YYYY-MM-DD) hoort voor planning-goedkeuren.
  * Bij een tweede batch (ná actieve rit) mag alleen morgen-datum worden meegenomen —
  * daarom niet de losse „vandaag of morgen”-bundel gebruiken voor targetDate=morgen.

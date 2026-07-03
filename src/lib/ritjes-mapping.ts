@@ -2,7 +2,7 @@
  * Mapping tussen Ritjes voor vandaag tabelkolommen en order-velden (API/supabase).
  */
 
-import { getAmsterdamCalendarDate } from "@/lib/planning-date";
+import { comparePlanningDatumKeys } from "@/lib/planning-date";
 
 export const RITJES_HEADERS = [
   "Order Nummer",
@@ -93,15 +93,11 @@ export function sortRitjesOrdersNewestFirst<T extends RitjesOrderFromApi>(orders
  * Tab Routes: vandaag-lopende planning eerst, daarna morgen; binnen groep op aankomsttijd.
  */
 export function sortRoutesTabOrders<T extends RitjesOrderFromApi>(orders: T[]): T[] {
-  const todayKey = getAmsterdamCalendarDate(0);
-
   return [...orders].sort((a, b) => {
     const da = String(a.planning_slot_datum ?? "9999-99-99");
     const db = String(b.planning_slot_datum ?? "9999-99-99");
-    const rankA = da === todayKey ? 0 : 1;
-    const rankB = db === todayKey ? 0 : 1;
-    if (rankA !== rankB) return rankA - rankB;
-    if (da !== db) return da.localeCompare(db);
+    const dateCmp = comparePlanningDatumKeys(da, db);
+    if (dateCmp !== 0) return dateCmp;
     // Binnen dezelfde datum: groeperen op route_nummer (0 = geen route → achteraan)
     const ra = Number((a as Record<string, unknown>).route_nummer ?? 0);
     const rb = Number((b as Record<string, unknown>).route_nummer ?? 0);

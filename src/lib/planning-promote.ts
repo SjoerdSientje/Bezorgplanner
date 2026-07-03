@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getPlanningDateForGoedkeuren } from "@/lib/planning-date";
+import { getPlanningDateForGoedkeuren, comparePlanningDatumKeys } from "@/lib/planning-date";
 
 function getTodayAmsterdam(): string {
   const now = new Date();
@@ -47,28 +47,41 @@ export async function getTargetPlanningDate(
 
 /**
  * Gebruikt door "Stuur appjes → Nieuwe order":
- * Voeg toe aan de VROEGSTE (huidige/actieve) bestaande planning-batch.
- * Zo gaat een nieuw order bij een lopende planning voor vandaag mee in die planning,
- * ook als morgen al is goedgekeurd.
- * Als er geen actieve slots zijn → planningDate (zelfde 18:00-rollover als route/ritjes).
+ * - Lopende planning vandaag + al een batch morgen → nieuwe order naar morgen.
+ * - Alleen lopende planning (geen morgen-batch) → naar die actieve planning.
+ * - Geen actieve slots → planningDate (18:00-rollover).
  */
 export async function getLatestOrNewPlanningDate(
   ownerEmail: string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: SupabaseClient<any, any, any>
 ): Promise<string> {
-  const { data: earliestSlot } = await supabase
+  const today = getTodayAmsterdam();
+  const tomorrow = getTomorrowAmsterdam();
+
+  const { data: slots } = await supabase
     .from("planning_slots")
     .select("datum")
     .eq("owner_email", ownerEmail)
-    .neq("status", "afgerond")
-    .order("datum", { ascending: true })
-    .limit(1)
-    .maybeSingle();
+    .neq("status", "afgerond");
 
-  if (earliestSlot?.datum) {
-    return String(earliestSlot.datum);
-  }
+  const dates = new Set(
+    (slots ?? [])
+      .map((s) => String((s as { datum: string }).datum ?? "").trim())
+      .filter(Boolean)
+  );
+
+  const hasToday = dates.has(today);
+  const hasTomorrow = dates.has(tomorrow);
+
+  if (hasToday && hasTomorrow) return tomorrow;
+  if (hasToday) return today;
+  if (hasTomorrow) return tomorrow;
+
+  const sorted = Array.from(dates).sort(comparePlanningDatumKeys);
+  const futureOrToday = sorted.filter((d) => d >= today);
+  if (futureOrToday.length > 0) return futureOrToday[0];
+
   const { date } = getPlanningDateForGoedkeuren();
   return date;
 }

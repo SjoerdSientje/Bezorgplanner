@@ -6,6 +6,7 @@ import Header from "@/components/Header";
 import ProductenCell from "@/components/ProductenCell";
 import OpmerkingKlantCell from "@/components/OpmerkingKlantCell";
 import { compareOrdersOnRoute } from "@/lib/ritjes-mapping";
+import { comparePlanningDatumKeys, planningDatumGroupLabel } from "@/lib/planning-date";
 const PLANNING_HEADERS = [
   "Order nummer",
   "Naam",
@@ -441,7 +442,7 @@ export default function PlanningPage() {
     };
 
     const out: DatumGroup[] = Array.from(map.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
+      .sort(([a], [b]) => comparePlanningDatumKeys(a, b))
       .map(([datum, datumRows]) => {
         const sorted = [...datumRows].sort(sortOnRoute);
         const hasParallelRoutes = sorted.some(
@@ -510,7 +511,9 @@ export default function PlanningPage() {
               Geen planning. Keur eerst de planning goed op Ritjes voor vandaag.
             </p>
           ) : (
-            grouped.map((group, idx) => (
+            grouped.map((group) => {
+              const { text: datumLabel, isToday } = planningDatumGroupLabel(group.datum);
+              return (
               <div key={group.datum} className="space-y-8">
                 {group.sections.map((section, sidx) => (
                   <PlanningTabel
@@ -521,9 +524,7 @@ export default function PlanningPage() {
                         ? `Route ${section.routeNum} — ${group.datum}`
                         : group.sections.length > 1
                           ? `Overig — ${group.datum}`
-                          : idx === 0
-                            ? `Huidige planning — ${group.datum}`
-                            : `Ritjes voor morgen — ${group.datum}`
+                          : datumLabel
                     }
                     labelColor={
                       section.routeNum != null
@@ -536,7 +537,7 @@ export default function PlanningPage() {
                               : section.routeNum === 4
                                 ? "text-amber-800"
                                 : "text-rose-800"
-                        : idx === 0
+                        : isToday
                           ? "text-koopje-black"
                           : "text-koopje-orange"
                     }
@@ -544,7 +545,8 @@ export default function PlanningPage() {
                   />
                 ))}
               </div>
-            ))
+              );
+            })
           )}
         </div>
       </main>
