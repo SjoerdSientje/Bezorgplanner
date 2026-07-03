@@ -4,6 +4,7 @@ import { useCallback, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { getAmsterdamCalendarDate } from "@/lib/planning-date";
 import { routeStyleForIndex } from "@/lib/route-colors";
+import { isStuurAppjesEligibleOrder } from "@/lib/stuur-appjes-eligibility";
 
 type ActiveRouteOption = {
   routeNummer: number;
@@ -237,7 +238,7 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
     if (!ritjesRes.ok) throw new Error(String(ritjesJson.error ?? "Orders ophalen mislukt."));
 
     const allOrders: AppjesOrder[] = (ritjesJson.orders ?? [])
-      .filter((o: Record<string, unknown>) => String(o?.aankomsttijd_slot ?? "").trim() !== "")
+      .filter((o: Record<string, unknown>) => isStuurAppjesEligibleOrder(o))
       .map((o: Record<string, unknown>) => mergeWithCurrent(rawToOrder(o)));
 
     // Fetch planning to know which orders are already in planning / ritjes voor morgen

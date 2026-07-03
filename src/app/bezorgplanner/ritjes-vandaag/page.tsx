@@ -502,7 +502,11 @@ export default function RitjesVandaagPage() {
               onSlotsUpdated={fetchRitjes}
             />
             <StuurAppjesButton
-              huidigeRitjesOrders={visibleRows.orders as any}
+              huidigeRitjesOrders={
+                orders.filter(
+                  (o) => o.in_morgen_tab !== true && o.meenemen_in_planning === true
+                ) as any
+              }
               onBeforeOpen={fetchRitjes}
             />
             <button

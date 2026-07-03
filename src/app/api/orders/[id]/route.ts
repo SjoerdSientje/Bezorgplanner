@@ -182,6 +182,24 @@ export async function PATCH(
       );
     }
 
+    if (updates.meenemen_in_planning === false) {
+      await supabase
+        .from("orders")
+        .update({
+          aankomsttijd_slot: null,
+          rit_nummer: null,
+          route_nummer: null,
+        })
+        .eq("owner_email", ownerEmail)
+        .eq("id", id);
+      await supabase
+        .from("planning_slots")
+        .delete()
+        .eq("owner_email", ownerEmail)
+        .eq("order_id", id)
+        .neq("status", "afgerond");
+    }
+
     // Als aankomsttijd_slot is aangepast, sync ook planning_slots.aankomsttijd
     // zodat de Planning-pagina direct het nieuwe tijdslot toont.
     if ("aankomsttijd_slot" in updates) {

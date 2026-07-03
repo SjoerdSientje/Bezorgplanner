@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { sendWhatsAppByEvent } from "@/lib/whatsapp";
 import { requireAccountEmail } from "@/lib/account";
 import { getLatestOrNewPlanningDate } from "@/lib/planning-promote";
+import { isStuurAppjesEligibleOrder } from "@/lib/stuur-appjes-eligibility";
 
 function mergeSlotDatums(rows: Array<{ order_id: string | null; datum: string | null }>) {
   const m = new Map<string, string>();
@@ -59,7 +60,7 @@ export async function POST(request: NextRequest) {
     const { data: ordersMeta } = await supabase
       .from("orders")
       .select(
-        "id, status, type, betaald, mp_tags, datum, opmerkingen_klant, bezorgtijd_voorkeur, bestelling_totaal_prijs"
+        "id, status, type, betaald, mp_tags, datum, opmerkingen_klant, bezorgtijd_voorkeur, bestelling_totaal_prijs, meenemen_in_planning, aankomsttijd_slot"
       )
       .eq("owner_email", ownerEmail)
       .in(
@@ -69,6 +70,20 @@ export async function POST(request: NextRequest) {
     const metaById = new Map(
       (ordersMeta ?? []).map((o: Record<string, unknown>) => [String(o.id), o])
     );
+
+    const ineligible = selected.filter((o) => {
+      const meta = metaById.get(o.order_id) as Record<string, unknown> | undefined;
+      return !meta || !isStuurAppjesEligibleOrder(meta);
+    });
+    if (ineligible.length > 0) {
+      const nums = ineligible.map((o) => o.order_nummer || o.order_id).join(", ");
+      return NextResponse.json(
+        {
+          error: `Deze orders zijn niet geschikt voor appjes (geen meenemen in planning of geen geldig tijdslot): ${nums}`,
+        },
+        { status: 400 }
+      );
+    }
 
     // Sync handmatig aangepaste tijdslot terug naar bestaande planning_slots (voor "nieuw_tijdslot")
     for (const o of selected.filter((o) => o.section === "nieuw_tijdslot")) {

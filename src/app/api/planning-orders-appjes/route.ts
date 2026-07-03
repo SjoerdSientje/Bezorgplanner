@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { requireAccountEmail } from "@/lib/account";
+import { isStuurAppjesEligibleOrder } from "@/lib/stuur-appjes-eligibility";
 
 export const dynamic = "force-dynamic";
 
@@ -39,9 +40,7 @@ export async function GET(request: NextRequest) {
     }
 
     const rows = (ritjesOrders ?? [])
-      .filter(
-      (o: Record<string, unknown>) => String(o.aankomsttijd_slot ?? "").trim() !== ""
-    )
+      .filter((o: Record<string, unknown>) => isStuurAppjesEligibleOrder(o))
       .map((o: Record<string, unknown>, index: number) => {
         return {
           // slot_id is not used for selection anymore; keep API contract for frontend send payload.
