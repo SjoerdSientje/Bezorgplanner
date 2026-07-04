@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AUTH_COOKIE, isAllowedEmail, normalizeEmail } from "@/lib/auth-shared";
 
-const PUBLIC_PATHS = ["/login", "/reset-wachtwoord", "/scan"];
+const LOGIN_PUBLIC_PATHS = ["/login", "/reset-wachtwoord"];
+
+function isLoginPublicPath(pathname: string): boolean {
+  return LOGIN_PUBLIC_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`));
+}
 
 function isPublicPath(pathname: string): boolean {
-  return PUBLIC_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`));
+  return isLoginPublicPath(pathname) || pathname === "/scan" || pathname.startsWith("/scan/");
 }
 
 export function middleware(request: NextRequest) {
@@ -32,7 +36,7 @@ export function middleware(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  if (loggedIn && publicPath) {
+  if (loggedIn && isLoginPublicPath(pathname)) {
     const url = request.nextUrl.clone();
     url.pathname = "/";
     url.search = "";
