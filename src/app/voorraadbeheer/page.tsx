@@ -101,9 +101,8 @@ export default function VoorraadbeheerPage() {
   }, []);
 
   useEffect(() => {
-    load(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- alleen bij eerste mount syncen
-  }, []);
+    load(false);
+  }, [load]);
 
   useEffect(() => {
     if (!manageOpen || shopifyQuery.trim().length < 2) {
@@ -283,7 +282,9 @@ export default function VoorraadbeheerPage() {
               </Link>
               <div>
                 <h1 className="text-xl font-semibold text-koopje-black sm:text-2xl">Voorraadbeheer</h1>
-                <p className="text-sm text-koopje-black/60">Voorraad uit Shopify, handmatig bijstellen</p>
+                <p className="text-sm text-koopje-black/60">
+                  Lokale voorraad; sync Shopify-catalogus via knop rechtsboven
+                </p>
               </div>
             </div>
             <button
