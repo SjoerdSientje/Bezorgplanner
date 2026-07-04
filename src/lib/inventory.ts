@@ -8,12 +8,17 @@ import {
   type ShopifyAdminProduct,
   type ShopifyAdminProductVariant,
 } from "@/lib/shopify-admin";
-import type { ShopifyLineItem, ShopifyOrder } from "@/lib/shopify-order";
+import type { ShopifyLineItem, ShopifyOrder, LineItemForJson } from "@/lib/shopify-order";
+import { buildStructuredLineItems } from "@/lib/shopify-order";
 import { allAccountEmails, shopifyWebhookOrderAppliesToOwner } from "@/lib/account";
 import { buildInventoryStockKeyInfo, type InventoryStockKeyInfo } from "@/lib/inventory-stock-key";
+import type { ProductDefaultItemsRulesV1 } from "@/lib/product-default-items-rules";
+import { loadProductDefaultItemsRules } from "@/lib/product-rules-server";
 import {
+  getFamilyDealInventoryItems,
   isExcludedFromInventory,
   resolveBundleDeduction,
+  shouldSkipInventoryDeductionLineItem,
 } from "@/lib/inventory-rules";
 
 export type InventoryCategory = "fiets" | "onderdeel" | "overig";
@@ -422,6 +427,120 @@ export async function resolveCanonicalInventoryProductId(
   return pickPrimaryRow(rows, groupKey).id;
 }
 
+function normalizeDeductionName(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function mergeDeductionLineItems(items: LineItemForDeduction[]): LineItemForDeduction[] {
+  const map = new Map<string, LineItemForDeduction>();
+
+  for (const item of items) {
+    const name = String(item.name ?? "").trim();
+    if (!name) continue;
+    const key = normalizeDeductionName(name);
+    const qty = Math.max(1, Math.floor(Number(item.quantity ?? 1)));
+    const existing = map.get(key);
+
+    if (!existing) {
+      map.set(key, { ...item, name, quantity: qty });
+      continue;
+    }
+
+    existing.quantity = Math.max(1, Math.floor(Number(existing.quantity ?? 1))) + qty;
+    if (!existing.variant_id && item.variant_id) {
+      existing.product_id = item.product_id;
+      existing.variant_id = item.variant_id;
+    }
+  }
+
+  return Array.from(map.values());
+}
+
+function appendBikeDeductionItems(
+  out: LineItemForDeduction[],
+  row: {
+    name: string;
+    quantity: number;
+    product_id?: string | number | null;
+    variant_id?: string | number | null;
+    defaultItems: string[];
+  },
+  explicitOrderNames?: Set<string>
+): void {
+  out.push({
+    name: row.name,
+    quantity: row.quantity,
+    product_id: row.product_id ?? undefined,
+    variant_id: row.variant_id ?? undefined,
+  });
+
+  for (const defaultName of row.defaultItems) {
+    if (shouldSkipInventoryDeductionLineItem(defaultName)) continue;
+    if (explicitOrderNames?.has(normalizeDeductionName(defaultName))) continue;
+    out.push({ name: defaultName, quantity: 1 });
+  }
+
+  for (const familyName of getFamilyDealInventoryItems(row.name)) {
+    if (explicitOrderNames?.has(normalizeDeductionName(familyName))) continue;
+    out.push({ name: familyName, quantity: 1 });
+  }
+}
+
+/** Bouw volledige aftreklijst: fiets + standaardproducten + family-deal + extra's. */
+export function buildInventoryDeductionLineItems(
+  lineItems: ShopifyLineItem[],
+  rules: ProductDefaultItemsRulesV1
+): LineItemForDeduction[] {
+  if (!lineItems.length) return [];
+
+  const structured = buildStructuredLineItems({ line_items: lineItems }, rules);
+  const explicitOrderNames = new Set(
+    structured
+      .filter((row) => !row.isFiets && !shouldSkipInventoryDeductionLineItem(row.name))
+      .map((row) => normalizeDeductionName(row.name))
+  );
+  const out: LineItemForDeduction[] = [];
+
+  for (const row of structured) {
+    if (shouldSkipInventoryDeductionLineItem(row.name)) continue;
+
+    if (row.isFiets) {
+      appendBikeDeductionItems(out, row, explicitOrderNames);
+    } else {
+      out.push({
+        name: row.name,
+        quantity: row.quantity,
+        product_id: row.product_id ?? undefined,
+        variant_id: row.variant_id ?? undefined,
+      });
+    }
+  }
+
+  return mergeDeductionLineItems(out);
+}
+
+function buildInventoryDeductionFromStructuredJson(
+  structured: LineItemForJson[]
+): LineItemForDeduction[] {
+  const out: LineItemForDeduction[] = [];
+
+  for (const row of structured) {
+    if (shouldSkipInventoryDeductionLineItem(row.name)) continue;
+
+    if (row.isFiets) {
+      appendBikeDeductionItems(out, {
+        name: row.name,
+        quantity: 1,
+        defaultItems: row.defaultItems,
+      });
+    } else {
+      out.push({ name: row.name, quantity: 1 });
+    }
+  }
+
+  return mergeDeductionLineItems(out);
+}
+
 export async function applyInventoryMutation(
   supabase: SupabaseClient,
   params: {
@@ -579,17 +698,14 @@ export async function deductInventoryForShopifyOrder(
   const shopifyOrderId = String(order.id ?? "").trim();
   if (!shopifyOrderId) return;
 
-  const lineItems: LineItemForDeduction[] = (order.line_items ?? []).map((li) => ({
-    name: li.name,
-    quantity: li.quantity,
-    product_id: (li as ShopifyLineItem & { product_id?: number }).product_id,
-    variant_id: (li as ShopifyLineItem & { variant_id?: number }).variant_id,
-  }));
-
-  if (lineItems.length === 0) return;
+  const rawItems = order.line_items ?? [];
+  if (rawItems.length === 0) return;
 
   for (const ownerEmail of allAccountEmails()) {
     if (!shopifyWebhookOrderAppliesToOwner(ownerEmail, order.note)) continue;
+
+    const rules = await loadProductDefaultItemsRules(supabase, ownerEmail);
+    const lineItems = buildInventoryDeductionLineItems(rawItems, rules);
 
     await deductInventoryForLineItems(supabase, {
       ownerEmail,
@@ -614,19 +730,9 @@ export async function deductInventoryForMpOrder(
 
   if (lineItems.length === 0 && lineItemsJson) {
     try {
-      const parsed = JSON.parse(lineItemsJson) as {
-        name?: string;
-        quantity?: number;
-        variant_id?: string | number;
-        product_id?: string | number;
-      }[];
+      const parsed = JSON.parse(lineItemsJson) as LineItemForJson[];
       if (Array.isArray(parsed)) {
-        lineItems = parsed.map((li) => ({
-          name: li.name,
-          quantity: li.quantity ?? 1,
-          variant_id: li.variant_id,
-          product_id: li.product_id,
-        }));
+        lineItems = buildInventoryDeductionFromStructuredJson(parsed);
       }
     } catch {
       // fallback below

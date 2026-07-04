@@ -428,6 +428,27 @@ export interface LineItemForJson {
   defaultItems: string[];
 }
 
+/** Zelfde als LineItemForJson, met Shopify variant/product voor voorraadaftrek. */
+export type StructuredLineItem = LineItemForJson & {
+  product_id?: string | number | null;
+  variant_id?: string | number | null;
+  quantity: number;
+};
+
+function getShopifyLineItemQuantity(item: ShopifyLineItem): number {
+  const q = item.quantity;
+  if (q == null) return 1;
+  return Math.max(1, Math.round(typeof q === "number" ? q : parseFloat(String(q))) || 1);
+}
+
+function shopifySourceIds(item: ShopifyLineItem): Pick<StructuredLineItem, "product_id" | "variant_id" | "quantity"> {
+  return {
+    product_id: item.product_id,
+    variant_id: item.variant_id,
+    quantity: getShopifyLineItemQuantity(item),
+  };
+}
+
 function parseMoney(v: unknown): number {
   if (v == null || v === "") return 0;
   const n = typeof v === "string" ? parseFloat(v) : Number(v);
@@ -624,18 +645,17 @@ function getDefaultItemsVoorFiets(
 }
 
 /**
- * Bouw JSON voor de producten-popup: per zichtbare regel het **regeltotaal** (Shopify:
- * eenheidsprijs × quantity − regelkorting), niet alleen de eenheidsprijs.
+ * Zelfde structuur als buildLineItemsJson, met variant/product-id voor voorraadaftrek.
  */
-export function buildLineItemsJson(
-  order: ShopifyOrder,
+export function buildStructuredLineItems(
+  order: Pick<ShopifyOrder, "line_items">,
   rules: ProductDefaultItemsRulesV1 = DEFAULT_PRODUCT_RULES_V1
-): string | null {
+): StructuredLineItem[] {
   const items = order.line_items ?? [];
-  if (!items.length) return null;
+  if (!items.length) return [];
 
   const volledigRijklaarOrder = orderHasVolledigRijklaarSurcharge(items);
-  const structured: LineItemForJson[] = [];
+  const structured: StructuredLineItem[] = [];
 
   for (const item of items) {
     const lineTotal = getShopifyLineItemLineTotal(item);
@@ -644,6 +664,7 @@ export function buildLineItemsJson(
     const rawProps = item.properties ?? [];
     const hasProps = rawProps.length > 0;
     const effectiveProps = propsForDefaultItems(rawProps, volledigRijklaarOrder);
+    const source = shopifySourceIds(item);
 
     // ── '&' in de titel → meerdere fietsen in één line item ──────────────
     if (isFiets && rawName.includes("&")) {
@@ -664,6 +685,7 @@ export function buildLineItemsJson(
             volledigRijklaarOrder
           ),
           defaultItems,
+          ...source,
         });
 
         for (const extra of parsed.extraItems) {
@@ -673,6 +695,7 @@ export function buildLineItemsJson(
             isFiets: false,
             properties: [],
             defaultItems: [],
+            quantity: 1,
           });
         }
       }
@@ -694,6 +717,7 @@ export function buildLineItemsJson(
           volledigRijklaarOrder
         ),
         defaultItems,
+        ...source,
       });
 
       for (const extra of parsed.extraItems) {
@@ -703,6 +727,7 @@ export function buildLineItemsJson(
           isFiets: false,
           properties: [],
           defaultItems: [],
+          quantity: 1,
         });
       }
 
@@ -724,13 +749,29 @@ export function buildLineItemsJson(
       isFiets,
       properties,
       defaultItems,
+      ...source,
     });
   }
 
-  // Fietsen eerst, daarna accessoires
   structured.sort((a, b) => Number(b.isFiets) - Number(a.isFiets));
+  return structured;
+}
 
-  return JSON.stringify(structured);
+/**
+ * Bouw JSON voor de producten-popup: per zichtbare regel het **regeltotaal** (Shopify:
+ * eenheidsprijs × quantity − regelkorting), niet alleen de eenheidsprijs.
+ */
+export function buildLineItemsJson(
+  order: ShopifyOrder,
+  rules: ProductDefaultItemsRulesV1 = DEFAULT_PRODUCT_RULES_V1
+): string | null {
+  const structured = buildStructuredLineItems(order, rules);
+  if (!structured.length) return null;
+
+  const jsonRows: LineItemForJson[] = structured.map(
+    ({ product_id: _p, variant_id: _v, quantity: _q, ...row }) => row
+  );
+  return JSON.stringify(jsonRows);
 }
 
 /** Datum uit created_at (YYYY-MM-DD) */

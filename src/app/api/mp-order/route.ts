@@ -10,7 +10,7 @@ import {
 import type { ProductDefaultItemsRulesV1 } from "@/lib/product-default-items-rules";
 import { loadProductDefaultItemsRules } from "@/lib/product-rules-server";
 import { isDatumOpmerkingVandaagOfMorgen } from "@/lib/planning-date";
-import { deductInventoryForMpOrder, type LineItemForDeduction } from "@/lib/inventory";
+import { deductInventoryForMpOrder, buildInventoryDeductionLineItems } from "@/lib/inventory";
 
 /** Extraheer fietsmodel: 'V20 PRO Fatbike 2026 + ringslot | Combi-Deal 🔥' → 'V20 PRO' */
 function extractModel(producten: string | null): string | null {
@@ -57,11 +57,8 @@ function parsePrijs(v: string | number | null | undefined): number {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-function buildMpLineItemsJson(
-  productenLijst: ProductRegel[],
-  rules: ProductDefaultItemsRulesV1
-): string | null {
-  if (!productenLijst?.length) return null;
+function buildMpShopifyLineItems(productenLijst: ProductRegel[]): ShopifyLineItem[] {
+  if (!productenLijst?.length) return [];
 
   const lineItems: ShopifyLineItem[] = [];
 
@@ -72,7 +69,6 @@ function buildMpLineItemsJson(
       const montageProps: { name: string; value: string }[] = [];
       const losseExtras: string[] = [];
 
-      // Achterzitje
       if (p.achterzitje === "ja") {
         if (p.achterzitjeGemonteerd === "ja") {
           montageProps.push({ name: "Montage", value: "achterzitje gemonteerd" });
@@ -81,7 +77,6 @@ function buildMpLineItemsJson(
         }
       }
 
-      // Voorrekje
       if (p.voorrekje === "ja") {
         if (p.voorrekjeGemonteerd === "ja") {
           montageProps.push({ name: "Montage", value: "voorrekje gemonteerd" });
@@ -98,49 +93,48 @@ function buildMpLineItemsJson(
           : []),
       ];
 
-      lineItems.push({ name: buildMpFietsNaamMetMontage(p), price: productPrijs, properties: props });
+      lineItems.push({
+        name: buildMpFietsNaamMetMontage(p),
+        price: productPrijs,
+        properties: props,
+        product_id: p.shopify_product_id ?? undefined,
+        variant_id: p.shopify_variant_id ?? undefined,
+      });
 
-      // Losse extra's als aparte line items na de fiets (prijs €0, horen bij de fiets)
       for (const extra of losseExtras) {
         lineItems.push({ name: extra, price: 0, properties: [] });
       }
     } else {
-      lineItems.push({ name: p.naam, price: productPrijs, properties: [] });
+      lineItems.push({
+        name: p.naam,
+        price: productPrijs,
+        properties: [],
+        product_id: p.shopify_product_id ?? undefined,
+        variant_id: p.shopify_variant_id ?? undefined,
+      });
     }
   }
 
+  return lineItems;
+}
+
+function buildMpLineItemsJson(
+  productenLijst: ProductRegel[],
+  rules: ProductDefaultItemsRulesV1
+): string | null {
+  const lineItems = buildMpShopifyLineItems(productenLijst);
+  if (!lineItems.length) return null;
   return buildLineItemsJson({ line_items: lineItems }, rules);
 }
 
-/** Voorraadaftrek: Shopify variant-id koppelt aan voorraadgroep. */
-function buildMpDeductionLineItems(productenLijst: ProductRegel[]): LineItemForDeduction[] {
-  const items: LineItemForDeduction[] = [];
-
-  for (const p of productenLijst) {
-    if (p.type === "fiets") {
-      items.push({
-        name: buildMpFietsNaamMetMontage(p),
-        quantity: 1,
-        product_id: p.shopify_product_id ?? undefined,
-        variant_id: p.shopify_variant_id ?? undefined,
-      });
-      if (p.achterzitje === "ja" && p.achterzitjeGemonteerd === "nee") {
-        items.push({ name: "achterzitje", quantity: 1 });
-      }
-      if (p.voorrekje === "ja" && p.voorrekjeGemonteerd === "nee") {
-        items.push({ name: "voorrekje", quantity: 1 });
-      }
-    } else {
-      items.push({
-        name: String(p.naam ?? "").trim(),
-        quantity: 1,
-        product_id: p.shopify_product_id ?? undefined,
-        variant_id: p.shopify_variant_id ?? undefined,
-      });
-    }
-  }
-
-  return items.filter((li) => li.name);
+/** Voorraadaftrek: fiets + standaardproducten + family-deal + extra's. */
+function buildMpDeductionLineItems(
+  productenLijst: ProductRegel[],
+  rules: ProductDefaultItemsRulesV1
+) {
+  const lineItems = buildMpShopifyLineItems(productenLijst);
+  if (!lineItems.length) return [];
+  return buildInventoryDeductionLineItems(lineItems, rules);
 }
 
 /**
@@ -339,7 +333,7 @@ export async function POST(request: NextRequest) {
 
     try {
       const deductionLineItems = productenLijst.length
-        ? buildMpDeductionLineItems(productenLijst)
+        ? buildMpDeductionLineItems(productenLijst, productRules)
         : undefined;
       await deductInventoryForMpOrder(
         supabase,
