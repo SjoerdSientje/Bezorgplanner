@@ -7,8 +7,8 @@ import Header from "@/components/Header";
 import AdresAutocomplete from "@/components/AdresAutocomplete";
 import ProductAutocomplete from "@/components/ProductAutocomplete";
 import {
-  applyProductDefaultItemsRules,
   DEFAULT_PRODUCT_RULES_V1,
+  getDefaultItemsForFiets,
   type ProductDefaultItemsRulesV1,
 } from "@/lib/product-default-items-rules";
 
@@ -159,7 +159,7 @@ function StandaardProductenLijst({
   const trimmed = naam.trim();
   if (!trimmed) return null;
 
-  const items = applyProductDefaultItemsRules(
+  const items = getDefaultItemsForFiets(
     trimmed,
     [{ name: "Levering", value: levering }],
     rules

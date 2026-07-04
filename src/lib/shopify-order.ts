@@ -4,8 +4,8 @@
  */
 
 import {
-  applyProductDefaultItemsRules,
   DEFAULT_PRODUCT_RULES_V1,
+  getDefaultItemsForFiets,
   type ProductDefaultItemsRulesV1,
 } from "@/lib/product-default-items-rules";
 import { hasLeveringProperty } from "@/lib/line-items-json-sanitize";
@@ -641,7 +641,7 @@ function getDefaultItemsVoorFiets(
   rawProperties: ShopifyLineItemProperty[],
   rules: ProductDefaultItemsRulesV1 = DEFAULT_PRODUCT_RULES_V1
 ): string[] {
-  return applyProductDefaultItemsRules(naam, rawProperties, rules);
+  return getDefaultItemsForFiets(naam, rawProperties, rules);
 }
 
 /**

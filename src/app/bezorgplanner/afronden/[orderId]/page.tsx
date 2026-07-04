@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import Header from "@/components/Header";
 import {
   DEFAULT_PRODUCT_RULES_V1,
-  applyProductDefaultItemsRules,
+  getDefaultItemsForFiets,
   isProductDefaultItemsRulesV1,
   type ProductDefaultItemsRulesV1,
 } from "@/lib/product-default-items-rules";
@@ -63,7 +63,7 @@ function parseChecklist(
         if (item.isFiets) {
           add(item.name);
           // Herbereken live vanuit actuele rules i.p.v. opgeslagen defaultItems
-          const computed = applyProductDefaultItemsRules(item.name, item.properties ?? [], rules);
+          const computed = getDefaultItemsForFiets(item.name, item.properties ?? [], rules);
           for (const d of computed) add(d);
         } else {
           add(item.name);

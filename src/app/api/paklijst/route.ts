@@ -4,7 +4,7 @@ import { requireAccountEmail } from "@/lib/account";
 import { isDatumOpmerkingVandaagOfMorgen } from "@/lib/planning-date";
 import {
   DEFAULT_PRODUCT_RULES_V1,
-  applyProductDefaultItemsRules,
+  getDefaultItemsForFiets,
   isProductDefaultItemsRulesV1,
   type ProductDefaultItemsRulesV1,
 } from "@/lib/product-default-items-rules";
@@ -75,7 +75,7 @@ function liveDefaultItems(
   rules: ProductDefaultItemsRulesV1
 ): string[] {
   if (!item.isFiets) return [];
-  return applyProductDefaultItemsRules(item.name, item.properties ?? [], rules);
+  return getDefaultItemsForFiets(item.name, item.properties ?? [], rules);
 }
 
 export async function GET(request: NextRequest) {

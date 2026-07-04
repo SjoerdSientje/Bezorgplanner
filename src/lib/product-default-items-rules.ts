@@ -180,6 +180,70 @@ export function applyProductDefaultItemsRules(
   return items;
 }
 
+/** Family-Deal fietsen: extra kinderzitjes/windscherm standaard inbegrepen. */
+const FAMILY_DEAL_SET_A = [
+  "Kinderzitje achter Qibbel 6+ met voetsteunen, gordel en beschermplaat",
+  "Kinderzitje voor Qibbel Air",
+] as const;
+
+const FAMILY_DEAL_SET_B = [
+  "Kinderzitje achter Qibbel 6+ met voetsteunen, gordel en beschermplaat",
+  "Kinderzitje voor Qibbel Air",
+  "Windscherm Qibbel",
+] as const;
+
+const FAMILY_DEAL_SET_C = [
+  "Kinderzitje achter Qibbel Air met dragerbevestiging",
+  "Kinderzitje voor Qibbel Air",
+  "Windscherm Qibbel",
+] as const;
+
+export function getFamilyDealDefaultItems(bikeName: string): string[] {
+  const name = String(bikeName ?? "").trim();
+  if (!/family/i.test(name)) return [];
+
+  if (
+    /OUXI\s+V8\s+6\.0\s*\(?C80\)?.*Junior\s*6\+/i.test(name) ||
+    /ENGWE\s+E26.*Junior\s*6\+\s*&\s*Peuter/i.test(name)
+  ) {
+    return [...FAMILY_DEAL_SET_C];
+  }
+
+  if (
+    /OUXI\s+V8\s+6\.0\s*\(?C80\)?/i.test(name) ||
+    (/ENGWE\s+E26/i.test(name) && /Peuter/i.test(name))
+  ) {
+    return [...FAMILY_DEAL_SET_B];
+  }
+
+  if (/V20\s*PRO\s+Fatbike/i.test(name) || /ENGWE\s+L20\s+Boost/i.test(name)) {
+    return [...FAMILY_DEAL_SET_A];
+  }
+
+  return [];
+}
+
+/** Standaard inbegrepen + family-deal items (voor UI, line_items_json en voorraad). */
+export function getDefaultItemsForFiets(
+  naam: string,
+  rawProperties: ProductRuleLineProperty[],
+  rules: ProductDefaultItemsRulesV1
+): string[] {
+  const base = applyProductDefaultItemsRules(naam, rawProperties, rules);
+  const family = getFamilyDealDefaultItems(naam);
+  if (family.length === 0) return base;
+
+  const seen = new Set(base.map((s) => s.toLowerCase()));
+  const merged = [...base];
+  for (const item of family) {
+    const key = item.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+  }
+  return merged;
+}
+
 function isModelExtrasList(x: unknown): boolean {
   if (!Array.isArray(x)) return false;
   for (const g of x) {

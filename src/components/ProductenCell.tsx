@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { stripMpDummyPricesFromLineItemsJsonString } from "@/lib/line-items-json-sanitize";
 import {
   DEFAULT_PRODUCT_RULES_V1,
-  applyProductDefaultItemsRules,
+  getDefaultItemsForFiets,
   isProductDefaultItemsRulesV1,
   type ProductDefaultItemsRulesV1,
 } from "@/lib/product-default-items-rules";
@@ -392,7 +392,7 @@ export default function ProductenCell({
         name = appendMountedToTitle(name, mounted);
       }
 
-      const defaultItems = applyProductDefaultItemsRules(name ?? "", properties, productRules);
+      const defaultItems = getDefaultItemsForFiets(name ?? "", properties, productRules);
       next[idx] = { ...target, name, properties, defaultItems };
 
       // Levering-tarief als losse productregel synchroniseren met de gekozen levering.
@@ -637,7 +637,7 @@ export default function ProductenCell({
                     // Herbereken defaultItems altijd vanuit actuele rules zodat ook
                     // bestaande orders met verouderde opgeslagen data kloppen.
                     const liveDefaultItems = item.isFiets
-                      ? applyProductDefaultItemsRules(item.name, item.properties, productRules)
+                      ? getDefaultItemsForFiets(item.name, item.properties, productRules)
                       : [];
                     return (
                     <div

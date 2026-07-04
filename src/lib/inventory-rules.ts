@@ -31,50 +31,6 @@ export function isExcludedFromInventory(product: ShopifyAdminProduct): boolean {
   return false;
 }
 
-/** Family-Deal fietsen: extra kinderzitjes/windscherm automatisch van voorraad. */
-const FAMILY_DEAL_SET_A = [
-  "Kinderzitje achter Qibbel 6+ met voetsteunen, gordel en beschermplaat",
-  "Kinderzitje voor Qibbel Air",
-] as const;
-
-const FAMILY_DEAL_SET_B = [
-  "Kinderzitje achter Qibbel 6+ met voetsteunen, gordel en beschermplaat",
-  "Kinderzitje voor Qibbel Air",
-  "Windscherm Qibbel",
-] as const;
-
-const FAMILY_DEAL_SET_C = [
-  "Kinderzitje achter Qibbel Air met dragerbevestiging",
-  "Kinderzitje voor Qibbel Air",
-  "Windscherm Qibbel",
-] as const;
-
-/** Bepaalt extra voorraaditems bij Family-Deal fietsen (lege lijst = geen family deal). */
-export function getFamilyDealInventoryItems(bikeName: string): string[] {
-  const name = String(bikeName ?? "").trim();
-  if (!/family/i.test(name)) return [];
-
-  if (
-    /OUXI\s+V8\s+6\.0\s*\(?C80\)?.*Junior\s*6\+/i.test(name) ||
-    /ENGWE\s+E26.*Junior\s*6\+\s*&\s*Peuter/i.test(name)
-  ) {
-    return [...FAMILY_DEAL_SET_C];
-  }
-
-  if (
-    /OUXI\s+V8\s+6\.0\s*\(?C80\)?/i.test(name) ||
-    (/ENGWE\s+E26/i.test(name) && /Peuter/i.test(name))
-  ) {
-    return [...FAMILY_DEAL_SET_B];
-  }
-
-  if (/V20\s*PRO\s+Fatbike/i.test(name) || /ENGWE\s+L20\s+Boost/i.test(name)) {
-    return [...FAMILY_DEAL_SET_A];
-  }
-
-  return [];
-}
-
 /** Geen fysiek product — overslaan bij voorraadaftrek. */
 export function shouldSkipInventoryDeductionLineItem(name: string): boolean {
   const n = name.trim().toLowerCase();

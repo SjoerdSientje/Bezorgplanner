@@ -15,7 +15,6 @@ import { buildInventoryStockKeyInfo, type InventoryStockKeyInfo } from "@/lib/in
 import type { ProductDefaultItemsRulesV1 } from "@/lib/product-default-items-rules";
 import { loadProductDefaultItemsRules } from "@/lib/product-rules-server";
 import {
-  getFamilyDealInventoryItems,
   isExcludedFromInventory,
   resolveBundleDeduction,
   shouldSkipInventoryDeductionLineItem,
@@ -478,11 +477,6 @@ function appendBikeDeductionItems(
     if (shouldSkipInventoryDeductionLineItem(defaultName)) continue;
     if (explicitOrderNames?.has(normalizeDeductionName(defaultName))) continue;
     out.push({ name: defaultName, quantity: 1 });
-  }
-
-  for (const familyName of getFamilyDealInventoryItems(row.name)) {
-    if (explicitOrderNames?.has(normalizeDeductionName(familyName))) continue;
-    out.push({ name: familyName, quantity: 1 });
   }
 }
 
