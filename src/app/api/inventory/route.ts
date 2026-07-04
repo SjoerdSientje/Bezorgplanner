@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
       .eq("owner_email", ownerEmail)
       .order("title", { ascending: true });
 
-    if (category === "fiets" || category === "onderdeel") {
+    if (category === "fiets" || category === "onderdeel" || category === "overig") {
       query = query.eq("category", category as InventoryCategory);
     }
 

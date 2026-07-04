@@ -18,7 +18,14 @@ type ShopifySearchResult = {
   stock_quantity: number | null;
 };
 
-type Filter = "alle" | "fiets" | "onderdeel";
+type Filter = "alle" | "fiets" | "onderdeel" | "overig";
+const FILTER_LABELS: Record<Filter, string> = {
+  alle: "Alle producten",
+  fiets: "Fietsen",
+  onderdeel: "Onderdelen",
+  overig: "Overige",
+};
+
 type MutationType = "inkomend" | "uitgaand" | "correctie";
 
 function stockClass(qty: number): string {
@@ -346,7 +353,7 @@ export default function VoorraadbeheerPage() {
           </div>
 
           <div className="mb-4 flex flex-wrap gap-2">
-            {(["alle", "fiets", "onderdeel"] as Filter[]).map((f) => (
+            {(["alle", "fiets", "onderdeel", "overig"] as Filter[]).map((f) => (
               <button
                 key={f}
                 type="button"
@@ -357,7 +364,7 @@ export default function VoorraadbeheerPage() {
                     : "border border-stone-200 bg-white text-koopje-black hover:bg-stone-50"
                 }`}
               >
-                {f === "alle" ? "Alle producten" : f === "fiets" ? "Fietsen" : "Onderdelen"}
+                {FILTER_LABELS[f]}
               </button>
             ))}
             <span className="ml-auto self-center text-sm text-stone-500">
