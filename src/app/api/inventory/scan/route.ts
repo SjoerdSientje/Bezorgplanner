@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getInventoryOwnerEmail } from "@/lib/account";
 import { createServerSupabaseClient } from "@/lib/supabase";
-import { applyInventoryMutation } from "@/lib/inventory";
+import { applyInventoryMutation, resolveCanonicalInventoryProductId } from "@/lib/inventory";
 
 export const dynamic = "force-dynamic";
 
@@ -30,9 +30,18 @@ export async function POST(request: NextRequest) {
     const results: { productId: string; stockAfter: number }[] = [];
 
     for (const item of items) {
-      const productId = String(item.productId ?? "").trim();
+      const rawProductId = String(item.productId ?? "").trim();
       const quantity = Math.max(1, Math.floor(Number(item.quantity ?? 1)));
-      if (!productId) continue;
+      if (!rawProductId) continue;
+
+      const productId = await resolveCanonicalInventoryProductId(
+        supabase,
+        ownerEmail,
+        rawProductId
+      );
+      if (!productId) {
+        return NextResponse.json({ error: "Product niet gevonden.", productId: rawProductId }, { status: 400 });
+      }
 
       const result = await applyInventoryMutation(supabase, {
         ownerEmail,

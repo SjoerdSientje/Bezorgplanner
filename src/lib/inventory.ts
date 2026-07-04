@@ -395,6 +395,33 @@ async function findProductForLineItem(
   return null;
 }
 
+/** Eén canoniek product per group_key (voorkomt mutaties op dubbele rijen). */
+export async function resolveCanonicalInventoryProductId(
+  supabase: SupabaseClient,
+  ownerEmail: string,
+  productId: string
+): Promise<string | null> {
+  const { data: row } = await supabase
+    .from("inventory_products")
+    .select("*")
+    .eq("owner_email", ownerEmail)
+    .eq("id", productId)
+    .maybeSingle();
+
+  if (!row) return null;
+
+  const groupKey = row.group_key as string;
+  const { data: matches } = await supabase
+    .from("inventory_products")
+    .select("*")
+    .eq("owner_email", ownerEmail)
+    .eq("group_key", groupKey);
+
+  const rows = (matches ?? []) as InventoryProductRow[];
+  if (rows.length <= 1) return productId;
+  return pickPrimaryRow(rows, groupKey).id;
+}
+
 export async function applyInventoryMutation(
   supabase: SupabaseClient,
   params: {
@@ -689,15 +716,24 @@ export async function searchProductsForInventory(
       if (seenGroupKeys.has(stockInfo.groupKey)) continue;
       seenGroupKeys.add(stockInfo.groupKey);
 
-      const { data: local } = await supabase
+      const { data: localMatches } = await supabase
         .from("inventory_products")
-        .select("id, stock_quantity")
+        .select("id, stock_quantity, group_key, created_at")
         .eq("owner_email", ownerEmail)
         .eq("group_key", stockInfo.groupKey)
-        .maybeSingle();
+        .order("created_at", { ascending: true });
 
-      let inventoryProductId = local?.id ?? null;
-      let stockQuantity = local?.stock_quantity ?? null;
+      const localRowsForGroup = (localMatches ?? []) as Pick<
+        InventoryProductRow,
+        "id" | "stock_quantity" | "group_key" | "created_at"
+      >[];
+      const localPrimary =
+        localRowsForGroup.length > 0
+          ? pickPrimaryRow(localRowsForGroup as InventoryProductRow[], stockInfo.groupKey)
+          : null;
+
+      let inventoryProductId = localPrimary?.id ?? null;
+      let stockQuantity = localPrimary?.stock_quantity ?? null;
 
       if (!inventoryProductId) {
         const category = classifyInventoryCategory(product, categoryMap);
@@ -722,8 +758,25 @@ export async function searchProductsForInventory(
           })
           .select("id, stock_quantity")
           .single();
-        inventoryProductId = inserted?.id ?? null;
-        stockQuantity = inserted?.stock_quantity ?? INITIAL_STOCK;
+
+        if (inserted) {
+          inventoryProductId = inserted.id;
+          stockQuantity = inserted.stock_quantity;
+        } else {
+          const { data: existingAfterConflict } = await supabase
+            .from("inventory_products")
+            .select("id, stock_quantity, group_key, created_at")
+            .eq("owner_email", ownerEmail)
+            .eq("group_key", stockInfo.groupKey)
+            .order("created_at", { ascending: true });
+
+          const conflictRows = (existingAfterConflict ?? []) as InventoryProductRow[];
+          if (conflictRows.length > 0) {
+            const primary = pickPrimaryRow(conflictRows, stockInfo.groupKey);
+            inventoryProductId = primary.id;
+            stockQuantity = primary.stock_quantity;
+          }
+        }
       }
 
       results.push({
