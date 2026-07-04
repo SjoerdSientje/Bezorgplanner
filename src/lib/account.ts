@@ -16,6 +16,17 @@ export function requireAccountEmail(request: NextRequest): string {
   return email;
 }
 
+/** Voorraad scan/zoeken: ingelogde gebruiker, anders INVENTORY_SCAN_OWNER_EMAIL of hoofdaccount. */
+export function getInventoryOwnerEmail(request: NextRequest): string {
+  const loggedIn = getAccountEmailFromRequest(request);
+  if (loggedIn) return loggedIn;
+
+  const fromEnv = process.env.INVENTORY_SCAN_OWNER_EMAIL?.trim();
+  if (fromEnv && isAllowedEmail(fromEnv)) return normalizeEmail(fromEnv);
+
+  return normalizeEmail("info@koopjefatbike.nl");
+}
+
 export function allAccountEmails(): string[] {
   return ALLOWED_USERS.map((u) => u.email);
 }

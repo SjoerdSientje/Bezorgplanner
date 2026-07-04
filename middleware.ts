@@ -6,10 +6,13 @@ function isPublicPath(pathname: string): boolean {
   if (
     pathname.startsWith("/login") ||
     pathname.startsWith("/reset-wachtwoord") ||
+    pathname.startsWith("/scan") ||
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon") ||
     pathname.startsWith("/api/auth") ||
-    pathname.startsWith("/api/webhooks/shopify")
+    pathname.startsWith("/api/webhooks/shopify") ||
+    pathname.startsWith("/api/inventory/search") ||
+    pathname.startsWith("/api/inventory/scan")
   ) {
     return true;
   }

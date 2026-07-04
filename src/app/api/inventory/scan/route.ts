@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireAccountEmail } from "@/lib/account";
+import { getInventoryOwnerEmail } from "@/lib/account";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { applyInventoryMutation } from "@/lib/inventory";
 
@@ -12,7 +12,7 @@ type ScanItem = {
 
 export async function POST(request: NextRequest) {
   try {
-    const ownerEmail = requireAccountEmail(request);
+    const ownerEmail = getInventoryOwnerEmail(request);
     const body = await request.json().catch(() => ({}));
 
     const direction = body.direction as "inkomend" | "uitgaand";

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AUTH_COOKIE, isAllowedEmail, normalizeEmail } from "@/lib/auth-shared";
 
-const PUBLIC_PATHS = ["/login", "/reset-wachtwoord"];
+const PUBLIC_PATHS = ["/login", "/reset-wachtwoord", "/scan"];
 
 function isPublicPath(pathname: string): boolean {
   return PUBLIC_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`));

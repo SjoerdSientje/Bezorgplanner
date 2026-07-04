@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireAccountEmail } from "@/lib/account";
+import { getInventoryOwnerEmail } from "@/lib/account";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { searchProductsForInventory } from "@/lib/inventory";
 import { ShopifyAdminError } from "@/lib/shopify-admin";
@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
   try {
-    const ownerEmail = requireAccountEmail(request);
+    const ownerEmail = getInventoryOwnerEmail(request);
     const q = request.nextUrl.searchParams.get("q") ?? "";
 
     if (q.trim().length < 2) {
