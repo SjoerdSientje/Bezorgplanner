@@ -14,10 +14,9 @@ import { geocodeOrdersForRouting } from "@/lib/pdok-geocode";
 import {
   appendUnassignedOrdersToRoutes,
   buildArrivalTimeMapFromSolution,
+  buildFinalRouteOrderLists,
   buildRouteSlotsFromOrderSequence,
-  buildRouteSlotsFromRoutificStops,
-  extractOrderIdsFromRoutificStops,
-  mergePartialManualRouteOrders,
+  getRouteCapacityWarnings,
 } from "@/lib/routific-slots";
 import { SERVICE_TIME_MINUTES } from "@/lib/routific-payload";
 import { supabaseMissingOrdersRouteNummerColumn } from "@/lib/orders-route-nummer-supabase";
@@ -280,23 +279,59 @@ export async function POST(request: NextRequest) {
       return error;
     };
 
-    const meerDanEenRoute = vehicleKeys.length > 1;
+    const meerDanEenRoute = parallelRoutes.length > 1;
     const defaultStart = earliestParallelShiftStart(parallelRoutes);
     const allOrderIds = rowsForRouting.map((o) => o.id);
+    const ordersById = new Map(rowsGeocoded.map((o) => [o.id, o]));
+    const arrivalByOrderId = buildArrivalTimeMapFromSolution(solution ?? {}, orderByVisitId);
 
-    if (assignmentMode === "partialManual") {
-      const routificOrdersByVehicle = vehicleKeys.map((vehicleKey) =>
-        extractOrderIdsFromRoutificStops(solution?.[vehicleKey] ?? [], orderByVisitId)
+    const routeOrderLists = buildFinalRouteOrderLists(
+      parallelRoutes,
+      solution ?? {},
+      vehicleKeys,
+      orderByVisitId,
+      allOrderIds,
+      ordersById
+    );
+
+    for (const [routeNummer, orderIds] of Array.from(routeOrderLists.entries())) {
+      const routeNummerDb = meerDanEenRoute ? routeNummer : null;
+      const built = buildRouteSlotsFromOrderSequence(
+        orderIds,
+        arrivalByOrderId,
+        routeNummer,
+        ordersById,
+        defaultStart
       );
-      const routeOrderLists = mergePartialManualRouteOrders(parallelRoutes, routificOrdersByVehicle);
-      appendUnassignedOrdersToRoutes(allOrderIds, routeOrderLists);
-      const arrivalByOrderId = buildArrivalTimeMapFromSolution(solution ?? {}, orderByVisitId);
-      const ordersById = new Map(rowsGeocoded.map((o) => [o.id, o]));
+      for (const slot of built) {
+        volgorde += 1;
+        slotsToInsert.push({
+          order_id: slot.order_id,
+          volgorde,
+          aankomsttijd: slot.aankomsttijd,
+          tijd_opmerking: slot.arrivalTime,
+          rit_nummer: slot.rit_nummer,
+          route_nummer: routeNummerDb,
+        });
+      }
+    }
 
-      for (const [routeNummer, orderIds] of routeOrderLists) {
+    // Garantie: elke order in de batch krijgt een route (geen Overig).
+    const writtenIds = new Set(slotsToInsert.map((s) => s.order_id));
+    const stillMissing = allOrderIds.filter((id) => !writtenIds.has(id));
+    if (stillMissing.length > 0) {
+      appendUnassignedOrdersToRoutes(stillMissing, routeOrderLists, parallelRoutes, ordersById);
+      for (const id of stillMissing) {
+        let routeNummer = 1;
+        for (const [rn, list] of Array.from(routeOrderLists.entries())) {
+          if (list.includes(id)) {
+            routeNummer = rn;
+            break;
+          }
+        }
         const routeNummerDb = meerDanEenRoute ? routeNummer : null;
         const built = buildRouteSlotsFromOrderSequence(
-          orderIds,
+          [id],
           arrivalByOrderId,
           routeNummer,
           ordersById,
@@ -312,69 +347,6 @@ export async function POST(request: NextRequest) {
             rit_nummer: slot.rit_nummer,
             route_nummer: routeNummerDb,
           });
-        }
-      }
-    } else {
-      for (let vi = 0; vi < vehicleKeys.length; vi++) {
-        const vehicleKey = vehicleKeys[vi]!;
-        const routeNummerVoertuig = meerDanEenRoute ? vi + 1 : null;
-        const built = buildRouteSlotsFromRoutificStops(
-          solution?.[vehicleKey] ?? [],
-          orderByVisitId,
-          routeNummerVoertuig
-        );
-        for (const slot of built) {
-          volgorde += 1;
-          slotsToInsert.push({
-            order_id: slot.order_id,
-            volgorde,
-            aankomsttijd: slot.aankomsttijd,
-            tijd_opmerking: slot.arrivalTime,
-            rit_nummer: slot.rit_nummer,
-            route_nummer: slot.route_nummer,
-          });
-        }
-      }
-
-      if (meerDanEenRoute) {
-        const routedIds = new Set(slotsToInsert.map((s) => s.order_id));
-        const routeOrderLists = new Map<number, string[]>();
-        for (let vi = 0; vi < vehicleKeys.length; vi++) {
-          routeOrderLists.set(
-            vi + 1,
-            slotsToInsert
-              .filter((s) => s.route_nummer === vi + 1)
-              .sort((a, b) => (a.rit_nummer ?? 0) - (b.rit_nummer ?? 0))
-              .map((s) => s.order_id)
-          );
-        }
-        appendUnassignedOrdersToRoutes(allOrderIds, routeOrderLists);
-        const unrouted = allOrderIds.filter((id) => !routedIds.has(id));
-        if (unrouted.length > 0) {
-          const ordersById = new Map(rowsGeocoded.map((o) => [o.id, o]));
-          const arrivalByOrderId = buildArrivalTimeMapFromSolution(solution ?? {}, orderByVisitId);
-          slotsToInsert.length = 0;
-          volgorde = 0;
-          for (const [routeNummer, orderIds] of routeOrderLists) {
-            const built = buildRouteSlotsFromOrderSequence(
-              orderIds,
-              arrivalByOrderId,
-              routeNummer,
-              ordersById,
-              defaultStart
-            );
-            for (const slot of built) {
-              volgorde += 1;
-              slotsToInsert.push({
-                order_id: slot.order_id,
-                volgorde,
-                aankomsttijd: slot.aankomsttijd,
-                tijd_opmerking: slot.arrivalTime,
-                rit_nummer: slot.rit_nummer,
-                route_nummer: slot.route_nummer,
-              });
-            }
-          }
         }
       }
     }
@@ -438,7 +410,7 @@ export async function POST(request: NextRequest) {
 
     const unserved = output?.unserved as Record<string, string | unknown> | null | undefined;
     const unservedIds = unserved ? Object.keys(unserved) : [];
-    let unservedWarning: string | undefined;
+    const warningParts: string[] = [];
     if (unservedIds.length > 0) {
       const lines = unservedIds.map((uid) => {
         const order = orderByVisitId.get(uid) ?? orderByVisitId.get(uid.replace(/[.$]/g, "_"));
@@ -446,8 +418,15 @@ export async function POST(request: NextRequest) {
         const reden = typeof unserved?.[uid] === "string" ? ` (${unserved[uid]})` : "";
         return `• ${naam}${reden}`;
       });
-      unservedWarning = `⚠️ ${unservedIds.length} order(s) niet ingepland door Routific:\n${lines.join("\n")}`;
+      warningParts.push(
+        `⚠️ ${unservedIds.length} order(s) niet ingepland door Routific:\n${lines.join("\n")}`
+      );
     }
+    const capacityWarnings = getRouteCapacityWarnings(routeOrderLists, parallelRoutes, ordersById);
+    if (capacityWarnings.length > 0) {
+      warningParts.push(capacityWarnings.join("\n"));
+    }
+    const combinedWarning = warningParts.length > 0 ? warningParts.join("\n\n") : undefined;
 
     return NextResponse.json({
       ok: true,
@@ -459,7 +438,7 @@ export async function POST(request: NextRequest) {
       job_id,
       solution: output?.solution ?? null,
       unserved: unserved ?? null,
-      warning: unservedWarning,
+      warning: combinedWarning,
     });
   } catch (e) {
     console.error("[api/routific/route]", e);

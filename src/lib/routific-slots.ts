@@ -4,7 +4,7 @@
 
 import { parseRoutificArrivalTime } from "@/lib/routific-arrival";
 import {
-  earliestParallelShiftStart,
+  orderRouteLoad,
   SERVICE_TIME_MINUTES,
   type OrderForRoute,
   type ParallelRouteSpec,
@@ -121,22 +121,12 @@ export function mergePartialManualRouteOrders(
     );
 
     const fromRoutific = (routificOrdersByVehicle[i] ?? []).filter(
-      (id) => !pinsOtherRoutes.has(id)
+      (id) => !pinsOtherRoutes.has(id) && !pinsThisRoute.includes(id)
     );
 
-    const merged: string[] = [];
-    const seen = new Set<string>();
-
-    for (const id of pinsThisRoute) {
-      if (!seen.has(id)) {
-        merged.push(id);
-        seen.add(id);
-      }
-    }
+    const merged: string[] = [...pinsThisRoute];
     for (const id of fromRoutific) {
-      if (seen.has(id)) continue;
-      merged.push(id);
-      seen.add(id);
+      if (!merged.includes(id)) merged.push(id);
     }
 
     result.set(routeNum, merged);
@@ -145,28 +135,188 @@ export function mergePartialManualRouteOrders(
   return result;
 }
 
-/** Vul orders in die Routific niet kon/plan niet (verdeel over route met minste stops). */
+function routeListLoad(
+  orderIds: string[],
+  ordersById: Map<string, OrderForRoute>
+): number {
+  return orderIds.reduce((sum, id) => {
+    const o = ordersById.get(id);
+    return sum + (o ? orderRouteLoad(o) : 0);
+  }, 0);
+}
+
+/** Verplaats handmatig gekozen orders naar hun route (uit andere routes). */
+export function applyPinnedOrdersToRoutes(
+  routeOrderLists: Map<number, string[]>,
+  parallelRoutes: ParallelRouteSpec[]
+): void {
+  const allPins = new Set(parallelRoutes.flatMap((r) => r.orderIds ?? []));
+
+  for (const list of Array.from(routeOrderLists.values())) {
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (allPins.has(list[i]!)) list.splice(i, 1);
+    }
+  }
+
+  for (let i = 0; i < parallelRoutes.length; i++) {
+    const routeNum = i + 1;
+    const pins = parallelRoutes[i]?.orderIds ?? [];
+    if (pins.length === 0) continue;
+    const list = routeOrderLists.get(routeNum) ?? [];
+    routeOrderLists.set(routeNum, list);
+    for (const id of pins) {
+      if (!list.includes(id)) list.unshift(id);
+    }
+  }
+}
+
+/** Herverdeel orders zodat geen route boven max. fietsen-capaciteit uitkomt (pins blijven staan). */
+export function rebalanceRoutesByCapacity(
+  routeOrderLists: Map<number, string[]>,
+  parallelRoutes: ParallelRouteSpec[],
+  ordersById: Map<string, OrderForRoute>,
+  pinnedIds: Set<string>
+): void {
+  const capacityFor = (routeNum: number) =>
+    Math.max(1, parallelRoutes[routeNum - 1]?.capacity ?? 99);
+
+  for (let pass = 0; pass < 20; pass++) {
+    let changed = false;
+
+    for (let routeNum = 1; routeNum <= parallelRoutes.length; routeNum++) {
+      const list = routeOrderLists.get(routeNum) ?? [];
+      const cap = capacityFor(routeNum);
+
+      while (routeListLoad(list, ordersById) > cap) {
+        const moveIdx = [...list].reverse().findIndex((id) => !pinnedIds.has(id));
+        if (moveIdx < 0) break;
+
+        const idx = list.length - 1 - moveIdx;
+        const [movedId] = list.splice(idx, 1);
+        const movedLoad = orderRouteLoad(ordersById.get(movedId)!);
+
+        let placed = false;
+        for (let target = 1; target <= parallelRoutes.length; target++) {
+          if (target === routeNum) continue;
+          const targetList = routeOrderLists.get(target) ?? [];
+          const targetCap = capacityFor(target);
+          if (routeListLoad(targetList, ordersById) + movedLoad <= targetCap) {
+            targetList.push(movedId);
+            routeOrderLists.set(target, targetList);
+            placed = true;
+            changed = true;
+            break;
+          }
+        }
+
+        if (!placed) {
+          list.splice(idx, 0, movedId);
+          break;
+        }
+      }
+    }
+
+    if (!changed) break;
+  }
+}
+
+/** Vul orders in die Routific niet inplannde (capaciteit-gewogen). */
 export function appendUnassignedOrdersToRoutes(
   allOrderIds: string[],
-  routeOrderLists: Map<number, string[]>
+  routeOrderLists: Map<number, string[]>,
+  parallelRoutes: ParallelRouteSpec[],
+  ordersById: Map<string, OrderForRoute>
 ): void {
   const assigned = new Set(Array.from(routeOrderLists.values()).flat());
   const unrouted = allOrderIds.filter((id) => !assigned.has(id));
   if (unrouted.length === 0) return;
 
+  const capacityFor = (routeNum: number) =>
+    Math.max(1, parallelRoutes[routeNum - 1]?.capacity ?? 99);
+
   for (const id of unrouted) {
+    const order = ordersById.get(id);
+    if (!order) continue;
+    const load = orderRouteLoad(order);
+
     let targetRoute = 1;
-    let minLen = Infinity;
-    for (const [routeNum, list] of routeOrderLists) {
-      if (list.length < minLen) {
-        minLen = list.length;
+    let bestRemaining = -Infinity;
+
+    for (let routeNum = 1; routeNum <= parallelRoutes.length; routeNum++) {
+      const list = routeOrderLists.get(routeNum) ?? [];
+      const remaining = capacityFor(routeNum) - routeListLoad(list, ordersById);
+      if (remaining >= load && remaining > bestRemaining) {
+        bestRemaining = remaining;
         targetRoute = routeNum;
       }
     }
-    const list = routeOrderLists.get(targetRoute);
-    if (list) list.push(id);
-    else routeOrderLists.set(targetRoute, [id]);
+
+    if (bestRemaining < load) {
+      for (let routeNum = 1; routeNum <= parallelRoutes.length; routeNum++) {
+        const list = routeOrderLists.get(routeNum) ?? [];
+        const remaining = capacityFor(routeNum) - routeListLoad(list, ordersById);
+        if (remaining > bestRemaining) {
+          bestRemaining = remaining;
+          targetRoute = routeNum;
+        }
+      }
+    }
+
+    const list = routeOrderLists.get(targetRoute) ?? [];
+    list.push(id);
+    routeOrderLists.set(targetRoute, list);
   }
+}
+
+/** Bouw routelijsten vanuit Routific + pins + capaciteit; elke order precies één route. */
+export function buildFinalRouteOrderLists(
+  parallelRoutes: ParallelRouteSpec[],
+  solution: Record<string, RoutificSolutionStop[]>,
+  vehicleKeys: string[],
+  orderByVisitId: Map<string, OrderForRoute>,
+  allOrderIds: string[],
+  ordersById: Map<string, OrderForRoute>
+): Map<number, string[]> {
+  const routeOrderLists = new Map<number, string[]>();
+
+  for (let i = 0; i < parallelRoutes.length; i++) {
+    const vehicleKey = vehicleKeys[i] ?? `vehicle_${i + 1}`;
+    routeOrderLists.set(
+      i + 1,
+      extractOrderIdsFromRoutificStops(solution[vehicleKey] ?? [], orderByVisitId)
+    );
+  }
+
+  const pinnedIds = new Set(parallelRoutes.flatMap((r) => r.orderIds ?? []));
+  if (pinnedIds.size > 0) {
+    applyPinnedOrdersToRoutes(routeOrderLists, parallelRoutes);
+  }
+
+  appendUnassignedOrdersToRoutes(allOrderIds, routeOrderLists, parallelRoutes, ordersById);
+  rebalanceRoutesByCapacity(routeOrderLists, parallelRoutes, ordersById, pinnedIds);
+  appendUnassignedOrdersToRoutes(allOrderIds, routeOrderLists, parallelRoutes, ordersById);
+
+  return routeOrderLists;
+}
+
+/** Waarschuwingen als een route na post-processing boven max. fietsen zit. */
+export function getRouteCapacityWarnings(
+  routeOrderLists: Map<number, string[]>,
+  parallelRoutes: ParallelRouteSpec[],
+  ordersById: Map<string, OrderForRoute>
+): string[] {
+  const warnings: string[] = [];
+  for (let routeNum = 1; routeNum <= parallelRoutes.length; routeNum++) {
+    const cap = Math.max(1, parallelRoutes[routeNum - 1]?.capacity ?? 99);
+    const list = routeOrderLists.get(routeNum) ?? [];
+    const load = routeListLoad(list, ordersById);
+    if (load > cap) {
+      warnings.push(
+        `Route ${routeNum}: ${load} fiets-eenheden ingepland (max ${cap}). Controleer handmatige adressen of grote fietsen.`
+      );
+    }
+  }
+  return warnings;
 }
 
 export function buildArrivalTimeMapFromSolution(
@@ -203,7 +353,7 @@ export function buildRouteSlotsFromOrderSequence(
     if (!order) continue;
 
     const routificArrival = arrivalByOrderId.get(orderId);
-    let arrivalMin = routificArrival
+    let arrivalMin: number = routificArrival
       ? toMinutes(routificArrival)
       : prevFinishMin ?? toMinutes(defaultStart);
 

@@ -37,6 +37,13 @@ function isGroteFiets(producten: string | null | undefined): boolean {
   return GROTE_FIETS_PATTERNS.some((p) => p.test(text));
 }
 
+/** Load-eenheden per order (zelfde berekening als Routific visits). */
+export function orderRouteLoad(o: OrderForRoute): number {
+  const baseFietsen = Math.max(1, Number(o.aantal_fietsen) || 1);
+  const unitSize = isGroteFiets(o.producten) ? 2 : 1;
+  return baseFietsen * unitSize;
+}
+
 export type Tijdvenster =
   | { start: string; end: string }
   | { start: string; end: null }; // end: null = "anytime after start" voor Routific
@@ -172,9 +179,7 @@ function buildVisitForOrder(
   vehicleType?: string
 ): RoutificPayload["visits"][string] {
   const address = (o.volledig_adres || "").trim() || "Onbekend adres";
-  const baseFietsen = Math.max(1, Number(o.aantal_fietsen) || 1);
-  const unitSize = isGroteFiets(o.producten) ? 2 : 1;
-  const load = baseFietsen * unitSize;
+  const load = orderRouteLoad(o);
   const window = parseBezorgtijdVoorkeur(o.bezorgtijd_voorkeur);
   const start = window ? window.start : defaultStartForNoPreference;
   const end = window && window.end !== null ? window.end : DEFAULT_SHIFT_END;
@@ -262,13 +267,29 @@ export function buildRoutificPayloadFromRoutes(
     });
   } else {
     Object.assign(visits, buildVisits(orders, defaultStart));
+    if (assignmentMode === "partialManual") {
+      routes.forEach((r, i) => {
+        const vehicleType = `route_${i + 1}`;
+        for (const orderId of r.orderIds ?? []) {
+          const o = orderById.get(orderId);
+          if (!o) continue;
+          const visitId = sanitizeVisitId(o.id);
+          const existing = visits[visitId];
+          if (existing) visits[visitId] = { ...existing, type: vehicleType };
+        }
+      });
+    }
   }
 
   const fleet: Record<string, VehicleConfig> = {};
   routes.forEach((r, i) => {
     const cap = Math.max(1, Math.min(99, Math.floor(Number(r.capacity) || 0)));
     const vehicleType =
-      assignmentMode === "fullManual" ? `route_${i + 1}` : undefined;
+      assignmentMode === "fullManual"
+        ? `route_${i + 1}`
+        : assignmentMode === "partialManual" && (r.orderIds ?? []).length > 0
+          ? `route_${i + 1}`
+          : undefined;
     fleet[`vehicle_${i + 1}`] = {
       start_location: { address: DEPOT_ADDRESS },
       end_location: { address: DEPOT_ADDRESS },
