@@ -222,6 +222,19 @@ export function earliestParallelShiftStart(routes: ParallelRouteSpec[]): string 
   return best;
 }
 
+/** Bepaalt hoe handmatige adreskeuze wordt toegepast op de Routific-payload. */
+export type RouteAssignmentMode = "auto" | "fullManual" | "partialManual";
+
+export function getRouteAssignmentMode(
+  routes: ParallelRouteSpec[],
+  orderCount: number
+): RouteAssignmentMode {
+  const pinned = routes.flatMap((r) => r.orderIds ?? []);
+  if (pinned.length === 0) return "auto";
+  if (pinned.length >= orderCount) return "fullManual";
+  return "partialManual";
+}
+
 /**
  * Bouwt fleet + visits: één of meer routes, elk met eigen vertrektijd en max. load (fietsen).
  * Routific verdeelt stops om reistijd te minimaliseren binnen die capaciteiten.
@@ -234,12 +247,11 @@ export function buildRoutificPayloadFromRoutes(
     throw new Error("Minimaal één route nodig.");
   }
   const defaultStart = earliestParallelShiftStart(routes);
-  const manualMode = routes.some((r) => (r.orderIds?.length ?? 0) > 0);
+  const assignmentMode = getRouteAssignmentMode(routes, orders.length);
   const orderById = new Map(orders.map((o) => [o.id, o]));
-  const assignedOrderIds = new Set(routes.flatMap((r) => r.orderIds ?? []));
 
   const visits: RoutificPayload["visits"] = {};
-  if (manualMode) {
+  if (assignmentMode === "fullManual") {
     routes.forEach((r, i) => {
       const vehicleType = `route_${i + 1}`;
       for (const orderId of r.orderIds ?? []) {
@@ -248,10 +260,6 @@ export function buildRoutificPayloadFromRoutes(
         visits[sanitizeVisitId(o.id)] = buildVisitForOrder(o, defaultStart, vehicleType);
       }
     });
-    for (const o of orders) {
-      if (assignedOrderIds.has(o.id)) continue;
-      visits[sanitizeVisitId(o.id)] = buildVisitForOrder(o, defaultStart);
-    }
   } else {
     Object.assign(visits, buildVisits(orders, defaultStart));
   }
@@ -259,8 +267,8 @@ export function buildRoutificPayloadFromRoutes(
   const fleet: Record<string, VehicleConfig> = {};
   routes.forEach((r, i) => {
     const cap = Math.max(1, Math.min(99, Math.floor(Number(r.capacity) || 0)));
-    const routeHasOrders = (r.orderIds?.length ?? 0) > 0;
-    const vehicleType = manualMode && routeHasOrders ? `route_${i + 1}` : undefined;
+    const vehicleType =
+      assignmentMode === "fullManual" ? `route_${i + 1}` : undefined;
     fleet[`vehicle_${i + 1}`] = {
       start_location: { address: DEPOT_ADDRESS },
       end_location: { address: DEPOT_ADDRESS },

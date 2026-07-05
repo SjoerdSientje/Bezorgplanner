@@ -3,7 +3,12 @@
  */
 
 import { parseRoutificArrivalTime } from "@/lib/routific-arrival";
-import { SERVICE_TIME_MINUTES, type OrderForRoute } from "@/lib/routific-payload";
+import {
+  earliestParallelShiftStart,
+  SERVICE_TIME_MINUTES,
+  type OrderForRoute,
+  type ParallelRouteSpec,
+} from "@/lib/routific-payload";
 import { maakTijdslot } from "@/lib/tijdslot";
 
 export type RoutificSolutionStop = {
@@ -75,6 +80,142 @@ export function buildRouteSlotsFromRoutificStops(
     prevFinishMin = Math.max(arrivalMin + SERVICE_TIME_MINUTES, finishFromRoutific);
 
     stopIndex += 1;
+    results.push({
+      order_id: order.id,
+      aankomsttijd,
+      arrivalTime,
+      rit_nummer: stopIndex,
+      route_nummer: routeNummer,
+    });
+  }
+
+  return results;
+}
+
+export function extractOrderIdsFromRoutificStops(
+  stops: RoutificSolutionStop[],
+  orderByVisitId: Map<string, OrderForRoute>
+): string[] {
+  const ids: string[] = [];
+  for (const stop of stops) {
+    const locId = stop.location_id ?? "";
+    if (isDepotLikeStop(locId)) continue;
+    const order = orderByVisitId.get(locId);
+    if (order) ids.push(order.id);
+  }
+  return ids;
+}
+
+/** Combineer handmatig gekozen orders met Routific-volgorde voor de overige stops. */
+export function mergePartialManualRouteOrders(
+  parallelRoutes: ParallelRouteSpec[],
+  routificOrdersByVehicle: string[][]
+): Map<number, string[]> {
+  const result = new Map<number, string[]>();
+
+  for (let i = 0; i < parallelRoutes.length; i++) {
+    const routeNum = i + 1;
+    const pinsThisRoute = parallelRoutes[i]?.orderIds ?? [];
+    const pinsOtherRoutes = new Set(
+      parallelRoutes.flatMap((r, j) => (j === i ? [] : (r.orderIds ?? [])))
+    );
+
+    const fromRoutific = (routificOrdersByVehicle[i] ?? []).filter(
+      (id) => !pinsOtherRoutes.has(id)
+    );
+
+    const merged: string[] = [];
+    const seen = new Set<string>();
+
+    for (const id of pinsThisRoute) {
+      if (!seen.has(id)) {
+        merged.push(id);
+        seen.add(id);
+      }
+    }
+    for (const id of fromRoutific) {
+      if (seen.has(id)) continue;
+      merged.push(id);
+      seen.add(id);
+    }
+
+    result.set(routeNum, merged);
+  }
+
+  return result;
+}
+
+/** Vul orders in die Routific niet kon/plan niet (verdeel over route met minste stops). */
+export function appendUnassignedOrdersToRoutes(
+  allOrderIds: string[],
+  routeOrderLists: Map<number, string[]>
+): void {
+  const assigned = new Set(Array.from(routeOrderLists.values()).flat());
+  const unrouted = allOrderIds.filter((id) => !assigned.has(id));
+  if (unrouted.length === 0) return;
+
+  for (const id of unrouted) {
+    let targetRoute = 1;
+    let minLen = Infinity;
+    for (const [routeNum, list] of routeOrderLists) {
+      if (list.length < minLen) {
+        minLen = list.length;
+        targetRoute = routeNum;
+      }
+    }
+    const list = routeOrderLists.get(targetRoute);
+    if (list) list.push(id);
+    else routeOrderLists.set(targetRoute, [id]);
+  }
+}
+
+export function buildArrivalTimeMapFromSolution(
+  solution: Record<string, RoutificSolutionStop[]>,
+  orderByVisitId: Map<string, OrderForRoute>
+): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const stops of Object.values(solution ?? {})) {
+    for (const stop of stops) {
+      const locId = stop.location_id ?? "";
+      if (isDepotLikeStop(locId)) continue;
+      const order = orderByVisitId.get(locId);
+      const arrival = parseRoutificArrivalTime(stop.arrival_time);
+      if (order && arrival) map.set(order.id, arrival);
+    }
+  }
+  return map;
+}
+
+/** Tijdsloten voor een vaste stopvolgorde (o.a. na handmatige + Routific merge). */
+export function buildRouteSlotsFromOrderSequence(
+  orderIds: string[],
+  arrivalByOrderId: Map<string, string>,
+  routeNummer: number,
+  ordersById: Map<string, OrderForRoute>,
+  defaultStart: string
+): BuiltRouteSlot[] {
+  const results: BuiltRouteSlot[] = [];
+  let prevFinishMin: number | null = null;
+  let stopIndex = 0;
+
+  for (const orderId of orderIds) {
+    const order = ordersById.get(orderId);
+    if (!order) continue;
+
+    const routificArrival = arrivalByOrderId.get(orderId);
+    let arrivalMin = routificArrival
+      ? toMinutes(routificArrival)
+      : prevFinishMin ?? toMinutes(defaultStart);
+
+    if (prevFinishMin != null && arrivalMin < prevFinishMin) {
+      arrivalMin = prevFinishMin;
+    }
+
+    const arrivalTime = fromMinutes(arrivalMin);
+    const aankomsttijd = maakTijdslot(arrivalTime, order.bezorgtijd_voorkeur);
+    prevFinishMin = arrivalMin + SERVICE_TIME_MINUTES;
+    stopIndex += 1;
+
     results.push({
       order_id: order.id,
       aankomsttijd,
