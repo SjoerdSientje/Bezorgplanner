@@ -39,9 +39,14 @@ function isGroteFiets(producten: string | null | undefined): boolean {
   return GROTE_FIETS_PATTERNS.some((p) => p.test(text));
 }
 
-/** Load-eenheden per order (zelfde berekening als Routific visits). */
+/**
+ * Load-eenheden per order (zelfde berekening als Routific visits).
+ * aantal_fietsen = 0 is bewust (bv. "Reparatie aan huis": geen fiets mee in de bus) en
+ * telt dus als 0 load — alleen ontbrekende waarde (null/undefined) valt terug op 1.
+ */
 export function orderRouteLoad(o: OrderForRoute): number {
-  const baseFietsen = Math.max(1, Number(o.aantal_fietsen) || 1);
+  const raw = o.aantal_fietsen;
+  const baseFietsen = raw == null || !Number.isFinite(Number(raw)) ? 1 : Math.max(0, Number(raw));
   const unitSize = isGroteFiets(o.producten) ? 2 : 1;
   return baseFietsen * unitSize;
 }
