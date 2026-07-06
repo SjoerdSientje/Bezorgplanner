@@ -126,13 +126,15 @@ function buildVisitForOrder(
 
 function buildVisits(
   orders: OrderForRoute[],
-  routes: ParallelRouteSpec[]
+  routes: ParallelRouteSpec[],
+  pinToRouteType: Map<string, string>
 ): RoutificPayload["visits"] {
   const defaultStart = earliestParallelShiftStart(routes);
   const visits: RoutificPayload["visits"] = {};
   for (const o of orders) {
     const visitId = sanitizeVisitId(o.id);
-    visits[visitId] = buildVisitForOrder(o, defaultStart);
+    const vehicleType = pinToRouteType.get(o.id);
+    visits[visitId] = buildVisitForOrder(o, defaultStart, vehicleType);
   }
   return visits;
 }
@@ -182,28 +184,25 @@ export function buildRoutificPayloadFromRoutes(
   if (routes.length === 0) {
     throw new Error("Minimaal één route nodig.");
   }
-  const defaultStart = earliestParallelShiftStart(routes);
-  const assignmentMode = getRouteAssignmentMode(routes, orders.length);
-  const orderById = new Map(orders.map((o) => [o.id, o]));
 
-  const visits: RoutificPayload["visits"] = {};
-  if (assignmentMode === "fullManual") {
-    routes.forEach((r, i) => {
-      const vehicleType = `route_${i + 1}`;
-      for (const orderId of r.orderIds ?? []) {
-        const o = orderById.get(orderId);
-        if (!o) continue;
-        visits[sanitizeVisitId(o.id)] = buildVisitForOrder(o, r.shift_start, vehicleType);
-      }
-    });
-  } else {
-    Object.assign(visits, buildVisits(orders, routes));
-  }
+  // Handmatig gekozen orders (Kies adressen) worden via Routific's `type`-koppeling
+  // hard vastgezet op hún route: alléén die route's voertuig mag de visit serveren.
+  // Niet-gekozen orders krijgen geen type, dus die blijven vrij verdeelbaar over alle
+  // voertuigen (incl. voertuigen met pins) — Routific vult de resterende capaciteit
+  // dan zelf optimaal, zónder dat een pin de capaciteitslimiet van zijn route omzeilt.
+  const pinToRouteType = new Map<string, string>();
+  routes.forEach((r, i) => {
+    for (const orderId of r.orderIds ?? []) {
+      pinToRouteType.set(orderId, `route_${i + 1}`);
+    }
+  });
+
+  const visits = buildVisits(orders, routes, pinToRouteType);
 
   const fleet: Record<string, VehicleConfig> = {};
   routes.forEach((r, i) => {
     const cap = Math.max(1, Math.min(99, Math.floor(Number(r.capacity) || 0)));
-    const vehicleType = assignmentMode === "fullManual" ? `route_${i + 1}` : undefined;
+    const vehicleType = (r.orderIds?.length ?? 0) > 0 ? `route_${i + 1}` : undefined;
     fleet[`vehicle_${i + 1}`] = {
       start_location: { address: DEPOT_ADDRESS },
       end_location: { address: DEPOT_ADDRESS },
