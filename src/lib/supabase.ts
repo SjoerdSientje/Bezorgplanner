@@ -23,27 +23,42 @@ export function createServerSupabaseClient() {
 }
 
 /**
- * Haalt ALLE orders op via directe REST-aanroep.
- * De Supabase JS-client triggert een onzichtbare db-max-rows limiet bij grote queries.
- * Directe fetch met service-role key omzeilt dit volledig.
+ * Haalt ALLE orders op via directe REST-aanroep, met paginering.
+ * PostgREST geeft standaard max. 1000 rijen per call terug (db-max-rows), ook bij een
+ * "kale" fetch met de service-role key — dat omzeilt de limiet dus NIET. Bij >1000 orders
+ * in de tabel werden hierdoor eerder stilzwijgend rijen buiten de eerste 1000 genegeerd.
+ * Gebruik bij voorkeur een serverside WHERE-filter (kleinere resultset) i.p.v. deze
+ * functie; dit is een fallback voor de zeldzame gevallen waarin echt alles nodig is.
  */
 export async function fetchAllOrders(): Promise<Record<string, unknown>[]> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !key) return [];
 
-  const res = await fetch(`${url}/rest/v1/orders?select=*`, {
-    headers: {
-      apikey: key,
-      Authorization: `Bearer ${key}`,
-      Prefer: "count=none",
-    },
-    cache: "no-store",
-  });
+  const PAGE_SIZE = 1000;
+  const all: Record<string, unknown>[] = [];
+  let offset = 0;
 
-  if (!res.ok) {
-    console.error("[fetchAllOrders] fout:", res.status, await res.text());
-    return [];
+  while (true) {
+    const res = await fetch(`${url}/rest/v1/orders?select=*&order=id`, {
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+        Prefer: "count=none",
+        Range: `${offset}-${offset + PAGE_SIZE - 1}`,
+      },
+      cache: "no-store",
+    });
+
+    if (!res.ok) {
+      console.error("[fetchAllOrders] fout:", res.status, await res.text());
+      return all;
+    }
+    const page = (await res.json()) as Record<string, unknown>[];
+    all.push(...page);
+    if (page.length < PAGE_SIZE) break;
+    offset += PAGE_SIZE;
   }
-  return res.json();
+
+  return all;
 }

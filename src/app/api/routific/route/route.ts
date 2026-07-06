@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { fetchAllOrders } from "@/lib/supabase";
 import { getPlanningDate } from "@/lib/planning-date";
 import { requireAccountEmail } from "@/lib/account";
 import {
@@ -139,17 +138,25 @@ export async function POST(request: NextRequest) {
     );
 
     // Zelfde set als Lijst Sjoerd: alle orders met meenemen_in_planning (niet in Routes-tab).
+    // Belangrijk: gefilterde query (owner + status + meenemen), NIET fetchAllOrders() —
+    // die haalt de volledige (multi-tenant) orders-tabel op zonder paginering en liep hier
+    // stil tegen PostgREST's default max-rows (1000) aan bij >1000 orders totaal, waardoor
+    // een deel van de nieuwste/oudste orders — willekeurig welke — nooit in de Routific-
+    // batch terechtkwam. Met een serverside WHERE-filter blijft de resultset klein genoeg.
     const { date: planningDate } = getPlanningDate();
-    const allOrders = await fetchAllOrders();
-
-    // Eerst: orders die qua eigenaar + status + "meenemen" in Lijst Sjoerd zouden staan,
-    // ongeacht of ze (nog) een actieve planning_slot hebben — voor diagnose van "Overig".
-    const sjoerdEligible = (allOrders as unknown as Record<string, unknown>[]).filter((o) => {
-      if (String(o.owner_email ?? "") !== ownerEmail) return false;
-      if (o.status !== "ritjes_vandaag") return false;
-      if (!o.meenemen_in_planning) return false;
-      return true;
-    });
+    const { data: sjoerdEligibleRaw, error: sjoerdError } = await supabase
+      .from("orders")
+      .select("*")
+      .eq("owner_email", ownerEmail)
+      .eq("status", "ritjes_vandaag")
+      .eq("meenemen_in_planning", true);
+    if (sjoerdError) {
+      return NextResponse.json(
+        { error: "Orders ophalen mislukt.", detail: sjoerdError.message },
+        { status: 500 }
+      );
+    }
+    const sjoerdEligible = (sjoerdEligibleRaw ?? []) as unknown as Record<string, unknown>[];
 
     const rows = (sjoerdEligible.filter(
       (o) => !routesTabOrderIds.has(String(o.id ?? "").trim())
