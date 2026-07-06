@@ -12,9 +12,8 @@ import {
 } from "@/lib/routific-payload";
 import { geocodeOrdersForRouting } from "@/lib/pdok-geocode";
 import {
-  appendUnassignedOrdersToRoutes,
   buildArrivalTimeMapFromSolution,
-  buildFinalRouteOrderLists,
+  buildRoutificRouteOrderLists,
   buildRouteSlotsFromOrderSequence,
   getRouteCapacityWarnings,
 } from "@/lib/routific-slots";
@@ -285,19 +284,27 @@ export async function POST(request: NextRequest) {
     const ordersById = new Map(rowsGeocoded.map((o) => [o.id, o]));
     const arrivalByOrderId = buildArrivalTimeMapFromSolution(solution ?? {}, orderByVisitId);
 
-    const routeOrderLists = buildFinalRouteOrderLists(
+    const { routeOrderLists, unassignedIds } = buildRoutificRouteOrderLists(
       parallelRoutes,
       solution ?? {},
       vehicleKeys,
       orderByVisitId,
-      allOrderIds,
-      ordersById
+      ordersById,
+      assignmentMode,
+      allOrderIds
     );
 
+    const skippedNoArrival: string[] = [];
+
     for (const [routeNummer, orderIds] of Array.from(routeOrderLists.entries())) {
+      if (orderIds.length === 0) continue;
       const routeNummerDb = meerDanEenRoute ? routeNummer : null;
+      const withArrival = orderIds.filter((id) => arrivalByOrderId.has(id));
+      for (const id of orderIds) {
+        if (!arrivalByOrderId.has(id)) skippedNoArrival.push(id);
+      }
       const built = buildRouteSlotsFromOrderSequence(
-        orderIds,
+        withArrival,
         arrivalByOrderId,
         routeNummer,
         ordersById,
@@ -313,41 +320,6 @@ export async function POST(request: NextRequest) {
           rit_nummer: slot.rit_nummer,
           route_nummer: routeNummerDb,
         });
-      }
-    }
-
-    // Garantie: elke order in de batch krijgt een route (geen Overig).
-    const writtenIds = new Set(slotsToInsert.map((s) => s.order_id));
-    const stillMissing = allOrderIds.filter((id) => !writtenIds.has(id));
-    if (stillMissing.length > 0) {
-      appendUnassignedOrdersToRoutes(stillMissing, routeOrderLists, parallelRoutes, ordersById);
-      for (const id of stillMissing) {
-        let routeNummer = 1;
-        for (const [rn, list] of Array.from(routeOrderLists.entries())) {
-          if (list.includes(id)) {
-            routeNummer = rn;
-            break;
-          }
-        }
-        const routeNummerDb = meerDanEenRoute ? routeNummer : null;
-        const built = buildRouteSlotsFromOrderSequence(
-          [id],
-          arrivalByOrderId,
-          routeNummer,
-          ordersById,
-          defaultStart
-        );
-        for (const slot of built) {
-          volgorde += 1;
-          slotsToInsert.push({
-            order_id: slot.order_id,
-            volgorde,
-            aankomsttijd: slot.aankomsttijd,
-            tijd_opmerking: slot.arrivalTime,
-            rit_nummer: slot.rit_nummer,
-            route_nummer: routeNummerDb,
-          });
-        }
       }
     }
 
@@ -411,6 +383,20 @@ export async function POST(request: NextRequest) {
     const unserved = output?.unserved as Record<string, string | unknown> | null | undefined;
     const unservedIds = unserved ? Object.keys(unserved) : [];
     const warningParts: string[] = [];
+
+    if (unassignedIds.length > 0 || skippedNoArrival.length > 0) {
+      const allUnassigned = [
+        ...new Set([...unassignedIds, ...skippedNoArrival]),
+      ];
+      const lines = allUnassigned.map((id) => {
+        const order = ordersById.get(id);
+        return `• ${order?.naam ?? id}`;
+      });
+      warningParts.push(
+        `${allUnassigned.length} order(s) niet ingepland (passen niet op route of Routific unserved):\n${lines.join("\n")}`
+      );
+    }
+
     if (unservedIds.length > 0) {
       const lines = unservedIds.map((uid) => {
         const order = orderByVisitId.get(uid) ?? orderByVisitId.get(uid.replace(/[.$]/g, "_"));
@@ -419,7 +405,7 @@ export async function POST(request: NextRequest) {
         return `• ${naam}${reden}`;
       });
       warningParts.push(
-        `⚠️ ${unservedIds.length} order(s) niet ingepland door Routific:\n${lines.join("\n")}`
+        `Routific unserved (${unservedIds.length}):\n${lines.join("\n")}`
       );
     }
     const capacityWarnings = getRouteCapacityWarnings(routeOrderLists, parallelRoutes, ordersById);
@@ -430,7 +416,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       ok: true,
-      message: `Route berekend en ${slotsToInsert.length} tijdsloten opgeslagen (van ${rowsForRouting.length} orders, ${SERVICE_TIME_MINUTES} min uitladen per stop).`,
+      message: `Route berekend: ${slotsToInsert.length} van ${rowsForRouting.length} orders ingepland (${SERVICE_TIME_MINUTES} min uitladen per stop).`,
       planningDate,
       vertrektijd,
       visitCount: rows.length,
