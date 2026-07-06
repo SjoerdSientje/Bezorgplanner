@@ -8,9 +8,13 @@ import { requireAccountEmail } from "@/lib/account";
  * POST /api/planning-goedkeuren
  *
  * Verplaatst alle "ritjes vandaag"-orders met tijdslot naar planning_slots.
- * - Als planning leeg is: slots worden direct als planning gezet (vandaag/morgen: 18:00 Amsterdam, zie planning-date).
- * - Als planning al actieve slots heeft: nieuwe slots op morgen — alle ritjes met tijdslot die
- *   nog niet op planning vandaag staan (Routes-tab), behalve expliciet "vandaag" in datum_opmerking.
+ * Doeldatum per order (niet uniform voor de hele batch!):
+ * - Order zegt expliciet "vandaag" in datum_opmerking → altijd vandaag, ook als er al
+ *   een actieve planning voor vandaag staat (bv. een eerdere batch die nog niet is
+ *   afgerond). Zo blokkeert een oude/lopende rit niet een nieuwe "vandaag"-route.
+ * - Order zegt expliciet "morgen" → altijd morgen.
+ * - Geen duidelijk datumsignaal → val terug op de 18:00-rolloverregel, waarbij een al
+ *   actieve planning voor vandaag betekent dat dit een nieuwe batch voor morgen is.
  * Na het opslaan van planning_slots wordt per order ook WhatsApp geprobeerd (zelfde templates als "Stuur appjes").
  */
 export async function POST(request: NextRequest) {
@@ -19,9 +23,11 @@ export async function POST(request: NextRequest) {
 
     const supabase = createServerSupabaseClient();
     const todayKey = getAmsterdamCalendarDate(0);
+    const tomorrowKey = getAmsterdamCalendarDate(1);
 
-    // Eerst doeldatum: bij actieve planning → morgen-batch; anders vandaag/morgen via 18:00-regel
-    const { date: targetDate, isRitjesVoorMorgen } = await getTargetPlanningDate(
+    // Fallback-doeldatum voor orders zonder duidelijk "vandaag"/"morgen"-signaal:
+    // bij actieve planning → morgen-batch; anders vandaag/morgen via 18:00-regel.
+    const { date: fallbackDate, isRitjesVoorMorgen: fallbackIsMorgen } = await getTargetPlanningDate(
       ownerEmail,
       supabase as any
     );
@@ -59,22 +65,30 @@ export async function POST(request: NextRequest) {
       (activeSlots ?? []).map((s: { order_id: string }) => String(s.order_id))
     );
 
+    /** Doeldatum per order: expliciet "vandaag"/"morgen" wint altijd van de fallback. */
+    const resolveTargetDate = (o: { datum?: unknown; datum_opmerking?: unknown }): string => {
+      if (orderIntendedForPlanningDateKey(o, todayKey)) return todayKey;
+      if (orderIntendedForPlanningDateKey(o, tomorrowKey)) return tomorrowKey;
+      return fallbackDate;
+    };
+
     const rows = (orders ?? []).filter((o) => {
       if ((o.aankomsttijd_slot ?? "").toString().trim().length === 0) return false;
       if (alreadyPlannedIds.has(String(o.id ?? ""))) return false;
-      if (!orderIntendedForPlanningDateKey(o, targetDate)) return false;
       return true;
     });
 
-    if (rows.length === 0) {
+    const rowsWithDate = rows.map((o) => ({ order: o, targetDate: resolveTargetDate(o) }));
+
+    if (rowsWithDate.length === 0) {
       return NextResponse.json({
         ok: true,
-        message: isRitjesVoorMorgen
+        message: fallbackIsMorgen
           ? "Geen orders voor morgen om goed te keuren (lopende ritjes van vandaag blijven staan)."
           : "Geen orders om goed te keuren (geen orders met tijdslot die voldoen aan de criteria).",
         count: 0,
-        planningDate: targetDate,
-        isRitjesVoorMorgen,
+        planningDate: fallbackDate,
+        isRitjesVoorMorgen: fallbackIsMorgen,
       });
     }
 
@@ -84,31 +98,41 @@ export async function POST(request: NextRequest) {
       if (!Number.isFinite(h)) return 9999;
       return h * 60 + (Number.isFinite(m) ? m : 0);
     };
-    const batchOrders = [...rows].sort((a, b) => {
-      const ra =
-        a.route_nummer != null && Number(a.route_nummer) > 0 ? Number(a.route_nummer) : 9999;
-      const rb =
-        b.route_nummer != null && Number(b.route_nummer) > 0 ? Number(b.route_nummer) : 9999;
-      if (ra !== rb) return ra - rb;
-      const sa = a.rit_nummer != null && Number(a.rit_nummer) > 0 ? Number(a.rit_nummer) : 9999;
-      const sb = b.rit_nummer != null && Number(b.rit_nummer) > 0 ? Number(b.rit_nummer) : 9999;
-      if (sa !== sb) return sa - sb;
-      return (
-        parseMin((a.aankomsttijd_slot ?? "").toString()) -
-        parseMin((b.aankomsttijd_slot ?? "").toString())
-      );
-    });
+    const batchOrders = rowsWithDate
+      .map((r) => r.order)
+      .sort((a, b) => {
+        const ra =
+          a.route_nummer != null && Number(a.route_nummer) > 0 ? Number(a.route_nummer) : 9999;
+        const rb =
+          b.route_nummer != null && Number(b.route_nummer) > 0 ? Number(b.route_nummer) : 9999;
+        if (ra !== rb) return ra - rb;
+        const sa = a.rit_nummer != null && Number(a.rit_nummer) > 0 ? Number(a.rit_nummer) : 9999;
+        const sb = b.rit_nummer != null && Number(b.rit_nummer) > 0 ? Number(b.rit_nummer) : 9999;
+        if (sa !== sb) return sa - sb;
+        return (
+          parseMin((a.aankomsttijd_slot ?? "").toString()) -
+          parseMin((b.aankomsttijd_slot ?? "").toString())
+        );
+      });
+    const targetDateByOrderId = new Map(
+      rowsWithDate.map((r) => [String(r.order.id), r.targetDate])
+    );
 
-    // Verwijder alleen de slots voor orders in deze batch (niet alle slots voor targetDate —
-    // andere orders die al gepland staan voor die datum blijven onberoerd).
-    const batchOrderIds = batchOrders.map((o) => String(o.id));
-    if (batchOrderIds.length > 0) {
+    // Verwijder alleen de slots voor orders in deze batch, per doeldatum (niet alle slots
+    // voor die datum — andere orders die al gepland staan blijven onberoerd).
+    const idsByDate = new Map<string, string[]>();
+    for (const o of batchOrders) {
+      const d = targetDateByOrderId.get(String(o.id))!;
+      idsByDate.set(d, [...(idsByDate.get(d) ?? []), String(o.id)]);
+    }
+    for (const [datum, ids] of Array.from(idsByDate.entries())) {
+      if (ids.length === 0) continue;
       await supabase
         .from("planning_slots")
         .delete()
         .eq("owner_email", ownerEmail)
-        .eq("datum", targetDate)
-        .in("order_id", batchOrderIds);
+        .eq("datum", datum)
+        .in("order_id", ids);
     }
 
     const slotsToInsert: {
@@ -120,23 +144,27 @@ export async function POST(request: NextRequest) {
       tijd_opmerking: string;
     }[] = [];
 
+    // Volgorde loopt per (datum, route) apart, zodat mixen van vandaag/morgen-orders in
+    // dezelfde klik de volgnummers per dag niet verstoort.
     let volgordeInRoute = 0;
-    let lastRouteKey: string | null = null;
+    let lastGroupKey: string | null = null;
 
     for (const o of batchOrders) {
+      const datum = targetDateByOrderId.get(String(o.id))!;
       const routeKey =
         o.route_nummer != null && Number(o.route_nummer) > 0
           ? String(o.route_nummer)
           : "single";
-      if (routeKey !== lastRouteKey) {
+      const groupKey = `${datum}::${routeKey}`;
+      if (groupKey !== lastGroupKey) {
         volgordeInRoute = 0;
-        lastRouteKey = routeKey;
+        lastGroupKey = groupKey;
       }
       volgordeInRoute += 1;
 
       slotsToInsert.push({
         owner_email: ownerEmail,
-        datum: targetDate,
+        datum,
         order_id: o.id,
         volgorde: volgordeInRoute,
         aankomsttijd: (o.aankomsttijd_slot ?? "").toString().trim(),
@@ -160,6 +188,7 @@ export async function POST(request: NextRequest) {
     let whatsappSent = 0;
     let whatsappFailed = 0;
     for (const o of batchOrders as any[]) {
+      const datum = targetDateByOrderId.get(String(o.id))!;
       const sendRes = await sendWhatsAppByEvent(
         "stuur_appjes",
         {
@@ -172,7 +201,7 @@ export async function POST(request: NextRequest) {
           type: o.type,
           betaald: o.betaald,
           mp_tags: o.mp_tags,
-          datum: targetDate,
+          datum,
           opmerkingen_klant: o.opmerkingen_klant,
           bezorgtijd_voorkeur: o.bezorgtijd_voorkeur,
           in_planning_en_ritjes_vandaag: false,
@@ -188,14 +217,21 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const countToday = idsByDate.get(todayKey)?.length ?? 0;
+    const countTomorrow = idsByDate.get(tomorrowKey)?.length ?? 0;
+    const countOther = batchOrders.length - countToday - countTomorrow;
+    const messageParts: string[] = [];
+    if (countToday > 0) messageParts.push(`${countToday} order(s) in de planning gezet (vandaag)`);
+    if (countTomorrow > 0)
+      messageParts.push(`${countTomorrow} order(s) als ritjes voor morgen toegevoegd`);
+    if (countOther > 0) messageParts.push(`${countOther} order(s) op andere datum toegevoegd`);
+
     return NextResponse.json({
       ok: true,
-      message: isRitjesVoorMorgen
-        ? `${batchOrders.length} order(s) als ritjes voor morgen toegevoegd.`
-        : `${batchOrders.length} order(s) in de planning gezet.`,
+      message: messageParts.join(", ") + ".",
       count: batchOrders.length,
-      planningDate: targetDate,
-      isRitjesVoorMorgen,
+      planningDate: fallbackDate,
+      isRitjesVoorMorgen: countToday === 0 && countTomorrow > 0,
       whatsapp: {
         sent: whatsappSent,
         failed: whatsappFailed,
