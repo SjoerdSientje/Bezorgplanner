@@ -267,29 +267,14 @@ export function buildRoutificPayloadFromRoutes(
     });
   } else {
     Object.assign(visits, buildVisits(orders, defaultStart));
-    if (assignmentMode === "partialManual") {
-      routes.forEach((r, i) => {
-        const vehicleType = `route_${i + 1}`;
-        for (const orderId of r.orderIds ?? []) {
-          const o = orderById.get(orderId);
-          if (!o) continue;
-          const visitId = sanitizeVisitId(o.id);
-          const existing = visits[visitId];
-          if (existing) visits[visitId] = { ...existing, type: vehicleType };
-        }
-      });
-    }
+    // partialManual: geen visit-types — getypeerd voertuig blokkeert anders alle
+    // niet-gepinde orders voor die route (terwijl er wél capaciteit is).
   }
 
   const fleet: Record<string, VehicleConfig> = {};
   routes.forEach((r, i) => {
     const cap = Math.max(1, Math.min(99, Math.floor(Number(r.capacity) || 0)));
-    const vehicleType =
-      assignmentMode === "fullManual"
-        ? `route_${i + 1}`
-        : assignmentMode === "partialManual" && (r.orderIds ?? []).length > 0
-          ? `route_${i + 1}`
-          : undefined;
+    const vehicleType = assignmentMode === "fullManual" ? `route_${i + 1}` : undefined;
     fleet[`vehicle_${i + 1}`] = {
       start_location: { address: DEPOT_ADDRESS },
       end_location: { address: DEPOT_ADDRESS },

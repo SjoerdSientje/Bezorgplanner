@@ -56,9 +56,12 @@ export async function POST(request: NextRequest) {
         ? orderIdsRaw.map((id: unknown) => String(id).trim()).filter(Boolean)
         : [];
       const vertrektijd = String(r.vertrektijd ?? "").trim();
-      if (!/^\d{1,2}:\d{2}$/.test(vertrektijd)) {
+      if (
+        routeNummer != null &&
+        !/^\d{1,2}:\d{2}$/.test(vertrektijd)
+      ) {
         return NextResponse.json(
-          { error: `Ongeldige vertrektijd voor route ${routeNummer ?? "?"} (gebruik HH:MM).` },
+          { error: `Ongeldige vertrektijd voor route ${routeNummer} (gebruik HH:MM).` },
           { status: 400 }
         );
       }
@@ -99,8 +102,53 @@ export async function POST(request: NextRequest) {
 
     const updates: OrderUpdate[] = [];
 
+    const patchOrder = async (
+      orderId: string,
+      payload: {
+        route_nummer: number | null;
+        rit_nummer: number | null;
+        aankomsttijd_slot: string | null;
+      }
+    ) => {
+      let { error } = await supabase
+        .from("orders")
+        .update(payload)
+        .eq("owner_email", ownerEmail)
+        .eq("id", orderId);
+      if (error && supabaseMissingOrdersRouteNummerColumn(error) && "route_nummer" in payload) {
+        const { route_nummer: _r, ...rest } = payload;
+        const r2 = await supabase.from("orders").update(rest).eq("owner_email", ownerEmail).eq("id", orderId);
+        error = r2.error;
+      }
+      return error;
+    };
+
     for (const route of routes) {
       if (route.orderIds.length === 0) continue;
+
+      // Naar Overig slepen = uit planning halen (geen tijdslot).
+      if (route.routeNummer == null) {
+        for (const id of route.orderIds) {
+          const err = await patchOrder(id, {
+            route_nummer: null,
+            rit_nummer: null,
+            aankomsttijd_slot: null,
+          });
+          if (err) {
+            console.error("[route/reorder] unplan:", err);
+            return NextResponse.json(
+              { error: "Order uit route halen mislukt.", detail: err.message },
+              { status: 500 }
+            );
+          }
+          await supabase
+            .from("planning_slots")
+            .delete()
+            .eq("owner_email", ownerEmail)
+            .eq("order_id", id);
+        }
+        continue;
+      }
 
       const stops = route.orderIds.map((id) => {
         const o = orderById.get(id)! as Record<string, unknown>;
@@ -131,23 +179,6 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const patchOrder = async (
-      orderId: string,
-      payload: { route_nummer: number | null; rit_nummer: number; aankomsttijd_slot: string }
-    ) => {
-      let { error } = await supabase
-        .from("orders")
-        .update(payload)
-        .eq("owner_email", ownerEmail)
-        .eq("id", orderId);
-      if (error && supabaseMissingOrdersRouteNummerColumn(error) && "route_nummer" in payload) {
-        const { route_nummer: _r, ...rest } = payload;
-        const r2 = await supabase.from("orders").update(rest).eq("owner_email", ownerEmail).eq("id", orderId);
-        error = r2.error;
-      }
-      return error;
-    };
-
     for (const u of updates) {
       const err = await patchOrder(u.id, {
         route_nummer: u.route_nummer,
@@ -169,9 +200,9 @@ export async function POST(request: NextRequest) {
         .eq("order_id", u.id);
     }
 
-    // Sync volgorde in planning_slots per route
+    // Sync volgorde in planning_slots per route (niet voor Overig)
     for (const route of routes) {
-      if (route.orderIds.length === 0) continue;
+      if (route.orderIds.length === 0 || route.routeNummer == null) continue;
       for (let i = 0; i < route.orderIds.length; i++) {
         await supabase
           .from("planning_slots")

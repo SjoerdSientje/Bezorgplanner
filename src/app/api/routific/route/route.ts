@@ -10,9 +10,14 @@ import {
   type ParallelRouteSpec,
 } from "@/lib/routific-payload";
 import { geocodeOrdersForRouting } from "@/lib/pdok-geocode";
+import { recalculateRouteStops } from "@/lib/route-recalc";
 import {
+  assignOrdersWithSpareCapacity,
+  buildRouteOrderListsFromSolution,
   buildRouteSlotsFromRoutificStops,
+  enforcePinnedOrdersOnLists,
   getRouteCapacityWarnings,
+  routeListsNeedRecalc,
 } from "@/lib/routific-slots";
 import { SERVICE_TIME_MINUTES } from "@/lib/routific-payload";
 import { supabaseMissingOrdersRouteNummerColumn } from "@/lib/orders-route-nummer-supabase";
@@ -278,24 +283,77 @@ export async function POST(request: NextRequest) {
     const meerDanEenRoute = parallelRoutes.length > 1;
     const ordersById = new Map(rowsGeocoded.map((o) => [o.id, o]));
 
+    const { lists: routeOrderLists, rawLists } = buildRouteOrderListsFromSolution(
+      parallelRoutes,
+      solution ?? {},
+      orderByVisitId
+    );
+    enforcePinnedOrdersOnLists(routeOrderLists, parallelRoutes);
+
+    const assignedBeforeCapacity = new Set(Array.from(routeOrderLists.values()).flat());
+    const capacityCandidates = rowsForRouting
+      .map((o) => o.id)
+      .filter((id) => !assignedBeforeCapacity.has(id));
+    const stillUnassigned = assignOrdersWithSpareCapacity(
+      capacityCandidates,
+      routeOrderLists,
+      parallelRoutes,
+      ordersById
+    );
+
+    const needsRecalc = routeListsNeedRecalc(routeOrderLists, rawLists);
+
     for (let vi = 0; vi < parallelRoutes.length; vi++) {
-      const vehicleKey = vehicleKeys[vi] ?? `vehicle_${vi + 1}`;
-      const routeNummerVoertuig = meerDanEenRoute ? vi + 1 : null;
-      const built = buildRouteSlotsFromRoutificStops(
-        solution?.[vehicleKey] ?? [],
-        orderByVisitId,
-        routeNummerVoertuig
-      );
-      for (const slot of built) {
-        volgorde += 1;
-        slotsToInsert.push({
-          order_id: slot.order_id,
-          volgorde,
-          aankomsttijd: slot.aankomsttijd,
-          tijd_opmerking: slot.arrivalTime,
-          rit_nummer: slot.rit_nummer,
-          route_nummer: slot.route_nummer,
+      const routeNum = vi + 1;
+      const orderIds = routeOrderLists.get(routeNum) ?? [];
+      if (orderIds.length === 0) continue;
+
+      const routeNummerDb = meerDanEenRoute ? routeNum : null;
+
+      if (needsRecalc.has(routeNum)) {
+        const stops = orderIds.map((id) => {
+          const o = ordersById.get(id)!;
+          return {
+            id,
+            volledig_adres: String(o.volledig_adres ?? ""),
+            bezorgtijd_voorkeur: o.bezorgtijd_voorkeur
+              ? String(o.bezorgtijd_voorkeur)
+              : null,
+          };
         });
+        const recalculated = await recalculateRouteStops(
+          stops,
+          parallelRoutes[vi]!.shift_start
+        );
+        for (let i = 0; i < recalculated.length; i++) {
+          const slot = recalculated[i]!;
+          volgorde += 1;
+          slotsToInsert.push({
+            order_id: slot.id,
+            volgorde,
+            aankomsttijd: slot.aankomsttijd_slot,
+            tijd_opmerking: slot.arrivalTime,
+            rit_nummer: i + 1,
+            route_nummer: routeNummerDb,
+          });
+        }
+      } else {
+        const built = buildRouteSlotsFromRoutificStops(
+          solution?.[`vehicle_${routeNum}`] ?? [],
+          orderByVisitId,
+          routeNummerDb
+        );
+        for (const slot of built) {
+          volgorde += 1;
+          slotsToInsert.push({
+            order_id: slot.order_id,
+            volgorde,
+            aankomsttijd: slot.aankomsttijd,
+            tijd_opmerking: slot.arrivalTime,
+            rit_nummer: slot.rit_nummer,
+            route_nummer: slot.route_nummer,
+          });
+        }
       }
     }
 
@@ -362,10 +420,19 @@ export async function POST(request: NextRequest) {
 
     const servedIds = new Set(slotsToInsert.map((s) => s.order_id));
     const notPlanned = rowsForRouting.filter((o) => !servedIds.has(o.id));
-    if (notPlanned.length > 0) {
-      const lines = notPlanned.map((o) => `• ${o.naam ?? o.id}`);
+    if (notPlanned.length > 0 || stillUnassigned.length > 0) {
+      const allUnassigned = [
+        ...new Set([
+          ...notPlanned.map((o) => o.id),
+          ...stillUnassigned,
+        ]),
+      ];
+      const lines = allUnassigned.map((id) => {
+        const order = ordersById.get(id);
+        return `• ${order?.naam ?? id}`;
+      });
       warningParts.push(
-        `${notPlanned.length} order(s) niet ingepland (geen tijdslot):\n${lines.join("\n")}`
+        `${allUnassigned.length} order(s) niet ingepland (geen tijdslot):\n${lines.join("\n")}`
       );
     }
 
@@ -381,9 +448,7 @@ export async function POST(request: NextRequest) {
 
     const capacityWarnings = getRouteCapacityWarnings(
       parallelRoutes,
-      solution ?? {},
-      vehicleKeys,
-      orderByVisitId,
+      routeOrderLists,
       ordersById
     );
     if (capacityWarnings.length > 0) {
