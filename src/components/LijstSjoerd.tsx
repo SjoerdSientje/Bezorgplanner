@@ -29,6 +29,19 @@ import type { AlleRittenOrder } from "@/components/AlleRittenTabel";
 import { compareOrdersOnRoute } from "@/lib/ritjes-mapping";
 import { routeStyleForIndex } from "@/lib/route-colors";
 import { getVertrektijdForRoute } from "@/lib/route-vertrektijden";
+import { orderRouteLoad, type OrderForRoute } from "@/lib/routific-payload";
+
+/** Totaal aantal load-eenheden voor een lijst orders (grote fietsen tellen dubbel). */
+function totalLoadForOrders(
+  orderIds: string[],
+  orderById: Map<string, AlleRittenOrder>
+): number {
+  return orderIds.reduce((sum, id) => {
+    const o = orderById.get(id);
+    if (!o) return sum;
+    return sum + orderRouteLoad(o as unknown as OrderForRoute);
+  }, 0);
+}
 
 const GRID_COLS =
   "grid-cols-[2.5rem_minmax(9rem,1fr)_minmax(7rem,0.8fr)_minmax(12rem,1.4fr)_minmax(9rem,1fr)_minmax(9rem,1fr)_minmax(9rem,1fr)]";
@@ -926,7 +939,8 @@ export default function LijstSjoerd({
                 >
                   <span className={`text-sm font-semibold ${style.header}`}>{style.label}</span>
                   <span className="ml-2 text-xs text-stone-500">
-                    ({orderIds.length} order{orderIds.length === 1 ? "" : "s"})
+                    ({orderIds.length} order{orderIds.length === 1 ? "" : "s"} ·{" "}
+                    {totalLoadForOrders(orderIds, orderById)} load-eenh.)
                   </span>
                 </div>
               )}
@@ -1078,7 +1092,8 @@ function RouteGroupRows({
         >
           <span className={`text-sm font-semibold ${style.header}`}>{style.label}</span>
           <span className="ml-2 text-xs text-stone-500">
-            ({orderIds.length} order{orderIds.length === 1 ? "" : "s"})
+            ({orderIds.length} order{orderIds.length === 1 ? "" : "s"} ·{" "}
+            {totalLoadForOrders(orderIds, orderById)} load-eenh.)
           </span>
         </DroppableRouteHeader>
       )}

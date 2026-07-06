@@ -6,6 +6,7 @@ import { requireAccountEmail } from "@/lib/account";
 import {
   buildRoutificPayloadFromRoutes,
   getRouteAssignmentMode,
+  orderRouteLoad,
   type OrderForRoute,
   type ParallelRouteSpec,
 } from "@/lib/routific-payload";
@@ -374,8 +375,17 @@ export async function POST(request: NextRequest) {
     const notPlanned = rowsForRouting.filter((o) => !servedIds.has(o.id));
     if (notPlanned.length > 0) {
       const lines = notPlanned.map((o) => `• ${o.naam ?? o.id}`);
+      const loadPerRoute = parallelRoutes
+        .map((r, i) => {
+          const load = (routeOrderLists.get(i + 1) ?? []).reduce(
+            (sum, id) => sum + (ordersById.has(id) ? orderRouteLoad(ordersById.get(id)!) : 0),
+            0
+          );
+          return `Route ${i + 1}: ${load}/${r.capacity} load-eenheden (grote fietsen tellen dubbel)`;
+        })
+        .join(", ");
       warningParts.push(
-        `${notPlanned.length} order(s) niet ingepland (geen tijdslot):\n${lines.join("\n")}`
+        `${notPlanned.length} order(s) niet ingepland — geen capaciteit meer over (${loadPerRoute}):\n${lines.join("\n")}`
       );
     }
 
