@@ -3,6 +3,7 @@
  */
 
 import { DEPOT_ADDRESS, SERVICE_TIME_MINUTES } from "@/lib/routific-payload";
+import { parseBezorgtijdRestriction } from "@/lib/bezorgtijd-window";
 import { maakTijdslot } from "@/lib/tijdslot";
 import { getChainTravelMinutes } from "@/lib/google-travel-times";
 
@@ -65,16 +66,32 @@ export function recalculateStopsFromLegMinutes(
   return results;
 }
 
+function deadlineMinutes(bezorgtijd: string | null): number {
+  const r = parseBezorgtijdRestriction(bezorgtijd);
+  if (!r) return 24 * 60;
+  if (r.kind === "voor") return toMinutes(r.maxEnd);
+  if (r.kind === "tussen") return toMinutes(r.maxEnd);
+  return 24 * 60;
+}
+
+/** Sorteer stops: strakke deadlines eerst, daarna rest (voor herberekening na pin-wijziging). */
+export function sortStopsForTimedRoute(stops: RouteStop[]): RouteStop[] {
+  return [...stops].sort(
+    (a, b) => deadlineMinutes(a.bezorgtijd_voorkeur) - deadlineMinutes(b.bezorgtijd_voorkeur)
+  );
+}
+
 /** Haal reistijden op via Google en bereken tijdsloten. */
 export async function recalculateRouteStops(
   stops: RouteStop[],
   vertrektijd: string,
   depot = DEPOT_ADDRESS
 ): Promise<RecalculatedStop[]> {
-  const addresses = stops.map((s) => String(s.volledig_adres ?? "").trim()).filter(Boolean);
-  if (addresses.length !== stops.length) {
+  const ordered = sortStopsForTimedRoute(stops);
+  const addresses = ordered.map((s) => String(s.volledig_adres ?? "").trim()).filter(Boolean);
+  if (addresses.length !== ordered.length) {
     throw new Error("Eén of meer stops hebben geen volledig adres.");
   }
   const legMinutes = await getChainTravelMinutes(addresses, depot);
-  return recalculateStopsFromLegMinutes(stops, vertrektijd, legMinutes);
+  return recalculateStopsFromLegMinutes(ordered, vertrektijd, legMinutes);
 }

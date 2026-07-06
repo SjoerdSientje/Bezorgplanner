@@ -154,29 +154,29 @@ export function buildRouteOrderListsFromSolution(
   return { lists, rawLists };
 }
 
-/** Verplaats handmatig gekozen orders naar hun route (na Routific). */
+/** Verplaats handmatig gekozen orders naar hun route (behoud Routific-volgorde verder). */
 export function enforcePinnedOrdersOnLists(
   routeOrderLists: Map<number, string[]>,
   parallelRoutes: ParallelRouteSpec[]
 ): boolean {
-  const allPinIds = new Set(parallelRoutes.flatMap((r) => r.orderIds ?? []));
-  if (allPinIds.size === 0) return false;
+  const pinToRoute = new Map<string, number>();
+  for (let i = 0; i < parallelRoutes.length; i++) {
+    for (const id of parallelRoutes[i]?.orderIds ?? []) {
+      pinToRoute.set(id, i + 1);
+    }
+  }
+  if (pinToRoute.size === 0) return false;
 
   for (const list of Array.from(routeOrderLists.values())) {
     for (let j = list.length - 1; j >= 0; j--) {
-      if (allPinIds.has(list[j]!)) list.splice(j, 1);
+      if (pinToRoute.has(list[j]!)) list.splice(j, 1);
     }
   }
 
-  for (let i = 0; i < parallelRoutes.length; i++) {
-    const routeNum = i + 1;
-    const pins = parallelRoutes[i]?.orderIds ?? [];
-    if (pins.length === 0) continue;
+  for (const [orderId, routeNum] of Array.from(pinToRoute.entries())) {
     const list = routeOrderLists.get(routeNum) ?? [];
     routeOrderLists.set(routeNum, list);
-    for (const id of pins) {
-      if (!list.includes(id)) list.unshift(id);
-    }
+    if (!list.includes(orderId)) list.push(orderId);
   }
   return true;
 }
@@ -197,45 +197,4 @@ export function routeListsNeedRecalc(
     if (!listsEqual(final, raw)) needs.add(routeNum);
   }
   return needs;
-}
-
-/**
- * Wijs niet-ingepakte orders toe aan route met meeste resterende capaciteit.
- * Alleen als load past — anders blijven ze zonder tijdslot.
- */
-export function assignOrdersWithSpareCapacity(
-  candidateIds: string[],
-  routeOrderLists: Map<number, string[]>,
-  parallelRoutes: ParallelRouteSpec[],
-  ordersById: Map<string, OrderForRoute>
-): string[] {
-  const stillUnassigned: string[] = [];
-  const capacityFor = (routeNum: number) =>
-    Math.max(1, parallelRoutes[routeNum - 1]?.capacity ?? 99);
-
-  for (const id of candidateIds) {
-    const order = ordersById.get(id);
-    if (!order) continue;
-    const load = orderRouteLoad(order);
-
-    let bestRoute = -1;
-    let bestRemaining = -1;
-    for (let routeNum = 1; routeNum <= parallelRoutes.length; routeNum++) {
-      const list = routeOrderLists.get(routeNum) ?? [];
-      const remaining = capacityFor(routeNum) - routeListLoad(list, ordersById);
-      if (remaining >= load && remaining > bestRemaining) {
-        bestRemaining = remaining;
-        bestRoute = routeNum;
-      }
-    }
-
-    if (bestRoute < 0) {
-      stillUnassigned.push(id);
-      continue;
-    }
-    const list = routeOrderLists.get(bestRoute) ?? [];
-    list.push(id);
-    routeOrderLists.set(bestRoute, list);
-  }
-  return stillUnassigned;
 }

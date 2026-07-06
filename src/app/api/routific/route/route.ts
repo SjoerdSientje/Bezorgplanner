@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { fetchAllOrders } from "@/lib/supabase";
-import { getPlanningDate, isDatumOpmerkingVandaagOfMorgen } from "@/lib/planning-date";
+import { getPlanningDate } from "@/lib/planning-date";
 import { requireAccountEmail } from "@/lib/account";
 import {
   buildRoutificPayloadFromRoutes,
@@ -12,7 +12,6 @@ import {
 import { geocodeOrdersForRouting } from "@/lib/pdok-geocode";
 import { recalculateRouteStops } from "@/lib/route-recalc";
 import {
-  assignOrdersWithSpareCapacity,
   buildRouteOrderListsFromSolution,
   buildRouteSlotsFromRoutificStops,
   enforcePinnedOrdersOnLists,
@@ -141,20 +140,8 @@ export async function POST(request: NextRequest) {
         .filter(Boolean)
     );
 
-    // Bereken vandaag en morgen in Amsterdam-tijd — orders voor beide dagen worden meegenomen.
-    // getPlanningDate() geeft vóór 18:00 vandaag terug, waardoor orders met datum=morgen eerder
-    // werden uitgesloten als datum_opmerking leeg was. Door altijd beide data te checken werkt
-    // route-generatie correct op elk moment van de dag.
-    const toAmsterdamDateStr = (offsetDays: number): string => {
-      const d = new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Amsterdam" }));
-      d.setDate(d.getDate() + offsetDays);
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    };
-    const vandaagStr = toAmsterdamDateStr(0);
-    const morgenStr = toAmsterdamDateStr(1);
+    // Zelfde set als Lijst Sjoerd: alle orders met meenemen_in_planning (niet in Routes-tab).
     const { date: planningDate } = getPlanningDate();
-
-    // Gebruik fetchAllOrders om row-limit bug te omzeilen, filter daarna in JS
     const allOrders = await fetchAllOrders();
     const rows = (allOrders as unknown as OrderForRoute[]).filter((o) => {
       const orderId = String((o as unknown as Record<string, unknown>).id ?? "").trim();
@@ -162,17 +149,12 @@ export async function POST(request: NextRequest) {
       if ((o as unknown as Record<string, unknown>).status !== "ritjes_vandaag") return false;
       if (routesTabOrderIds.has(orderId)) return false;
       if (!(o as unknown as Record<string, unknown>).meenemen_in_planning) return false;
-      const opmerking = ((o as unknown as Record<string, unknown>).datum_opmerking as string) ?? "";
-      const datum = (o as unknown as Record<string, unknown>).datum as string | null;
-      // Inclusief als datum_opmerking naar vandaag/morgen verwijst, of als datum = vandaag of morgen
-      const heeftVandaagOfMorgen = isDatumOpmerkingVandaagOfMorgen(opmerking);
-      const heeftDatum = datum === vandaagStr || datum === morgenStr || datum === planningDate;
-      return heeftVandaagOfMorgen || heeftDatum;
+      return true;
     });
     if (rows.length === 0) {
       return NextResponse.json({
         ok: true,
-        message: `Geen orders gevonden met meenemen_in_planning=true en datum vandaag (${vandaagStr}) of morgen (${morgenStr}).`,
+        message: "Geen orders gevonden met meenemen_in_planning=true.",
         planningDate,
         vertrektijd,
         visitCount: 0,
@@ -289,17 +271,6 @@ export async function POST(request: NextRequest) {
       orderByVisitId
     );
     enforcePinnedOrdersOnLists(routeOrderLists, parallelRoutes);
-
-    const assignedBeforeCapacity = new Set(Array.from(routeOrderLists.values()).flat());
-    const capacityCandidates = rowsForRouting
-      .map((o) => o.id)
-      .filter((id) => !assignedBeforeCapacity.has(id));
-    const stillUnassigned = assignOrdersWithSpareCapacity(
-      capacityCandidates,
-      routeOrderLists,
-      parallelRoutes,
-      ordersById
-    );
 
     const needsRecalc = routeListsNeedRecalc(routeOrderLists, rawLists);
 
@@ -420,19 +391,10 @@ export async function POST(request: NextRequest) {
 
     const servedIds = new Set(slotsToInsert.map((s) => s.order_id));
     const notPlanned = rowsForRouting.filter((o) => !servedIds.has(o.id));
-    if (notPlanned.length > 0 || stillUnassigned.length > 0) {
-      const allUnassigned = [
-        ...new Set([
-          ...notPlanned.map((o) => o.id),
-          ...stillUnassigned,
-        ]),
-      ];
-      const lines = allUnassigned.map((id) => {
-        const order = ordersById.get(id);
-        return `• ${order?.naam ?? id}`;
-      });
+    if (notPlanned.length > 0) {
+      const lines = notPlanned.map((o) => `• ${o.naam ?? o.id}`);
       warningParts.push(
-        `${allUnassigned.length} order(s) niet ingepland (geen tijdslot):\n${lines.join("\n")}`
+        `${notPlanned.length} order(s) niet ingepland (geen tijdslot):\n${lines.join("\n")}`
       );
     }
 

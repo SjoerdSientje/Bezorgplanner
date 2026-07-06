@@ -44,77 +44,7 @@ export function orderRouteLoad(o: OrderForRoute): number {
   return baseFietsen * unitSize;
 }
 
-export type Tijdvenster =
-  | { start: string; end: string }
-  | { start: string; end: null }; // end: null = "anytime after start" voor Routific
-
-/**
- * Parsed "Bezorgtijd voorkeur" naar een tijdvenster in HH:MM.
- * - "na 15:00" / "pas na 16:00" → { start, end: null } (Routific: alleen start, geen end)
- * - "na 2" / "na 3" in **bezorgtijd voorkeur** (zonder minuten) → vaak middag: 14:00, 15:00 (uren 1–6 → +12)
- * - "tussen 12 en 17", "16:00 - 20:00" → { start, end }
- * Geen match → return null.
- */
-export function parseBezorgtijdVoorkeur(
-  text: string | null | undefined
-): Tijdvenster | null {
-  const raw = (text ?? "").trim().toLowerCase();
-  if (!raw || raw === "geen") return null;
-
-  // "na X" of "pas na X" → alleen start, geen end (Routific: "anytime after")
-  const naMatch = raw.match(/\b(?:pas\s+)?na\s+(\d{1,2})(?::(\d{2}))?(?:\s*uur)?\b/i);
-  if (naMatch) {
-    let h = parseInt(naMatch[1], 10);
-    const explicitMinutes = naMatch[2] != null;
-    const m = explicitMinutes ? parseInt(naMatch[2]!, 10) : 0;
-    // "na 2" zonder :mm: klanten bedoelen vrijwel altijd 14:00, niet 02:00 (zelfde voor 1–6).
-    if (!explicitMinutes && h >= 1 && h <= 6) {
-      h += 12;
-    }
-    if (h >= 0 && h <= 23 && m >= 0 && m <= 59) {
-      return {
-        start: `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`,
-        end: null,
-      };
-    }
-  }
-
-  // "tussen 12 en 17" (alleen uren)
-  const tussen = raw.match(/tussen\s*(\d{1,2})\s*en\s*(\d{1,2})/i);
-  if (tussen) {
-    const h1 = parseInt(tussen[1], 10);
-    const h2 = parseInt(tussen[2], 10);
-    if (h1 >= 0 && h1 <= 23 && h2 >= 0 && h2 <= 23) {
-      return {
-        start: `${String(h1).padStart(2, "0")}:00`,
-        end: `${String(h2).padStart(2, "0")}:00`,
-      };
-    }
-  }
-
-  // Twee tijden: "16:00 - 20:00", "16:00 tot 20:00"
-  const times: string[] = [];
-  const hhmm = /\b(\d{1,2}):(\d{2})\b/g;
-  let m: RegExpExecArray | null;
-  while ((m = hhmm.exec(raw)) !== null) {
-    const hour = parseInt(m[1], 10);
-    const min = parseInt(m[2], 10);
-    if (hour >= 0 && hour <= 23 && min >= 0 && min <= 59) {
-      times.push(`${String(hour).padStart(2, "0")}:${String(min).padStart(2, "0")}`);
-    }
-  }
-  if (times.length === 0) {
-    const uurOnly = /\b(\d{1,2})\s*(?:uur|u\.?)\b/gi;
-    while ((m = uurOnly.exec(raw)) !== null) {
-      const hour = parseInt(m[1], 10);
-      if (hour >= 0 && hour <= 23) times.push(`${String(hour).padStart(2, "0")}:00`);
-    }
-  }
-
-  if (times.length >= 2) return { start: times[0], end: times[1] };
-  if (times.length === 1) return { start: times[0], end: DEFAULT_SHIFT_END };
-  return null;
-}
+export { parseBezorgtijdVoorkeur, type Tijdvenster } from "@/lib/bezorgtijd-window";
 
 type RoutificLocation = { address: string; lat?: number; lng?: number };
 
@@ -175,13 +105,13 @@ function buildLocation(address: string, lat?: number | null, lng?: number | null
 
 function buildVisitForOrder(
   o: OrderForRoute,
-  defaultStartForNoPreference: string,
+  shiftStart: string,
   vehicleType?: string
 ): RoutificPayload["visits"][string] {
   const address = (o.volledig_adres || "").trim() || "Onbekend adres";
   const load = orderRouteLoad(o);
-  const window = parseBezorgtijdVoorkeur(o.bezorgtijd_voorkeur);
-  const start = window ? window.start : defaultStartForNoPreference;
+  const window = parseBezorgtijdVoorkeur(o.bezorgtijd_voorkeur, shiftStart);
+  const start = window ? window.start : shiftStart;
   const end = window && window.end !== null ? window.end : DEFAULT_SHIFT_END;
 
   return {
@@ -196,12 +126,13 @@ function buildVisitForOrder(
 
 function buildVisits(
   orders: OrderForRoute[],
-  defaultStartForNoPreference: string
+  routes: ParallelRouteSpec[]
 ): RoutificPayload["visits"] {
+  const defaultStart = earliestParallelShiftStart(routes);
   const visits: RoutificPayload["visits"] = {};
   for (const o of orders) {
     const visitId = sanitizeVisitId(o.id);
-    visits[visitId] = buildVisitForOrder(o, defaultStartForNoPreference);
+    visits[visitId] = buildVisitForOrder(o, defaultStart);
   }
   return visits;
 }
@@ -262,13 +193,11 @@ export function buildRoutificPayloadFromRoutes(
       for (const orderId of r.orderIds ?? []) {
         const o = orderById.get(orderId);
         if (!o) continue;
-        visits[sanitizeVisitId(o.id)] = buildVisitForOrder(o, defaultStart, vehicleType);
+        visits[sanitizeVisitId(o.id)] = buildVisitForOrder(o, r.shift_start, vehicleType);
       }
     });
   } else {
-    Object.assign(visits, buildVisits(orders, defaultStart));
-    // partialManual: geen visit-types — getypeerd voertuig blokkeert anders alle
-    // niet-gepinde orders voor die route (terwijl er wél capaciteit is).
+    Object.assign(visits, buildVisits(orders, routes));
   }
 
   const fleet: Record<string, VehicleConfig> = {};
