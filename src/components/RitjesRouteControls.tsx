@@ -212,7 +212,6 @@ export default function RitjesRouteControls({
     setLoading(true);
     setMessage(null);
     try {
-      const hasManualSelection = cleaned.some((r) => r.orderIds.length > 0);
       const res = await fetch("/api/routific/route", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -221,7 +220,7 @@ export default function RitjesRouteControls({
             vertrektijd: r.vertrektijd.trim(),
             maxFietsen: r.maxFietsen,
             meerdereRitten: r.meerdereRitten,
-            ...(hasManualSelection ? { orderIds: r.orderIds } : {}),
+            ...(r.orderIds.length > 0 ? { orderIds: r.orderIds } : {}),
           })),
         }),
       });

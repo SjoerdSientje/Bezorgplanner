@@ -5,16 +5,13 @@ import { getPlanningDate, isDatumOpmerkingVandaagOfMorgen } from "@/lib/planning
 import { requireAccountEmail } from "@/lib/account";
 import {
   buildRoutificPayloadFromRoutes,
-  earliestParallelShiftStart,
   getRouteAssignmentMode,
   type OrderForRoute,
   type ParallelRouteSpec,
 } from "@/lib/routific-payload";
 import { geocodeOrdersForRouting } from "@/lib/pdok-geocode";
 import {
-  buildArrivalTimeMapFromSolution,
-  buildRoutificRouteOrderLists,
-  buildRouteSlotsFromOrderSequence,
+  buildRouteSlotsFromRoutificStops,
   getRouteCapacityWarnings,
 } from "@/lib/routific-slots";
 import { SERVICE_TIME_MINUTES } from "@/lib/routific-payload";
@@ -279,36 +276,15 @@ export async function POST(request: NextRequest) {
     };
 
     const meerDanEenRoute = parallelRoutes.length > 1;
-    const defaultStart = earliestParallelShiftStart(parallelRoutes);
-    const allOrderIds = rowsForRouting.map((o) => o.id);
     const ordersById = new Map(rowsGeocoded.map((o) => [o.id, o]));
-    const arrivalByOrderId = buildArrivalTimeMapFromSolution(solution ?? {}, orderByVisitId);
 
-    const { routeOrderLists, unassignedIds } = buildRoutificRouteOrderLists(
-      parallelRoutes,
-      solution ?? {},
-      vehicleKeys,
-      orderByVisitId,
-      ordersById,
-      assignmentMode,
-      allOrderIds
-    );
-
-    const skippedNoArrival: string[] = [];
-
-    for (const [routeNummer, orderIds] of Array.from(routeOrderLists.entries())) {
-      if (orderIds.length === 0) continue;
-      const routeNummerDb = meerDanEenRoute ? routeNummer : null;
-      const withArrival = orderIds.filter((id) => arrivalByOrderId.has(id));
-      for (const id of orderIds) {
-        if (!arrivalByOrderId.has(id)) skippedNoArrival.push(id);
-      }
-      const built = buildRouteSlotsFromOrderSequence(
-        withArrival,
-        arrivalByOrderId,
-        routeNummer,
-        ordersById,
-        defaultStart
+    for (let vi = 0; vi < parallelRoutes.length; vi++) {
+      const vehicleKey = vehicleKeys[vi] ?? `vehicle_${vi + 1}`;
+      const routeNummerVoertuig = meerDanEenRoute ? vi + 1 : null;
+      const built = buildRouteSlotsFromRoutificStops(
+        solution?.[vehicleKey] ?? [],
+        orderByVisitId,
+        routeNummerVoertuig
       );
       for (const slot of built) {
         volgorde += 1;
@@ -318,7 +294,7 @@ export async function POST(request: NextRequest) {
           aankomsttijd: slot.aankomsttijd,
           tijd_opmerking: slot.arrivalTime,
           rit_nummer: slot.rit_nummer,
-          route_nummer: routeNummerDb,
+          route_nummer: slot.route_nummer,
         });
       }
     }
@@ -384,16 +360,12 @@ export async function POST(request: NextRequest) {
     const unservedIds = unserved ? Object.keys(unserved) : [];
     const warningParts: string[] = [];
 
-    if (unassignedIds.length > 0 || skippedNoArrival.length > 0) {
-      const allUnassigned = [
-        ...new Set([...unassignedIds, ...skippedNoArrival]),
-      ];
-      const lines = allUnassigned.map((id) => {
-        const order = ordersById.get(id);
-        return `• ${order?.naam ?? id}`;
-      });
+    const servedIds = new Set(slotsToInsert.map((s) => s.order_id));
+    const notPlanned = rowsForRouting.filter((o) => !servedIds.has(o.id));
+    if (notPlanned.length > 0) {
+      const lines = notPlanned.map((o) => `• ${o.naam ?? o.id}`);
       warningParts.push(
-        `${allUnassigned.length} order(s) niet ingepland (passen niet op route of Routific unserved):\n${lines.join("\n")}`
+        `${notPlanned.length} order(s) niet ingepland (geen tijdslot):\n${lines.join("\n")}`
       );
     }
 
@@ -404,11 +376,16 @@ export async function POST(request: NextRequest) {
         const reden = typeof unserved?.[uid] === "string" ? ` (${unserved[uid]})` : "";
         return `• ${naam}${reden}`;
       });
-      warningParts.push(
-        `Routific unserved (${unservedIds.length}):\n${lines.join("\n")}`
-      );
+      warningParts.push(`Routific unserved (${unservedIds.length}):\n${lines.join("\n")}`);
     }
-    const capacityWarnings = getRouteCapacityWarnings(routeOrderLists, parallelRoutes, ordersById);
+
+    const capacityWarnings = getRouteCapacityWarnings(
+      parallelRoutes,
+      solution ?? {},
+      vehicleKeys,
+      orderByVisitId,
+      ordersById
+    );
     if (capacityWarnings.length > 0) {
       warningParts.push(capacityWarnings.join("\n"));
     }

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
-import { getAmsterdamCalendarDate } from "@/lib/planning-date";
+import { getAmsterdamCalendarDate, orderIntendedForPlanningDateKey } from "@/lib/planning-date";
 import { getTargetPlanningDate } from "@/lib/planning-promote";
 import { sendWhatsAppByEvent } from "@/lib/whatsapp";
 import { requireAccountEmail } from "@/lib/account";
@@ -61,8 +61,8 @@ export async function POST(request: NextRequest) {
 
     const rows = (orders ?? []).filter((o) => {
       if ((o.aankomsttijd_slot ?? "").toString().trim().length === 0) return false;
-      // Al in de Routes-tab (actieve planning slot) → overslaan
       if (alreadyPlannedIds.has(String(o.id ?? ""))) return false;
+      if (!orderIntendedForPlanningDateKey(o, targetDate)) return false;
       return true;
     });
 
