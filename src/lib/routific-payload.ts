@@ -3,6 +3,8 @@
  * Geen ChatGPT: structuur en tijdvenster-parsing zijn hardcoded (minder foutgevoelig).
  */
 
+import { parseBezorgtijdVoorkeur } from "@/lib/bezorgtijd-window";
+
 export const DEPOT_ADDRESS = "Kapelweg 2, 3732 GS, De Bilt, Netherlands";
 /** Uitladen per bezorgstop (minuten) — Routific duration + tijd tussen stops. */
 export const SERVICE_TIME_MINUTES = 20;
@@ -43,8 +45,6 @@ export function orderRouteLoad(o: OrderForRoute): number {
   const unitSize = isGroteFiets(o.producten) ? 2 : 1;
   return baseFietsen * unitSize;
 }
-
-export { parseBezorgtijdVoorkeur, type Tijdvenster } from "@/lib/bezorgtijd-window";
 
 type RoutificLocation = { address: string; lat?: number; lng?: number };
 

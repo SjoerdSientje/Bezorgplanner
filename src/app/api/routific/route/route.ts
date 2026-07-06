@@ -143,14 +143,24 @@ export async function POST(request: NextRequest) {
     // Zelfde set als Lijst Sjoerd: alle orders met meenemen_in_planning (niet in Routes-tab).
     const { date: planningDate } = getPlanningDate();
     const allOrders = await fetchAllOrders();
-    const rows = (allOrders as unknown as OrderForRoute[]).filter((o) => {
-      const orderId = String((o as unknown as Record<string, unknown>).id ?? "").trim();
-      if (String((o as unknown as Record<string, unknown>).owner_email ?? "") !== ownerEmail) return false;
-      if ((o as unknown as Record<string, unknown>).status !== "ritjes_vandaag") return false;
-      if (routesTabOrderIds.has(orderId)) return false;
-      if (!(o as unknown as Record<string, unknown>).meenemen_in_planning) return false;
+
+    // Eerst: orders die qua eigenaar + status + "meenemen" in Lijst Sjoerd zouden staan,
+    // ongeacht of ze (nog) een actieve planning_slot hebben — voor diagnose van "Overig".
+    const sjoerdEligible = (allOrders as unknown as Record<string, unknown>[]).filter((o) => {
+      if (String(o.owner_email ?? "") !== ownerEmail) return false;
+      if (o.status !== "ritjes_vandaag") return false;
+      if (!o.meenemen_in_planning) return false;
       return true;
     });
+
+    const rows = (sjoerdEligible.filter(
+      (o) => !routesTabOrderIds.has(String(o.id ?? "").trim())
+    ) as unknown) as OrderForRoute[];
+
+    const excludedByActiveSlot = sjoerdEligible.filter((o) =>
+      routesTabOrderIds.has(String(o.id ?? "").trim())
+    );
+
     if (rows.length === 0) {
       return NextResponse.json({
         ok: true,
@@ -158,6 +168,10 @@ export async function POST(request: NextRequest) {
         planningDate,
         vertrektijd,
         visitCount: 0,
+        excludedByActiveSlot: excludedByActiveSlot.map((o) => ({
+          id: o.id,
+          naam: o.naam,
+        })),
       });
     }
 
@@ -398,6 +412,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (excludedByActiveSlot.length > 0) {
+      const lines = excludedByActiveSlot.map(
+        (o) => `• ${(o.naam as string) ?? o.id} (id: ${o.id})`
+      );
+      warningParts.push(
+        `${excludedByActiveSlot.length} order(s) stonden in Lijst Sjoerd maar hebben nog een actieve planning_slot (Routes-tab) en zijn daarom overgeslagen:\n${lines.join("\n")}`
+      );
+    }
+
     if (unservedIds.length > 0) {
       const lines = unservedIds.map((uid) => {
         const order = orderByVisitId.get(uid) ?? orderByVisitId.get(uid.replace(/[.$]/g, "_"));
@@ -429,6 +452,7 @@ export async function POST(request: NextRequest) {
       solution: output?.solution ?? null,
       unserved: unserved ?? null,
       warning: combinedWarning,
+      excludedByActiveSlot: excludedByActiveSlot.map((o) => ({ id: o.id, naam: o.naam })),
     });
   } catch (e) {
     console.error("[api/routific/route]", e);
