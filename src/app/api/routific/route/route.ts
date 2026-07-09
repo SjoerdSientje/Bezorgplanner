@@ -4,7 +4,9 @@ import { getPlanningDate } from "@/lib/planning-date";
 import { requireAccountEmail } from "@/lib/account";
 import {
   buildRoutificPayloadFromRoutes,
+  estimateLegsForRoute,
   getRouteAssignmentMode,
+  getRouteLegVehicleKeys,
   orderRouteLoad,
   type OrderForRoute,
   type ParallelRouteSpec,
@@ -244,14 +246,19 @@ export async function POST(request: NextRequest) {
       orderByVisitId.set(sanitizeId(o.id), o);
     }
 
-    // Verwerk alle voertuigen op volgorde: vehicle_1 → route 1, vehicle_2 → route 2, …
-    const vehicleKeys = Object.keys(solution ?? {})
-      .filter((k) => k.startsWith("vehicle_"))
-      .sort((a, b) => {
-        const numA = parseInt(a.split("_")[1] ?? "0", 10);
-        const numB = parseInt(b.split("_")[1] ?? "0", 10);
-        return numA - numB;
-      });
+    // Bij "meerdere ritten" bestaat één route uit meerdere voertuigen/legs (vehicle_N,
+    // vehicle_N_leg2, ...) — zie routific-payload.ts. Bereken per route hoeveel legs er
+    // zijn opgevraagd (zelfde berekening als bij het bouwen van de payload) zodat we de
+    // stops van alle legs van diezelfde route achter elkaar kunnen verwerken.
+    const legsPerRoute = new Map<number, number>();
+    const routeVehicleKeys = new Map<number, string[]>();
+    for (let i = 0; i < parallelRoutes.length; i++) {
+      const legs = parallelRoutes[i]?.meerdereRitten
+        ? estimateLegsForRoute(i, parallelRoutes, rowsGeocoded)
+        : 1;
+      legsPerRoute.set(i + 1, legs);
+      routeVehicleKeys.set(i + 1, getRouteLegVehicleKeys(i, legs));
+    }
 
     const slotsToInsert: {
       order_id: string;
@@ -292,15 +299,21 @@ export async function POST(request: NextRequest) {
     const { lists: routeOrderLists } = buildRouteOrderListsFromSolution(
       parallelRoutes,
       solution ?? {},
-      orderByVisitId
+      orderByVisitId,
+      routeVehicleKeys
     );
 
     for (let vi = 0; vi < parallelRoutes.length; vi++) {
       const routeNum = vi + 1;
       const routeNummerDb = meerDanEenRoute ? routeNum : null;
 
+      // Bij "meerdere ritten" de stops van alle legs van deze route (in ritvolgorde) achter
+      // elkaar plakken, zodat rit_nummer doorloopt en het één logische route blijft.
+      const keys = routeVehicleKeys.get(routeNum) ?? [`vehicle_${routeNum}`];
+      const combinedStops = keys.flatMap((k) => solution?.[k] ?? []);
+
       const built = buildRouteSlotsFromRoutificStops(
-        solution?.[`vehicle_${routeNum}`] ?? [],
+        combinedStops,
         orderByVisitId,
         routeNummerDb
       );
@@ -388,7 +401,9 @@ export async function POST(request: NextRequest) {
             (sum, id) => sum + (ordersById.has(id) ? orderRouteLoad(ordersById.get(id)!) : 0),
             0
           );
-          return `Route ${i + 1}: ${load}/${r.capacity} load-eenheden (grote fietsen tellen dubbel)`;
+          const legs = legsPerRoute.get(i + 1) ?? 1;
+          const totalCap = r.capacity * legs;
+          return `Route ${i + 1}: ${load}/${totalCap} load-eenheden${legs > 1 ? ` (${legs} ritten × ${r.capacity})` : ""} (grote fietsen tellen dubbel)`;
         })
         .join(", ");
       warningParts.push(
@@ -409,7 +424,8 @@ export async function POST(request: NextRequest) {
     const capacityWarnings = getRouteCapacityWarnings(
       parallelRoutes,
       routeOrderLists,
-      ordersById
+      ordersById,
+      legsPerRoute
     );
     if (capacityWarnings.length > 0) {
       warningParts.push(capacityWarnings.join("\n"));

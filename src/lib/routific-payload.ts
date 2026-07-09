@@ -10,8 +10,80 @@ export const DEPOT_ADDRESS = "Kapelweg 2, 3732 GS, De Bilt, Netherlands";
 export const SERVICE_TIME_MINUTES = 20;
 const DEFAULT_DURATION = SERVICE_TIME_MINUTES;
 const DEFAULT_SHIFT_END = "23:59";
-/** Minuten op het depot tussen twee ritten; stelt Routific in staat meerdere laadrondes te plannen. */
+/** Minuten op het depot tussen twee ritten (laden/lossen); gebruikt om de vertrektijd van
+ * een volgende rit te schatten bij "meerdere ritten". */
 const RELOAD_TIME_MINUTEN = 30;
+/** Ruwe schatting gemiddelde reistijd tussen twee opeenvolgende stops (minuten), alleen
+ * gebruikt om de vertrektijd van rit 2/3/... te schatten. Routific bepaalt de daadwerkelijke
+ * aankomsttijden zelf op basis van de echte reisafstanden — deze schatting is enkel een
+ * ondergrens zodat rit 2 niet vóór het (geschatte) einde van rit 1 kan beginnen. */
+const ESTIMATED_TRAVEL_MINUTES_PER_STOP = 10;
+/** Maximaal aantal ritten (legs) per voertuig per dag bij "meerdere ritten" — redelijke bovengrens. */
+const MAX_LEGS_PER_ROUTE = 6;
+
+/**
+ * Routific ondersteunt geen automatische "terug naar depot, herladen, doorgaan" binnen één
+ * voertuig/rit — een voertuig is voor Routific één ononderbroken rit (zie Routific-docs:
+ * "you must define a separate driver object for each trip... that start and end at the
+ * depot"). Om "meerdere ritten" tóch te ondersteunen, modelleren we een route met
+ * `meerdereRitten: true` als meerdere voertuigen ("legs") die alle op hetzelfde depot
+ * starten/eindigen en (bij handmatige adreskeuze) hetzelfde `type` krijgen, zodat Routific
+ * ze samen als één logische route mag vullen. Rit 2, 3, ... krijgen een geschatte vertrektijd
+ * (rit 1 se vertrektijd + capaciteit × gem. stoptijd + herlaadtijd) en `strict_start: false`,
+ * zodat Routific ze niet vóór die schatting laat vertrekken maar wel later mag laten starten
+ * als de werkelijke reistijden dat vereisen.
+ */
+function estimateLegDurationMinutes(capacity: number): number {
+  return capacity * (SERVICE_TIME_MINUTES + ESTIMATED_TRAVEL_MINUTES_PER_STOP) + RELOAD_TIME_MINUTEN;
+}
+
+function addMinutesToTime(hhmm: string, minutes: number): string {
+  const base = minutesFromHHMM(hhmm);
+  const total = Math.min(base + minutes, minutesFromHHMM(DEFAULT_SHIFT_END));
+  const clamped = Math.max(0, total);
+  const h = Math.floor(clamped / 60) % 24;
+  const m = clamped % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+/**
+ * Aantal ritten (legs) dat een route met "meerdere ritten" nodig heeft: de totale load van
+ * de orders die op deze route kunnen landen, gedeeld door de capaciteit per rit.
+ * - Handmatig gekozen adressen (orderIds) → alleen die orders tellen mee.
+ * - Anders (auto/deels handmatig) → alle orders die niet aan een ándere route gepind zijn
+ *   (die kunnen in theorie allemaal op deze route belanden).
+ */
+export function estimateLegsForRoute(
+  routeIndex: number,
+  routes: ParallelRouteSpec[],
+  orders: OrderForRoute[]
+): number {
+  const route = routes[routeIndex];
+  if (!route?.meerdereRitten) return 1;
+  const cap = Math.max(1, Math.min(99, Math.floor(Number(route.capacity) || 0)));
+  const pinnedIds = new Set(route.orderIds ?? []);
+  let candidateOrders: OrderForRoute[];
+  if (pinnedIds.size > 0) {
+    candidateOrders = orders.filter((o) => pinnedIds.has(o.id));
+  } else {
+    const otherPinnedIds = new Set(
+      routes.flatMap((r, i) => (i === routeIndex ? [] : r.orderIds ?? []))
+    );
+    candidateOrders = orders.filter((o) => !otherPinnedIds.has(o.id));
+  }
+  const totalLoad = candidateOrders.reduce((sum, o) => sum + orderRouteLoad(o), 0);
+  const legs = Math.ceil(totalLoad / cap);
+  return Math.max(1, Math.min(MAX_LEGS_PER_ROUTE, legs));
+}
+
+/** Voertuig-keys (fleet) voor alle legs/ritten van één route, in ritvolgorde. */
+export function getRouteLegVehicleKeys(routeIndex: number, legs: number): string[] {
+  const keys: string[] = [];
+  for (let leg = 1; leg <= legs; leg++) {
+    keys.push(leg === 1 ? `vehicle_${routeIndex + 1}` : `vehicle_${routeIndex + 1}_leg${leg}`);
+  }
+  return keys;
+}
 
 export interface OrderForRoute {
   id: string;
@@ -62,8 +134,6 @@ type VehicleConfig = {
   strict_start: boolean;
   /** Routific: alleen visits met dezelfde type mogen op dit voertuig. */
   type?: string;
-  /** Minuten laden op het depot na terugkomst; weglaten = geen depot-reload (één rit). */
-  reload_service_time?: number;
 };
 
 export interface RoutificPayload {
@@ -208,16 +278,25 @@ export function buildRoutificPayloadFromRoutes(
   routes.forEach((r, i) => {
     const cap = Math.max(1, Math.min(99, Math.floor(Number(r.capacity) || 0)));
     const vehicleType = (r.orderIds?.length ?? 0) > 0 ? `route_${i + 1}` : undefined;
-    fleet[`vehicle_${i + 1}`] = {
-      start_location: { address: DEPOT_ADDRESS },
-      end_location: { address: DEPOT_ADDRESS },
-      shift_start: r.shift_start,
-      shift_end: DEFAULT_SHIFT_END,
-      capacity: cap,
-      strict_start: true,
-      ...(vehicleType ? { type: vehicleType } : {}),
-      ...(r.meerdereRitten ? { reload_service_time: RELOAD_TIME_MINUTEN } : {}),
-    };
+    const legs = r.meerdereRitten ? estimateLegsForRoute(i, routes, orders) : 1;
+    const legDuration = estimateLegDurationMinutes(cap);
+    const keys = getRouteLegVehicleKeys(i, legs);
+    keys.forEach((key, idx) => {
+      const leg = idx + 1;
+      const shiftStart =
+        leg === 1 ? r.shift_start : addMinutesToTime(r.shift_start, (leg - 1) * legDuration);
+      fleet[key] = {
+        start_location: { address: DEPOT_ADDRESS },
+        end_location: { address: DEPOT_ADDRESS },
+        shift_start: shiftStart,
+        shift_end: DEFAULT_SHIFT_END,
+        capacity: cap,
+        // Alleen rit 1 moet exact op de gekozen vertrektijd starten; latere ritten mogen
+        // (moeten desnoods) later starten dan de schatting, nooit eerder.
+        strict_start: leg === 1,
+        ...(vehicleType ? { type: vehicleType } : {}),
+      };
+    });
   });
 
   return { visits, fleet };

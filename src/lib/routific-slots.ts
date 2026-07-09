@@ -115,39 +115,48 @@ function routeListLoad(
   }, 0);
 }
 
-/** Waarschuwing als Routific meer load op een route zet dan geconfigureerde capaciteit. */
+/**
+ * Waarschuwing als Routific meer load op een route zet dan de beschikbare capaciteit.
+ * Bij "meerdere ritten" is de beschikbare capaciteit capaciteit × aantal ritten (legs),
+ * niet de capaciteit van één enkele rit.
+ */
 export function getRouteCapacityWarnings(
   parallelRoutes: ParallelRouteSpec[],
   routeOrderLists: Map<number, string[]>,
-  ordersById: Map<string, OrderForRoute>
+  ordersById: Map<string, OrderForRoute>,
+  legsPerRoute?: Map<number, number>
 ): string[] {
   const warnings: string[] = [];
   for (let i = 0; i < parallelRoutes.length; i++) {
     const cap = Math.max(1, parallelRoutes[i]?.capacity ?? 99);
+    const legs = legsPerRoute?.get(i + 1) ?? 1;
+    const totalCap = cap * legs;
     const ids = routeOrderLists.get(i + 1) ?? [];
     const load = routeListLoad(ids, ordersById);
-    if (load > cap) {
+    if (load > totalCap) {
       warnings.push(
-        `Route ${i + 1}: ${load} load-eenheden ingepland (max ${cap}). Grote fietsen tellen dubbel.`
+        `Route ${i + 1}: ${load} load-eenheden ingepland (max ${totalCap}${legs > 1 ? ` = ${legs} ritten × ${cap}` : ""}). Grote fietsen tellen dubbel.`
       );
     }
   }
   return warnings;
 }
 
-/** Routelijsten per voertuig uit Routific-oplossing (ongewijzigd). */
+/**
+ * Routelijsten per route uit Routific-oplossing, waarbij bij "meerdere ritten" de stops van
+ * alle legs (vehicle_N, vehicle_N_leg2, ...) van diezelfde route worden samengevoegd.
+ */
 export function buildRouteOrderListsFromSolution(
   parallelRoutes: ParallelRouteSpec[],
   solution: Record<string, RoutificSolutionStop[]>,
-  orderByVisitId: Map<string, OrderForRoute>
+  orderByVisitId: Map<string, OrderForRoute>,
+  routeVehicleKeys?: Map<number, string[]>
 ): { lists: Map<number, string[]>; rawLists: Map<number, string[]> } {
   const lists = new Map<number, string[]>();
   const rawLists = new Map<number, string[]>();
   for (let i = 0; i < parallelRoutes.length; i++) {
-    const ids = extractOrderIdsFromRoutificStops(
-      solution[`vehicle_${i + 1}`] ?? [],
-      orderByVisitId
-    );
+    const keys = routeVehicleKeys?.get(i + 1) ?? [`vehicle_${i + 1}`];
+    const ids = keys.flatMap((k) => extractOrderIdsFromRoutificStops(solution[k] ?? [], orderByVisitId));
     lists.set(i + 1, [...ids]);
     rawLists.set(i + 1, [...ids]);
   }
