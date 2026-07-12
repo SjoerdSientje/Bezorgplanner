@@ -47,11 +47,18 @@ function addMinutesToTime(hhmm: string, minutes: number): string {
 }
 
 /**
- * Aantal ritten (legs) dat een route met "meerdere ritten" nodig heeft: de totale load van
- * de orders die op deze route kunnen landen, gedeeld door de capaciteit per rit.
- * - Handmatig gekozen adressen (orderIds) → alleen die orders tellen mee.
- * - Anders (auto/deels handmatig) → alle orders die niet aan een ándere route gepind zijn
- *   (die kunnen in theorie allemaal op deze route belanden).
+ * Aantal ritten (legs) dat een route met "meerdere ritten" nodig heeft.
+ * - Handmatig gekozen adressen (orderIds) → eigen, afgezonderde pool: alleen die orders
+ *   tellen mee, gedeeld door de capaciteit van déze route. Andere routes raken deze orders
+ *   niet, dus dit blijft onafhankelijk van de rest.
+ * - Geen handmatige keuze (auto) → deze route deelt de "vrije" pool (alle orders die aan
+ *   geen enkele route gepind zijn) met alle andere routes zonder handmatige keuze. Routific
+ *   balanceert die pool zelf over die routes op basis van reisafstand, precies zoals bij één
+ *   rit per route. Extra ritten (legs) zijn daarom alleen nodig als de gezamenlijke
+ *   capaciteit van al die routes in één rit niet genoeg is voor de hele vrije pool — anders
+ *   zou elke auto-route z'n eigen legs baseren op de hele pool en de capaciteit van de
+ *   andere routes daarbij vermenigvuldigen (bug: gaf bv. bij route 1 max 11 én route 2 max 4
+ *   allebei veel te veel ritten, waardoor route 2 alsnog 8 stuks kreeg i.p.v. max 4).
  */
 export function estimateLegsForRoute(
   routeIndex: number,
@@ -62,18 +69,26 @@ export function estimateLegsForRoute(
   if (!route?.meerdereRitten) return 1;
   const cap = Math.max(1, Math.min(99, Math.floor(Number(route.capacity) || 0)));
   const pinnedIds = new Set(route.orderIds ?? []);
-  let candidateOrders: OrderForRoute[];
+
   if (pinnedIds.size > 0) {
-    candidateOrders = orders.filter((o) => pinnedIds.has(o.id));
-  } else {
-    const otherPinnedIds = new Set(
-      routes.flatMap((r, i) => (i === routeIndex ? [] : r.orderIds ?? []))
-    );
-    candidateOrders = orders.filter((o) => !otherPinnedIds.has(o.id));
+    const totalLoad = orders
+      .filter((o) => pinnedIds.has(o.id))
+      .reduce((sum, o) => sum + orderRouteLoad(o), 0);
+    return Math.max(1, Math.min(MAX_LEGS_PER_ROUTE, Math.ceil(totalLoad / cap)));
   }
-  const totalLoad = candidateOrders.reduce((sum, o) => sum + orderRouteLoad(o), 0);
-  const legs = Math.ceil(totalLoad / cap);
-  return Math.max(1, Math.min(MAX_LEGS_PER_ROUTE, legs));
+
+  const anyPinnedIds = new Set(routes.flatMap((r) => r.orderIds ?? []));
+  const sharedPoolLoad = orders
+    .filter((o) => !anyPinnedIds.has(o.id))
+    .reduce((sum, o) => sum + orderRouteLoad(o), 0);
+  const unpinnedRoutes = routes.filter((r) => (r.orderIds?.length ?? 0) === 0);
+  const totalUnpinnedCapacity = unpinnedRoutes.reduce(
+    (sum, r) => sum + Math.max(1, Math.min(99, Math.floor(Number(r.capacity) || 0))),
+    0
+  );
+  if (totalUnpinnedCapacity <= 0) return 1;
+  const rounds = Math.ceil(sharedPoolLoad / totalUnpinnedCapacity);
+  return Math.max(1, Math.min(MAX_LEGS_PER_ROUTE, rounds));
 }
 
 /** Voertuig-keys (fleet) voor alle legs/ritten van één route, in ritvolgorde. */
