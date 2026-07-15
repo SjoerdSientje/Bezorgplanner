@@ -388,37 +388,63 @@ export async function POST(request: NextRequest) {
     }
 
     const unserved = output?.unserved as Record<string, string | unknown> | null | undefined;
-    const unservedIds = unserved ? Object.keys(unserved) : [];
     const warningParts: string[] = [];
 
     const servedIds = new Set(slotsToInsert.map((s) => s.order_id));
     const notPlanned = rowsForRouting.filter((o) => !servedIds.has(o.id));
     if (notPlanned.length > 0) {
-      const lines = notPlanned.map((o) => `• ${o.naam ?? o.id}`);
-      const loadPerRoute = parallelRoutes
-        .map((r, i) => {
-          const load = (routeOrderLists.get(i + 1) ?? []).reduce(
-            (sum, id) => sum + (ordersById.has(id) ? orderRouteLoad(ordersById.get(id)!) : 0),
-            0
-          );
-          const legs = legsPerRoute.get(i + 1) ?? 1;
-          const totalCap = r.capacity * legs;
-          return `Route ${i + 1}: ${load}/${totalCap} load-eenheden${legs > 1 ? ` (${legs} ritten × ${r.capacity})` : ""} (grote fietsen tellen dubbel)`;
-        })
-        .join(", ");
-      warningParts.push(
-        `${notPlanned.length} order(s) niet ingepland — geen capaciteit meer over (${loadPerRoute}):\n${lines.join("\n")}`
-      );
-    }
-
-    if (unservedIds.length > 0) {
-      const lines = unservedIds.map((uid) => {
-        const order = orderByVisitId.get(uid) ?? orderByVisitId.get(uid.replace(/[.$]/g, "_"));
-        const naam = order?.naam ?? uid;
-        const reden = typeof unserved?.[uid] === "string" ? ` (${unserved[uid]})` : "";
-        return `• ${naam}${reden}`;
+      // Restcapaciteit per route (inclusief extra ritten bij "meerdere ritten"), zodat we
+      // per niet-ingeplande order eerlijk kunnen zeggen of capaciteit écht de beperkende
+      // factor was — voorheen claimde deze melding altijd "geen capaciteit meer over", ook
+      // als er nog volop ruimte was en Routific de order om een andere reden (bv. tijdvenster
+      // of afstand) niet kon inplannen.
+      const routeStats = parallelRoutes.map((r, i) => {
+        const legs = legsPerRoute.get(i + 1) ?? 1;
+        const totalCap = r.capacity * legs;
+        const load = (routeOrderLists.get(i + 1) ?? []).reduce(
+          (sum, id) => sum + (ordersById.has(id) ? orderRouteLoad(ordersById.get(id)!) : 0),
+          0
+        );
+        return { totalCap, load, remaining: Math.max(0, totalCap - load), legs };
       });
-      warningParts.push(`Routific unserved (${unservedIds.length}):\n${lines.join("\n")}`);
+      const unpinnedRouteIdx = parallelRoutes
+        .map((r, i) => ((r.orderIds?.length ?? 0) === 0 ? i : -1))
+        .filter((i) => i >= 0);
+      const remainingForUnpinned = unpinnedRouteIdx.reduce(
+        (sum, i) => sum + routeStats[i]!.remaining,
+        0
+      );
+
+      const lines = notPlanned.map((o) => {
+        const pinnedRouteIdx = parallelRoutes.findIndex((r) => (r.orderIds ?? []).includes(o.id));
+        const eligibleRemaining =
+          pinnedRouteIdx >= 0 ? routeStats[pinnedRouteIdx]!.remaining : remainingForUnpinned;
+        const load = orderRouteLoad(o);
+        const visitId = sanitizeId(o.id);
+        const routificReden =
+          typeof unserved?.[o.id] === "string"
+            ? String(unserved[o.id])
+            : typeof unserved?.[visitId] === "string"
+              ? String(unserved[visitId])
+              : undefined;
+        if (load > eligibleRemaining) {
+          return `• ${o.naam ?? o.id} — geen capaciteit meer over (${load} load-eenh. nodig, nog ${eligibleRemaining} vrij)`;
+        }
+        return `• ${o.naam ?? o.id} — NIET door capaciteit (er is nog ruimte): ${
+          routificReden ?? "kan niet ingepland worden binnen de overige constraints (bv. tijdvenster of afstand)"
+        }`;
+      });
+
+      const loadPerRoute = routeStats
+        .map(
+          (s, i) =>
+            `Route ${i + 1}: ${s.load}/${s.totalCap} load-eenheden${s.legs > 1 ? ` (${s.legs} ritten × ${parallelRoutes[i]!.capacity})` : ""}`
+        )
+        .join(", ");
+
+      warningParts.push(
+        `${notPlanned.length} order(s) niet ingepland (${loadPerRoute}, grote fietsen tellen dubbel):\n${lines.join("\n")}`
+      );
     }
 
     const capacityWarnings = getRouteCapacityWarnings(

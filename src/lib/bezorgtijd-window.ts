@@ -15,7 +15,8 @@ export type ParsedRestriction =
   | { kind: "tussen"; minStart: string; maxEnd: string };
 
 function parseHourToken(token: string, middagBare: boolean): string | null {
-  const withColon = token.match(/(\d{1,2}):(\d{2})/);
+  // Zowel "11:30" als "11.30" (NL-schrijfwijze met punt i.p.v. dubbele punt) accepteren.
+  const withColon = token.match(/(\d{1,2})[:.](\d{2})/);
   if (withColon) {
     const h = parseInt(withColon[1]!, 10);
     const m = parseInt(withColon[2]!, 10);
@@ -39,7 +40,8 @@ export function parseBezorgtijdRestriction(
   const raw = (text ?? "").trim().toLowerCase();
   if (!raw || raw === "geen" || raw === "geen opmerking") return null;
 
-  const naMatch = raw.match(/\b(?:pas\s+)?na\s+(\d{1,2})(?::(\d{2}))?(?:\s*uur)?\b/i);
+  // Minuten mogen met ":" of "." geschreven zijn (NL-schrijfwijze, bv. "11.30").
+  const naMatch = raw.match(/\b(?:pas\s+)?na\s+(\d{1,2})(?:[:.](\d{2}))?(?:\s*uur)?\b/i);
   if (naMatch) {
     const token = naMatch[2] != null ? `${naMatch[1]}:${naMatch[2]}` : naMatch[1]!;
     const start = parseHourToken(token, naMatch[2] == null);
@@ -47,7 +49,7 @@ export function parseBezorgtijdRestriction(
   }
 
   const voorMatch = raw.match(
-    /\b(?:voor|uiterlijk|max\.?|ten\s+laatste|t\.l\.)\s+(\d{1,2})(?::(\d{2}))?(?:\s*uur)?\b/i
+    /\b(?:voor|uiterlijk|max\.?|ten\s+laatste|t\.l\.)\s+(\d{1,2})(?:[:.](\d{2}))?(?:\s*uur)?\b/i
   );
   if (voorMatch) {
     const token = voorMatch[2] != null ? `${voorMatch[1]}:${voorMatch[2]}` : voorMatch[1]!;
@@ -55,7 +57,7 @@ export function parseBezorgtijdRestriction(
     if (end) return { kind: "voor", maxEnd: end };
   }
 
-  const tussen = raw.match(/tussen\s*(\d{1,2}(?::\d{2})?(?:\s*uur)?)\s*en\s*(\d{1,2}(?::\d{2})?(?:\s*uur)?)/i);
+  const tussen = raw.match(/tussen\s*(\d{1,2}(?:[:.]\d{2})?(?:\s*uur)?)\s*en\s*(\d{1,2}(?:[:.]\d{2})?(?:\s*uur)?)/i);
   if (tussen) {
     const a = parseHourToken(tussen[1]!, true);
     const b = parseHourToken(tussen[2]!, true);
