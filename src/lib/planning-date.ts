@@ -48,6 +48,52 @@ export function getAmsterdamCalendarDate(offsetDays = 0): string {
 }
 
 /**
+ * UTC-grenzen (ISO) van een Amsterdam-kalenderdag, geschikt om te vergelijken met
+ * `timestamptz`-kolommen (bv. `created_at`). `end` is exclusief.
+ * Nodig omdat een naïeve `"YYYY-MM-DDT00:00:00"`-string door Postgres als UTC
+ * wordt geïnterpreteerd, niet als Amsterdam-tijd (scheelt 1-2 uur door CET/CEST).
+ */
+export function getAmsterdamDayUtcRange(dateStr: string): { startUtcIso: string; endUtcIsoExclusive: string } {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const start = amsterdamMidnightToUtc(y, m, d);
+  const next = new Date(Date.UTC(y, m - 1, d));
+  next.setUTCDate(next.getUTCDate() + 1);
+  const end = amsterdamMidnightToUtc(next.getUTCFullYear(), next.getUTCMonth() + 1, next.getUTCDate());
+  return { startUtcIso: start.toISOString(), endUtcIsoExclusive: end.toISOString() };
+}
+
+function amsterdamMidnightToUtc(year: number, month: number, day: number): Date {
+  const utcGuess = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
+  const offsetMinutes = amsterdamOffsetMinutes(utcGuess);
+  return new Date(utcGuess.getTime() - offsetMinutes * 60_000);
+}
+
+function amsterdamOffsetMinutes(atUtc: Date): number {
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Europe/Amsterdam",
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const parts = dtf.formatToParts(atUtc);
+  const map: Record<string, string> = {};
+  for (const p of parts) map[p.type] = p.value;
+  const asUtc = Date.UTC(
+    Number(map.year),
+    Number(map.month) - 1,
+    Number(map.day),
+    Number(map.hour) === 24 ? 0 : Number(map.hour),
+    Number(map.minute),
+    Number(map.second)
+  );
+  return (asUtc - atUtc.getTime()) / 60_000;
+}
+
+/**
  * Sorteer planning-datums: vandaag eerst, daarna toekomst oplopend, verleden als laatste.
  */
 export function comparePlanningDatumKeys(a: string, b: string): number {

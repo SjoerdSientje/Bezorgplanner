@@ -3,7 +3,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import Header from "@/components/Header";
-import { LOW_STOCK_THRESHOLD, type InventoryProductRow, type InventorySource } from "@/lib/inventory";
+import {
+  LOW_STOCK_THRESHOLD,
+  type InventoryMutationGroup,
+  type InventoryProductRow,
+  type InventorySource,
+} from "@/lib/inventory";
 
 type Stats = {
   totalProducts: number;
@@ -26,7 +31,22 @@ const FILTER_LABELS: Record<Filter, string> = {
   overig: "Overige",
 };
 
+type StockFilter = "alle" | "laag" | "uitverkocht";
+
 type MutationType = "inkomend" | "uitgaand" | "correctie";
+
+function mutationTypeLabel(t: MutationType): string {
+  switch (t) {
+    case "inkomend":
+      return "Inkomend";
+    case "uitgaand":
+      return "Uitgaand";
+    case "correctie":
+      return "Correctie";
+    default:
+      return t;
+  }
+}
 
 function stockClass(qty: number): string {
   if (qty === 0) return "text-red-600 font-semibold";
@@ -60,11 +80,18 @@ export default function VoorraadbeheerPage() {
   const [products, setProducts] = useState<InventoryProductRow[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [filter, setFilter] = useState<Filter>("alle");
+  const [stockFilter, setStockFilter] = useState<StockFilter>("alle");
   const [inventorySearch, setInventorySearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+
+  const [mutationsOpen, setMutationsOpen] = useState(false);
+  const [mutationsLoading, setMutationsLoading] = useState(false);
+  const [mutationsError, setMutationsError] = useState<string | null>(null);
+  const [mutationGroups, setMutationGroups] = useState<InventoryMutationGroup[]>([]);
+  const [mutationsDate, setMutationsDate] = useState<string | null>(null);
 
   const [editProduct, setEditProduct] = useState<InventoryProductRow | null>(null);
   const [manageOpen, setManageOpen] = useState(false);
@@ -134,9 +161,34 @@ export default function VoorraadbeheerPage() {
   const displayedProducts = useMemo(() => {
     return products.filter((p) => {
       if (filter !== "alle" && p.category !== filter) return false;
+      if (stockFilter === "laag" && !(p.stock_quantity > 0 && p.stock_quantity <= LOW_STOCK_THRESHOLD)) {
+        return false;
+      }
+      if (stockFilter === "uitverkocht" && p.stock_quantity !== 0) return false;
       return matchesInventorySearch(p, inventorySearch);
     });
-  }, [products, filter, inventorySearch]);
+  }, [products, filter, stockFilter, inventorySearch]);
+
+  const toggleStockFilter = (f: StockFilter) => {
+    setStockFilter((prev) => (prev === f ? "alle" : f));
+  };
+
+  const openMutationsModal = async () => {
+    setMutationsOpen(true);
+    setMutationsLoading(true);
+    setMutationsError(null);
+    try {
+      const res = await fetch("/api/inventory/mutations", { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? "Laden mislukt");
+      setMutationGroups(data.groups ?? []);
+      setMutationsDate(data.date ?? null);
+    } catch (e) {
+      setMutationsError(e instanceof Error ? e.message : "Laden mislukt");
+    } finally {
+      setMutationsLoading(false);
+    }
+  };
 
   const resetMutationForm = () => {
     setMutationType("inkomend");
@@ -306,18 +358,59 @@ export default function VoorraadbeheerPage() {
 
           {stats && (
             <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              {[
-                { label: "Totaal producten", value: stats.totalProducts },
-                { label: "Laag op voorraad", value: stats.lowStock },
-                { label: "Uitverkocht", value: stats.outOfStock },
-                { label: "Mutaties vandaag", value: stats.mutationsToday },
-              ].map((s) => (
-                <div key={s.label} className="rounded-xl border border-stone-200 bg-stone-50 px-4 py-3">
-                  <p className="text-xs text-stone-500">{s.label}</p>
-                  <p className="mt-1 text-2xl font-semibold text-koopje-black">{s.value}</p>
-                </div>
-              ))}
+              <button
+                type="button"
+                onClick={() => setStockFilter("alle")}
+                className={`rounded-xl border px-4 py-3 text-left transition ${
+                  stockFilter === "alle"
+                    ? "border-koopje-orange bg-koopje-orange-light"
+                    : "border-stone-200 bg-stone-50 hover:bg-stone-100"
+                }`}
+              >
+                <p className="text-xs text-stone-500">Totaal producten</p>
+                <p className="mt-1 text-2xl font-semibold text-koopje-black">{stats.totalProducts}</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleStockFilter("laag")}
+                className={`rounded-xl border px-4 py-3 text-left transition ${
+                  stockFilter === "laag"
+                    ? "border-orange-400 bg-orange-50"
+                    : "border-stone-200 bg-stone-50 hover:bg-stone-100"
+                }`}
+              >
+                <p className="text-xs text-stone-500">Laag op voorraad</p>
+                <p className="mt-1 text-2xl font-semibold text-koopje-black">{stats.lowStock}</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleStockFilter("uitverkocht")}
+                className={`rounded-xl border px-4 py-3 text-left transition ${
+                  stockFilter === "uitverkocht"
+                    ? "border-red-400 bg-red-50"
+                    : "border-stone-200 bg-stone-50 hover:bg-stone-100"
+                }`}
+              >
+                <p className="text-xs text-stone-500">Uitverkocht</p>
+                <p className="mt-1 text-2xl font-semibold text-koopje-black">{stats.outOfStock}</p>
+              </button>
+              <button
+                type="button"
+                onClick={openMutationsModal}
+                className="rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-left transition hover:bg-stone-100"
+              >
+                <p className="text-xs text-stone-500">Mutaties vandaag</p>
+                <p className="mt-1 text-2xl font-semibold text-koopje-black">{stats.mutationsToday}</p>
+              </button>
             </div>
+          )}
+          {stockFilter !== "alle" && (
+            <p className="mb-4 -mt-2 text-xs text-stone-500">
+              Filter actief: {stockFilter === "laag" ? "laag op voorraad" : "uitverkocht"} —{" "}
+              <button type="button" onClick={() => setStockFilter("alle")} className="text-koopje-orange hover:underline">
+                wis filter
+              </button>
+            </p>
           )}
 
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -508,6 +601,94 @@ export default function VoorraadbeheerPage() {
                   {mutationForm(manageProduct, () => submitMutation(manageProduct))}
                 </>
               )}
+            </div>
+          </div>
+        </>
+      )}
+
+      {mutationsOpen && (
+        <>
+          <div className="fixed inset-0 z-40 bg-black/40" onClick={() => setMutationsOpen(false)} />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="max-h-[85vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-semibold text-koopje-black">
+                  Mutaties vandaag{mutationsDate ? ` — ${mutationsDate}` : ""}
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setMutationsOpen(false)}
+                  className="text-stone-400 hover:text-koopje-black"
+                  aria-label="Sluiten"
+                >
+                  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              {mutationsLoading && <p className="mt-4 text-sm text-stone-500">Laden…</p>}
+              {mutationsError && <p className="mt-4 text-sm text-red-600">{mutationsError}</p>}
+
+              {!mutationsLoading && !mutationsError && mutationGroups.length === 0 && (
+                <p className="mt-4 text-sm text-stone-500">Geen mutaties vandaag.</p>
+              )}
+
+              {!mutationsLoading && !mutationsError && mutationGroups.length > 0 && (
+                <div className="mt-4 space-y-4">
+                  {mutationGroups.map((group, idx) => (
+                    <div
+                      key={`${group.orderReference ?? "geen-order"}-${idx}`}
+                      className="rounded-xl border border-stone-200 p-4"
+                    >
+                      <p className="text-sm font-semibold text-koopje-black">
+                        Order: {group.orderReference ?? "Handmatig / geen order"}
+                      </p>
+
+                      <div className="mt-3 grid gap-4 sm:grid-cols-2">
+                        <div>
+                          <p className="text-xs font-medium uppercase text-stone-400">Producten in order</p>
+                          {group.orderProducten ? (
+                            <ul className="mt-1 space-y-0.5 text-sm text-stone-600">
+                              {group.orderProducten.split("\n").map((line, i) => (
+                                <li key={i}>{line}</li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p className="mt-1 text-sm text-stone-400">Onbekend (geen order-snapshot)</p>
+                          )}
+                        </div>
+
+                        <div>
+                          <p className="text-xs font-medium uppercase text-stone-400">Werkelijke mutaties</p>
+                          <ul className="mt-1 space-y-1.5 text-sm">
+                            {group.mutations.map((m) => (
+                              <li key={m.id} className="text-stone-700">
+                                <span className="font-medium">{mutationTypeLabel(m.mutationType)}</span>{" "}
+                                {m.quantity}x {m.productTitle}{" "}
+                                <span className="text-stone-400">
+                                  ({m.stockBefore} → {m.stockAfter}, {sourceLabel(m.source)})
+                                </span>
+                                {m.note && <span className="block text-xs text-stone-400">{m.note}</span>}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="mt-6 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setMutationsOpen(false)}
+                  className="rounded-xl px-4 py-2 text-sm text-stone-600"
+                >
+                  Sluiten
+                </button>
+              </div>
             </div>
           </div>
         </>

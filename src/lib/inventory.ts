@@ -11,6 +11,7 @@ import {
 import type { ShopifyLineItem, ShopifyOrder, LineItemForJson } from "@/lib/shopify-order";
 import { buildStructuredLineItems } from "@/lib/shopify-order";
 import { allAccountEmails, shopifyWebhookOrderAppliesToOwner } from "@/lib/account";
+import { getAmsterdamCalendarDate, getAmsterdamDayUtcRange } from "@/lib/planning-date";
 import { buildInventoryStockKeyInfo, type InventoryStockKeyInfo } from "@/lib/inventory-stock-key";
 import type { ProductDefaultItemsRulesV1 } from "@/lib/product-default-items-rules";
 import { loadProductDefaultItemsRules } from "@/lib/product-rules-server";
@@ -59,6 +60,7 @@ export type InventoryMutationRow = {
   source: InventorySource;
   note: string | null;
   order_reference: string | null;
+  order_producten: string | null;
   created_at: string;
 };
 
@@ -299,7 +301,8 @@ export async function getInventoryStats(
   outOfStock: number;
   mutationsToday: number;
 }> {
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Amsterdam" });
+  const today = getAmsterdamCalendarDate(0);
+  const { startUtcIso, endUtcIsoExclusive } = getAmsterdamDayUtcRange(today);
 
   const { data: products } = await supabase
     .from("inventory_products")
@@ -317,8 +320,8 @@ export async function getInventoryStats(
     .from("inventory_mutations")
     .select("id", { count: "exact", head: true })
     .eq("owner_email", ownerEmail)
-    .gte("created_at", `${today}T00:00:00`)
-    .lte("created_at", `${today}T23:59:59`);
+    .gte("created_at", startUtcIso)
+    .lt("created_at", endUtcIsoExclusive);
 
   return {
     totalProducts,
@@ -545,6 +548,7 @@ export async function applyInventoryMutation(
     source: InventorySource;
     note?: string | null;
     orderReference?: string | null;
+    orderProducten?: string | null;
   }
 ): Promise<{ ok: true; stockAfter: number } | { ok: false; error: string }> {
   const qty = Math.max(0, Math.floor(params.quantity));
@@ -603,6 +607,7 @@ export async function applyInventoryMutation(
     source: params.source,
     note: params.note?.trim() || null,
     order_reference: params.orderReference?.trim() || null,
+    order_producten: params.orderProducten?.trim() || null,
   });
 
   if (logErr) {
@@ -610,6 +615,95 @@ export async function applyInventoryMutation(
   }
 
   return { ok: true, stockAfter: after };
+}
+
+export type InventoryMutationDetail = {
+  id: string;
+  productTitle: string;
+  mutationType: InventoryMutationType;
+  quantity: number;
+  stockBefore: number;
+  stockAfter: number;
+  source: InventorySource;
+  note: string | null;
+  createdAt: string;
+};
+
+export type InventoryMutationGroup = {
+  orderReference: string | null;
+  orderProducten: string | null;
+  firstMutationAt: string;
+  mutations: InventoryMutationDetail[];
+};
+
+/**
+ * Mutaties van één Amsterdam-kalenderdag, gegroepeerd per order ("order",
+ * "producten in order" uit de snapshot, en "werkelijke mutaties" die daarbij
+ * zijn toegepast). Mutaties zonder order (handmatig/scan) krijgen elk hun
+ * eigen groep met `orderReference: null`.
+ */
+export async function getInventoryMutationsForDay(
+  supabase: SupabaseClient,
+  ownerEmail: string,
+  dateStr: string
+): Promise<InventoryMutationGroup[]> {
+  const { startUtcIso, endUtcIsoExclusive } = getAmsterdamDayUtcRange(dateStr);
+
+  const { data: mutations } = await supabase
+    .from("inventory_mutations")
+    .select("*")
+    .eq("owner_email", ownerEmail)
+    .gte("created_at", startUtcIso)
+    .lt("created_at", endUtcIsoExclusive)
+    .order("created_at", { ascending: true });
+
+  const rows = (mutations ?? []) as InventoryMutationRow[];
+  if (rows.length === 0) return [];
+
+  const productIds = Array.from(new Set(rows.map((m) => m.product_id)));
+  const { data: products } = await supabase
+    .from("inventory_products")
+    .select("id, title, variant_title")
+    .in("id", productIds);
+
+  const productTitleById = new Map<string, string>();
+  for (const p of (products ?? []) as Array<{ id: string; title: string; variant_title: string | null }>) {
+    const title =
+      p.variant_title && p.variant_title !== "Default Title" ? `${p.title} — ${p.variant_title}` : p.title;
+    productTitleById.set(p.id, title);
+  }
+
+  const groups = new Map<string, InventoryMutationGroup>();
+  for (const m of rows) {
+    const orderReference = m.order_reference?.trim() || null;
+    const key = orderReference ?? `__geen_order_${m.id}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = {
+        orderReference,
+        orderProducten: m.order_producten?.trim() || null,
+        firstMutationAt: m.created_at,
+        mutations: [],
+      };
+      groups.set(key, group);
+    }
+    if (!group.orderProducten && m.order_producten) {
+      group.orderProducten = m.order_producten.trim() || null;
+    }
+    group.mutations.push({
+      id: m.id,
+      productTitle: productTitleById.get(m.product_id) ?? "Onbekend product",
+      mutationType: m.mutation_type,
+      quantity: m.quantity,
+      stockBefore: m.stock_before,
+      stockAfter: m.stock_after,
+      source: m.source,
+      note: m.note,
+      createdAt: m.created_at,
+    });
+  }
+
+  return Array.from(groups.values()).sort((a, b) => b.firstMutationAt.localeCompare(a.firstMutationAt));
 }
 
 async function markOrderDeducted(
@@ -647,6 +741,8 @@ export async function deductInventoryForLineItems(
   );
   if (!isNew) return;
 
+  const orderProducten = formatLineItemsForSnapshot(params.lineItems);
+
   for (const item of params.lineItems) {
     const bundle = resolveBundleDeduction(item);
     if (bundle) {
@@ -664,6 +760,7 @@ export async function deductInventoryForLineItems(
           source: params.source,
           note: `Bundel-aftrek (${item.name}) order ${params.orderReference}`,
           orderReference: params.orderReference,
+          orderProducten,
         });
       }
       continue;
@@ -681,8 +778,19 @@ export async function deductInventoryForLineItems(
       source: params.source,
       note: `Automatische aftrek order ${params.orderReference}`,
       orderReference: params.orderReference,
+      orderProducten,
     });
   }
+}
+
+function formatLineItemsForSnapshot(lineItems: LineItemForDeduction[]): string {
+  return lineItems
+    .map((item) => {
+      const qty = Math.max(1, Math.floor(Number(item.quantity ?? 1)));
+      const name = (item.name ?? "").trim() || "Onbekend product";
+      return `${qty}x ${name}`;
+    })
+    .join("\n");
 }
 
 export async function deductInventoryForShopifyOrder(
