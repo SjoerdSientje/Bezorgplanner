@@ -11,6 +11,8 @@ import type { ProductDefaultItemsRulesV1 } from "@/lib/product-default-items-rul
 import { loadProductDefaultItemsRules } from "@/lib/product-rules-server";
 import { isDatumOpmerkingVandaagOfMorgen } from "@/lib/planning-date";
 import { deductInventoryForMpOrder, buildInventoryDeductionLineItems } from "@/lib/inventory";
+import { createServerSupabaseClient } from "@/lib/supabase";
+import { isMpPausedForOwner } from "@/lib/mp-pause";
 
 /** Extraheer fietsmodel: 'V20 PRO Fatbike 2026 + ringslot | Combi-Deal 🔥' → 'V20 PRO' */
 function extractModel(producten: string | null): string | null {
@@ -159,6 +161,14 @@ export async function POST(request: NextRequest) {
     }
 
     const ownerEmail = requireAccountEmail(request);
+
+    if (await isMpPausedForOwner(createServerSupabaseClient(), ownerEmail)) {
+      return NextResponse.json(
+        { error: "Marktplaats-orders zijn momenteel uitgeschakeld." },
+        { status: 403 }
+      );
+    }
+
     const body = await request.json().catch(() => ({}));
     console.log("[api/mp-order] soort:", body.soort, "naam:", body.naam);
     const soort = body.soort as "bezorging" | "afhaal";

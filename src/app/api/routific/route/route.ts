@@ -19,6 +19,7 @@ import {
 } from "@/lib/routific-slots";
 import { SERVICE_TIME_MINUTES } from "@/lib/routific-payload";
 import { supabaseMissingOrdersRouteNummerColumn } from "@/lib/orders-route-nummer-supabase";
+import { filterOutPausedMpOrders, isMpPausedForOwner } from "@/lib/mp-pause";
 
 const ROUTIFIC_VRP_URL = "https://api.routific.com/v1/vrp-long";
 const ROUTIFIC_JOBS_URL = "https://api.routific.com/jobs";
@@ -146,6 +147,7 @@ export async function POST(request: NextRequest) {
     // een deel van de nieuwste/oudste orders — willekeurig welke — nooit in de Routific-
     // batch terechtkwam. Met een serverside WHERE-filter blijft de resultset klein genoeg.
     const { date: planningDate } = getPlanningDate();
+    const mpPaused = await isMpPausedForOwner(supabase, ownerEmail);
     const { data: sjoerdEligibleRaw, error: sjoerdError } = await supabase
       .from("orders")
       .select("*")
@@ -158,7 +160,10 @@ export async function POST(request: NextRequest) {
         { status: 500 }
       );
     }
-    const sjoerdEligible = (sjoerdEligibleRaw ?? []) as unknown as Record<string, unknown>[];
+    const sjoerdEligible = filterOutPausedMpOrders(
+      (sjoerdEligibleRaw ?? []) as unknown as Record<string, unknown>[],
+      mpPaused
+    );
 
     const rows = (sjoerdEligible.filter(
       (o) => !routesTabOrderIds.has(String(o.id ?? "").trim())

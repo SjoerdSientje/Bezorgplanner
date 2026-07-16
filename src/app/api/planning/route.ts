@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { requireAccountEmail } from "@/lib/account";
+import { isMpPausedForOwner } from "@/lib/mp-pause";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +13,7 @@ export async function GET(request: NextRequest) {
   try {
     const ownerEmail = requireAccountEmail(request);
     const supabase = createServerSupabaseClient();
+    const mpPaused = await isMpPausedForOwner(supabase, ownerEmail);
     const { data: slots, error: slotsErr } = await supabase
       .from("planning_slots")
       .select("id, datum, volgorde, aankomsttijd, tijd_opmerking, status, order_id")
@@ -63,6 +65,7 @@ export async function GET(request: NextRequest) {
         if (oStatus !== "ritjes_vandaag" && oStatus !== "gepland") return null;
 
         const source = String(o.source ?? "");
+        if (mpPaused && source === "mp") return null;
         const betaaldBool = o.betaald === true;
         const betaalwijze =
           source === "mp"

@@ -4,6 +4,7 @@ import { sendWhatsAppByEvent } from "@/lib/whatsapp";
 import { requireAccountEmail } from "@/lib/account";
 import { getLatestOrNewPlanningDate } from "@/lib/planning-promote";
 import { isStuurAppjesEligibleOrder } from "@/lib/stuur-appjes-eligibility";
+import { isIncompleteMpOrder, isMpPausedForOwner } from "@/lib/mp-pause";
 
 function mergeSlotDatums(rows: Array<{ order_id: string | null; datum: string | null }>) {
   const m = new Map<string, string>();
@@ -55,12 +56,13 @@ export async function POST(request: NextRequest) {
     }
 
     const supabase = createClient(supabaseUrl, serviceKey);
+    const mpPaused = await isMpPausedForOwner(supabase, ownerEmail);
 
     // Haal extra orderdata op (type, betaald, etc.) voor template-keuze
     const { data: ordersMeta } = await supabase
       .from("orders")
       .select(
-        "id, status, type, betaald, mp_tags, datum, opmerkingen_klant, bezorgtijd_voorkeur, bestelling_totaal_prijs, meenemen_in_planning, aankomsttijd_slot"
+        "id, status, source, order_nummer, type, betaald, mp_tags, datum, opmerkingen_klant, bezorgtijd_voorkeur, bestelling_totaal_prijs, meenemen_in_planning, aankomsttijd_slot"
       )
       .eq("owner_email", ownerEmail)
       .in(
@@ -73,7 +75,9 @@ export async function POST(request: NextRequest) {
 
     const ineligible = selected.filter((o) => {
       const meta = metaById.get(o.order_id) as Record<string, unknown> | undefined;
-      return !meta || !isStuurAppjesEligibleOrder(meta);
+      if (!meta || !isStuurAppjesEligibleOrder(meta)) return true;
+      if (mpPaused && isIncompleteMpOrder(meta)) return true;
+      return false;
     });
     if (ineligible.length > 0) {
       const nums = ineligible.map((o) => o.order_nummer || o.order_id).join(", ");

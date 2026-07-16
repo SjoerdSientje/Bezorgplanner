@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { requireAccountEmail } from "@/lib/account";
 import { isDatumOpmerkingVandaagOfMorgen } from "@/lib/planning-date";
+import { isIncompleteMpOrder, isMpPausedForOwner } from "@/lib/mp-pause";
 import {
   DEFAULT_PRODUCT_RULES_V1,
   getDefaultItemsForFiets,
@@ -82,6 +83,7 @@ export async function GET(request: NextRequest) {
   try {
     const ownerEmail = requireAccountEmail(request);
     const supabase = createServerSupabaseClient();
+    const mpPaused = await isMpPausedForOwner(supabase, ownerEmail);
     const { data: allOrders, error } = await supabase
       .from("orders")
       .select("*")
@@ -97,6 +99,7 @@ export async function GET(request: NextRequest) {
       if (o.status !== "ritjes_vandaag") return false;
       if (!o.meenemen_in_planning) return false;
       if (!isDatumOpmerkingVandaagOfMorgen(o.datum_opmerking)) return false;
+      if (mpPaused && isIncompleteMpOrder(o)) return false;
       return true;
     });
 

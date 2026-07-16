@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { sendWhatsAppByEvent } from "@/lib/whatsapp";
 import { requireAccountEmail } from "@/lib/account";
+import { findPausedMpOrderIds } from "@/lib/mp-pause";
 
 function shiftTimeSlot(slot: string, delayMinutes: number): string {
   const match = slot.match(/(\d{1,2}):(\d{2})\s*[-–]\s*(\d{1,2}):(\d{2})/);
@@ -64,9 +65,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, message: "Geen actieve planning gevonden.", count: 0 });
     }
 
-    const slotOrderIds = slots
+    const slotOrderIdsAll = slots
       .map((s: Record<string, unknown>) => String(s.order_id ?? "").trim())
       .filter(Boolean);
+
+    const pausedMpOrderIds = await findPausedMpOrderIds(supabase, ownerEmail, slotOrderIdsAll);
+    const relevantSlotsRaw = (slots as Record<string, unknown>[]).filter(
+      (s) => !pausedMpOrderIds.has(String(s.order_id ?? "").trim())
+    );
+    const slotOrderIds = slotOrderIdsAll.filter((id) => !pausedMpOrderIds.has(id));
+
+    if (slotOrderIds.length === 0) {
+      return NextResponse.json({ ok: true, message: "Geen actieve planning gevonden.", count: 0 });
+    }
 
     const { data: ordersRouteMeta } = await supabase
       .from("orders")
@@ -81,7 +92,12 @@ export async function POST(request: NextRequest) {
       ])
     );
 
-    let slotsToShift = slots as Record<string, unknown>[];
+    let slotsToShift = relevantSlotsRaw;
+    if (slotsToShift.length === 0) {
+      return NextResponse.json(
+        { ok: true, message: "Geen actieve planning gevonden.", count: 0 }
+      );
+    }
     if (routeNummersFilter && routeNummersFilter.length > 0) {
       const allowed = new Set(routeNummersFilter);
       slotsToShift = slotsToShift.filter((s) => {

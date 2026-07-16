@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { requireAccountEmail } from "@/lib/account";
 import { verwerkGarantiebewijs } from "@/lib/garantiebewijs";
+import { isMpPausedForOwner } from "@/lib/mp-pause";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +10,16 @@ export async function GET(request: NextRequest) {
   try {
     const ownerEmail = requireAccountEmail(request);
     const supabase = createServerSupabaseClient();
+
+    // MP-pauzeknop: data blijft in de database, maar wordt hier niet getoond.
+    const mpPaused = await isMpPausedForOwner(supabase, ownerEmail);
+    if (mpPaused) {
+      return NextResponse.json(
+        { orders: [], paused: true },
+        { headers: { "Cache-Control": "no-store" } }
+      );
+    }
+
     const { data: orders, error } = await supabase
       .from("orders")
       .select("*")
@@ -55,7 +66,10 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ orders: list }, { headers: { "Cache-Control": "no-store" } });
+    return NextResponse.json(
+      { orders: list, paused: false },
+      { headers: { "Cache-Control": "no-store" } }
+    );
   } catch (e) {
     console.error("[mp-orders]", e);
     return NextResponse.json({ error: "Ophalen mislukt." }, { status: 500 });

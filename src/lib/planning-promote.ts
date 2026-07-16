@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getPlanningDateForGoedkeuren, comparePlanningDatumKeys } from "@/lib/planning-date";
+import { findPausedMpOrderIds } from "@/lib/mp-pause";
 
 function getTodayAmsterdam(): string {
   const now = new Date();
@@ -33,14 +34,22 @@ export async function getTargetPlanningDate(
   const tomorrowAmsterdam = getTomorrowAmsterdam();
   const todayAmsterdam = getTodayAmsterdam();
 
-  const { count } = await supabase
+  const { data: activeSlots } = await supabase
     .from("planning_slots")
-    .select("id", { count: "exact", head: true })
+    .select("id, order_id")
     .eq("owner_email", ownerEmail)
     .gte("datum", todayAmsterdam)
     .neq("status", "afgerond");
 
-  const hasActivePlanning = (count ?? 0) > 0;
+  const slotRows = (activeSlots ?? []) as Array<{ id: string; order_id: string }>;
+  const pausedMpOrderIds = await findPausedMpOrderIds(
+    supabase,
+    ownerEmail,
+    slotRows.map((s) => s.order_id)
+  );
+  const relevantSlots = slotRows.filter((s) => !pausedMpOrderIds.has(String(s.order_id)));
+
+  const hasActivePlanning = relevantSlots.length > 0;
   if (hasActivePlanning) {
     return { date: tomorrowAmsterdam, isRitjesVoorMorgen: true };
   }
@@ -65,13 +74,21 @@ export async function getLatestOrNewPlanningDate(
 
   const { data: slots } = await supabase
     .from("planning_slots")
-    .select("datum")
+    .select("datum, order_id")
     .eq("owner_email", ownerEmail)
     .neq("status", "afgerond");
 
+  const slotRows = (slots ?? []) as Array<{ datum: string; order_id: string }>;
+  const pausedMpOrderIds = await findPausedMpOrderIds(
+    supabase,
+    ownerEmail,
+    slotRows.map((s) => s.order_id)
+  );
+
   const dates = new Set(
-    (slots ?? [])
-      .map((s) => String((s as { datum: string }).datum ?? "").trim())
+    slotRows
+      .filter((s) => !pausedMpOrderIds.has(String(s.order_id)))
+      .map((s) => String(s.datum ?? "").trim())
       .filter(Boolean)
   );
 
@@ -102,30 +119,43 @@ export async function promoteRitjesVoorMorgen(
 ): Promise<void> {
   const todayISO = getTodayAmsterdam();
 
-  const { count } = await supabase
+  const { data: todaySlots } = await supabase
     .from("planning_slots")
-    .select("id", { count: "exact", head: true })
+    .select("id, order_id")
     .eq("owner_email", ownerEmail)
     .eq("datum", todayISO)
     .neq("status", "afgerond");
 
-  if ((count ?? 1) > 0) return;
+  const todaySlotRows = (todaySlots ?? []) as Array<{ id: string; order_id: string }>;
+  const pausedTodayIds = await findPausedMpOrderIds(
+    supabase,
+    ownerEmail,
+    todaySlotRows.map((s) => s.order_id)
+  );
+  const relevantTodaySlots = todaySlotRows.filter((s) => !pausedTodayIds.has(String(s.order_id)));
+  if (relevantTodaySlots.length > 0) return;
 
   const { data: futureSlots } = await supabase
     .from("planning_slots")
-    .select("id, datum")
+    .select("id, datum, order_id")
     .eq("owner_email", ownerEmail)
     .gt("datum", todayISO)
     .neq("status", "afgerond")
     .order("datum", { ascending: true });
 
-  if (!futureSlots?.length) return;
+  const futureSlotRows = (futureSlots ?? []) as Array<{ id: string; datum: string; order_id: string }>;
+  const pausedFutureIds = await findPausedMpOrderIds(
+    supabase,
+    ownerEmail,
+    futureSlotRows.map((s) => s.order_id)
+  );
+  const relevantFutureSlots = futureSlotRows.filter((s) => !pausedFutureIds.has(String(s.order_id)));
+
+  if (!relevantFutureSlots.length) return;
 
   // Promote only the earliest future date
-  const nextDate = (futureSlots[0] as { datum: string }).datum;
-  const idsToPromote = (futureSlots as { id: string; datum: string }[])
-    .filter((s) => s.datum === nextDate)
-    .map((s) => s.id);
+  const nextDate = relevantFutureSlots[0]!.datum;
+  const idsToPromote = relevantFutureSlots.filter((s) => s.datum === nextDate).map((s) => s.id);
 
   if (!idsToPromote.length) return;
 

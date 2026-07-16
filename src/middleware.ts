@@ -3,12 +3,22 @@ import { AUTH_COOKIE, isAllowedEmail, normalizeEmail } from "@/lib/auth-shared";
 
 const LOGIN_PUBLIC_PATHS = ["/login", "/reset-wachtwoord"];
 
+// Geheime veiligheidspagina (MP-pauzeknop): met opzet niet gelinkt vanuit de app,
+// alleen bereikbaar via deze directe URL. Moet zonder login werken — zelf al
+// beveiligd met een wachtwoord in /api/mp-noodschakelaar.
+const MP_NOODSCHAKELAAR_PATH = "/systeem/mp-schakelaar-7q3fk9z";
+
 function isLoginPublicPath(pathname: string): boolean {
   return LOGIN_PUBLIC_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`));
 }
 
 function isPublicPath(pathname: string): boolean {
-  return isLoginPublicPath(pathname) || pathname === "/scan" || pathname.startsWith("/scan/");
+  return (
+    isLoginPublicPath(pathname) ||
+    pathname === "/scan" ||
+    pathname.startsWith("/scan/") ||
+    pathname === MP_NOODSCHAKELAAR_PATH
+  );
 }
 
 export function middleware(request: NextRequest) {

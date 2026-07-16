@@ -11,6 +11,7 @@ import {
   isDatumOpmerkingVandaagOfMorgen,
 } from "@/lib/planning-date";
 import { requireAccountEmail } from "@/lib/account";
+import { filterOutPausedMpOrders, isMpPausedForOwner } from "@/lib/mp-pause";
 
 export const dynamic = "force-dynamic";
 
@@ -30,10 +31,11 @@ export async function GET(request: NextRequest) {
   try {
     const ownerEmail = requireAccountEmail(request);
     const supabase = createServerSupabaseClient();
+    const mpPaused = await isMpPausedForOwner(supabase, ownerEmail);
     const { data, error } = await supabase
       .from("orders")
       .select(
-        "id, order_nummer, naam, type, betaald, mp_tags, status, opmerkingen_klant, bezorgtijd_voorkeur, aankomsttijd_slot, telefoon_e164, telefoon_nummer, meenemen_in_planning, datum_opmerking, datum, created_at"
+        "id, order_nummer, naam, type, betaald, mp_tags, source, status, opmerkingen_klant, bezorgtijd_voorkeur, aankomsttijd_slot, telefoon_e164, telefoon_nummer, meenemen_in_planning, datum_opmerking, datum, created_at"
       )
       .eq("owner_email", ownerEmail)
       .eq("status", "ritjes_vandaag")
@@ -45,7 +47,7 @@ export async function GET(request: NextRequest) {
     }
 
     const events: WhatsAppEvent[] = ["planning_goedgekeurd", "stuur_appjes", "afronden"];
-    const rows = (data ?? []).map((o: any) => {
+    const rows = filterOutPausedMpOrders(data ?? [], mpPaused).map((o: any) => {
       const order: WhatsAppOrderInput = {
         order_nummer: o.order_nummer,
         naam: o.naam,

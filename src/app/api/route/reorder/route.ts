@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { requireAccountEmail } from "@/lib/account";
 import { recalculateRouteStops } from "@/lib/route-recalc";
 import { supabaseMissingOrdersRouteNummerColumn } from "@/lib/orders-route-nummer-supabase";
+import { findPausedMpOrderIds } from "@/lib/mp-pause";
 
 type RouteInput = {
   routeNummer: number | null;
@@ -68,11 +69,11 @@ export async function POST(request: NextRequest) {
       routes.push({ routeNummer, orderIds, vertrektijd });
     }
 
-    const allIds = routes.flatMap((r) => r.orderIds);
-    if (allIds.length === 0) {
+    const allIdsRaw = routes.flatMap((r) => r.orderIds);
+    if (allIdsRaw.length === 0) {
       return NextResponse.json({ error: "Geen orders om te herberekenen." }, { status: 400 });
     }
-    if (new Set(allIds).size !== allIds.length) {
+    if (new Set(allIdsRaw).size !== allIdsRaw.length) {
       return NextResponse.json(
         { error: "Een order staat op meerdere routes." },
         { status: 400 }
@@ -80,6 +81,17 @@ export async function POST(request: NextRequest) {
     }
 
     const supabase = createClient(supabaseUrl, serviceKey);
+
+    // MP-pauzeknop: nog-niet-afgeronde MP-orders overal negeren, ook als de client
+    // (buiten de normale UI om) toch een id meestuurt.
+    const pausedMpOrderIds = await findPausedMpOrderIds(supabase, ownerEmail, allIdsRaw);
+    for (const route of routes) {
+      route.orderIds = route.orderIds.filter((id) => !pausedMpOrderIds.has(id));
+    }
+    const allIds = allIdsRaw.filter((id) => !pausedMpOrderIds.has(id));
+    if (allIds.length === 0) {
+      return NextResponse.json({ error: "Geen orders om te herberekenen." }, { status: 400 });
+    }
     const { data: ordersData, error: ordersErr } = await supabase
       .from("orders")
       .select("id, volledig_adres, bezorgtijd_voorkeur, naam")

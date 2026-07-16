@@ -1,7 +1,18 @@
+import { cookies } from "next/headers";
 import Link from "next/link";
 import Header from "@/components/Header";
+import { AUTH_COOKIE, isAllowedEmail, normalizeEmail } from "@/lib/auth-shared";
+import { createServerSupabaseClient } from "@/lib/supabase";
+import { isMpPausedForOwner } from "@/lib/mp-pause";
 
-export default function AfgerdondeOrdersPage() {
+export default async function AfgerdondeOrdersPage() {
+  const cookieStore = await cookies();
+  const email = normalizeEmail(cookieStore.get(AUTH_COOKIE)?.value ?? "");
+  const ownerEmail = isAllowedEmail(email) ? email : null;
+  const mpPaused = ownerEmail
+    ? await isMpPausedForOwner(createServerSupabaseClient(), ownerEmail)
+    : false;
+
   return (
     <>
       <Header />
@@ -37,21 +48,23 @@ export default function AfgerdondeOrdersPage() {
               </Link>
             </li>
 
-            <li>
-              <Link
-                href="/bezorgplanner/mp-orders"
-                className="group flex flex-col rounded-xl border border-koopje-black/10 bg-white p-6 shadow-sm transition hover:border-koopje-orange hover:shadow-md focus:outline-none focus:ring-2 focus:ring-koopje-orange focus:ring-offset-2"
-              >
-                <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-koopje-orange-light text-koopje-orange transition group-hover:bg-koopje-orange group-hover:text-white">
-                  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                      d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
-                  </svg>
-                </span>
-                <span className="mt-4 font-medium text-koopje-black">MP orders</span>
-                <span className="mt-1 text-sm text-koopje-black/60">Marktplaats-orders (bezorgd en winkel)</span>
-              </Link>
-            </li>
+            {!mpPaused && (
+              <li>
+                <Link
+                  href="/bezorgplanner/mp-orders"
+                  className="group flex flex-col rounded-xl border border-koopje-black/10 bg-white p-6 shadow-sm transition hover:border-koopje-orange hover:shadow-md focus:outline-none focus:ring-2 focus:ring-koopje-orange focus:ring-offset-2"
+                >
+                  <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-koopje-orange-light text-koopje-orange transition group-hover:bg-koopje-orange group-hover:text-white">
+                    <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                        d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
+                    </svg>
+                  </span>
+                  <span className="mt-4 font-medium text-koopje-black">MP orders</span>
+                  <span className="mt-1 text-sm text-koopje-black/60">Marktplaats-orders (bezorgd en winkel)</span>
+                </Link>
+              </li>
+            )}
           </ul>
         </div>
       </main>

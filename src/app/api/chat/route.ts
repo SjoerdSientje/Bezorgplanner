@@ -4,6 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 import { requireAccountEmail } from "@/lib/account";
 import { buildSientjeSystemPrompt } from "@/lib/sientje-system-prompt";
 import { isDatumOpmerkingVandaagOfMorgen } from "@/lib/planning-date";
+import { isIncompleteMpOrder, isMpPausedForOwner } from "@/lib/mp-pause";
 
 export const maxDuration = 60;
 
@@ -192,6 +193,7 @@ export async function POST(request: NextRequest) {
       }
 
       const supabase = createClient(supabaseUrl, serviceKey);
+      const mpPaused = await isMpPausedForOwner(supabase, ownerEmail);
       const toolResults: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
 
       for (const tc of msg.tool_calls) {
@@ -226,7 +228,7 @@ export async function POST(request: NextRequest) {
           let orderId: string | null = null;
           const baseQuery = supabase
             .from("orders")
-            .select("id, datum_opmerking")
+            .select("id, datum_opmerking, source, status, mp_tags, order_nummer")
             .eq("owner_email", ownerEmail)
             .eq("status", "ritjes_vandaag")
             .eq("meenemen_in_planning", true)
@@ -235,21 +237,29 @@ export async function POST(request: NextRequest) {
           const { data: byExact } = await baseQuery
             .eq("order_nummer", onr)
             .maybeSingle();
-          if (byExact?.id && isDatumOpmerkingVandaagOfMorgen(byExact.datum_opmerking)) {
+          if (
+            byExact?.id &&
+            isDatumOpmerkingVandaagOfMorgen(byExact.datum_opmerking) &&
+            !(mpPaused && isIncompleteMpOrder(byExact))
+          ) {
             orderId = byExact.id;
           }
           if (!orderId) {
             const alt = onr.startsWith("#") ? onr.slice(1) : "#" + onr;
             const { data: byAlt } = await supabase
               .from("orders")
-              .select("id, datum_opmerking")
+              .select("id, datum_opmerking, source, status, mp_tags, order_nummer")
               .eq("owner_email", ownerEmail)
               .eq("status", "ritjes_vandaag")
               .eq("meenemen_in_planning", true)
               .eq("order_nummer", alt)
               .limit(1)
               .maybeSingle();
-            if (byAlt?.id && isDatumOpmerkingVandaagOfMorgen(byAlt.datum_opmerking)) {
+            if (
+              byAlt?.id &&
+              isDatumOpmerkingVandaagOfMorgen(byAlt.datum_opmerking) &&
+              !(mpPaused && isIncompleteMpOrder(byAlt))
+            ) {
               orderId = byAlt.id;
             }
           }

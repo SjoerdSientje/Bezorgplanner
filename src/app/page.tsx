@@ -1,7 +1,18 @@
+import { cookies } from "next/headers";
 import Link from "next/link";
 import Header from "@/components/Header";
+import { AUTH_COOKIE, isAllowedEmail, normalizeEmail } from "@/lib/auth-shared";
+import { createServerSupabaseClient } from "@/lib/supabase";
+import { isMpPausedForOwner } from "@/lib/mp-pause";
 
-export default function Home() {
+export default async function Home() {
+  const cookieStore = await cookies();
+  const email = normalizeEmail(cookieStore.get(AUTH_COOKIE)?.value ?? "");
+  const ownerEmail = isAllowedEmail(email) ? email : null;
+  const mpPaused = ownerEmail
+    ? await isMpPausedForOwner(createServerSupabaseClient(), ownerEmail)
+    : false;
+
   return (
     <>
       <Header />
@@ -31,20 +42,22 @@ export default function Home() {
               </Link>
             </li>
 
-            <li>
-              <Link
-                href="/marktplaats/nieuw"
-                className="group flex flex-col rounded-xl border border-koopje-black/10 bg-white p-6 shadow-sm transition hover:border-koopje-orange hover:shadow-md focus:outline-none focus:ring-2 focus:ring-koopje-orange focus:ring-offset-2"
-              >
-                <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-koopje-orange-light text-koopje-orange transition group-hover:bg-koopje-orange group-hover:text-white">
-                  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                  </svg>
-                </span>
-                <span className="mt-4 font-medium text-koopje-black">Nieuwe Marktplaats order</span>
-                <span className="mt-1 text-sm text-koopje-black/60">Formulier voor afhaal of bezorging</span>
-              </Link>
-            </li>
+            {!mpPaused && (
+              <li>
+                <Link
+                  href="/marktplaats/nieuw"
+                  className="group flex flex-col rounded-xl border border-koopje-black/10 bg-white p-6 shadow-sm transition hover:border-koopje-orange hover:shadow-md focus:outline-none focus:ring-2 focus:ring-koopje-orange focus:ring-offset-2"
+                >
+                  <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-koopje-orange-light text-koopje-orange transition group-hover:bg-koopje-orange group-hover:text-white">
+                    <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                    </svg>
+                  </span>
+                  <span className="mt-4 font-medium text-koopje-black">Nieuwe Marktplaats order</span>
+                  <span className="mt-1 text-sm text-koopje-black/60">Formulier voor afhaal of bezorging</span>
+                </Link>
+              </li>
+            )}
 
             <li>
               <Link

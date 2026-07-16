@@ -3,6 +3,7 @@ import { createServerSupabaseClient } from "@/lib/supabase";
 import { getTargetPlanningDate } from "@/lib/planning-promote";
 import { sendWhatsAppByEvent } from "@/lib/whatsapp";
 import { requireAccountEmail } from "@/lib/account";
+import { filterOutPausedMpOrders, isMpPausedForOwner } from "@/lib/mp-pause";
 /**
  * POST /api/planning-goedkeuren
  *
@@ -28,10 +29,11 @@ export async function POST(request: NextRequest) {
     );
 
     // Orders ophalen die in aanmerking komen
-    const { data: orders, error: queryError } = await supabase
+    const mpPaused = await isMpPausedForOwner(supabase, ownerEmail);
+    const { data: ordersRaw, error: queryError } = await supabase
       .from("orders")
       .select(
-        "id, order_nummer, aankomsttijd_slot, route_nummer, rit_nummer, bestelling_totaal_prijs, naam, telefoon_e164, telefoon_nummer, type, betaald, mp_tags, datum, datum_opmerking, meenemen_in_planning, opmerkingen_klant, bezorgtijd_voorkeur, email, producten, serienummer, aantal_fietsen, link_aankoopbewijs"
+        "id, order_nummer, aankomsttijd_slot, route_nummer, rit_nummer, bestelling_totaal_prijs, naam, telefoon_e164, telefoon_nummer, type, betaald, mp_tags, source, status, datum, datum_opmerking, meenemen_in_planning, opmerkingen_klant, bezorgtijd_voorkeur, email, producten, serienummer, aantal_fietsen, link_aankoopbewijs"
       )
       .eq("owner_email", ownerEmail)
       .eq("status", "ritjes_vandaag")
@@ -48,6 +50,8 @@ export async function POST(request: NextRequest) {
         { status: 500 }
       );
     }
+
+    const orders = filterOutPausedMpOrders(ordersRaw ?? [], mpPaused);
 
     // Orders die al in een actieve planning_slot zitten (Routes-tab, lopende rit) nooit
     // opnieuw indelen of dupliceren.

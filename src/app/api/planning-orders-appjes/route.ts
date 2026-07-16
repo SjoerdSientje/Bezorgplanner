@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { requireAccountEmail } from "@/lib/account";
 import { isStuurAppjesEligibleOrder } from "@/lib/stuur-appjes-eligibility";
+import { filterOutPausedMpOrders, isMpPausedForOwner } from "@/lib/mp-pause";
 
 export const dynamic = "force-dynamic";
 
@@ -25,10 +26,11 @@ export async function GET(request: NextRequest) {
     }
 
     const supabase = createClient(supabaseUrl, serviceKey);
+    const mpPaused = await isMpPausedForOwner(supabase, ownerEmail);
 
     const { data: ritjesOrders, error: ordersErr } = await supabase
       .from("orders")
-      .select("id, order_nummer, naam, aankomsttijd_slot, telefoon_e164, telefoon_nummer, bezorgtijd_voorkeur, created_at")
+      .select("id, order_nummer, naam, source, status, mp_tags, aankomsttijd_slot, telefoon_e164, telefoon_nummer, bezorgtijd_voorkeur, created_at")
       .eq("owner_email", ownerEmail)
       .eq("status", "ritjes_vandaag")
       .order("created_at", { ascending: false });
@@ -39,7 +41,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const rows = (ritjesOrders ?? [])
+    const rows = filterOutPausedMpOrders(ritjesOrders ?? [], mpPaused)
       .filter((o: Record<string, unknown>) => isStuurAppjesEligibleOrder(o))
       .map((o: Record<string, unknown>, index: number) => {
         return {
