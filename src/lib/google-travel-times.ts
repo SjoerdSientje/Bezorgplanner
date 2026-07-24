@@ -16,12 +16,13 @@ type DistanceMatrixResponse = {
 };
 
 /**
- * Berekent rijtijd in minuten per etappe: depot→stop₁, stop₁→stop₂, …
+ * Berekent rijtijd in minuten per etappe: start→stop₁, stop₁→stop₂, …
  * `addresses` = bezorgadressen in volgorde.
+ * `startAddress` = vertrekpunt van de eerste etappe (standaard: depot).
  */
 export async function getChainTravelMinutes(
   addresses: string[],
-  depot = DEPOT_ADDRESS
+  startAddress = DEPOT_ADDRESS
 ): Promise<number[]> {
   if (addresses.length === 0) return [];
 
@@ -32,7 +33,7 @@ export async function getChainTravelMinutes(
     );
   }
 
-  const origins = [depot, ...addresses.slice(0, -1)];
+  const origins = [startAddress, ...addresses.slice(0, -1)];
   const destinations = addresses;
 
   const url = new URL("https://maps.googleapis.com/maps/api/distancematrix/json");

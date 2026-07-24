@@ -1,13 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { requireAccountEmail } from "@/lib/account";
-import { recalculateRouteStops } from "@/lib/route-recalc";
+import {
+  departureAfterArrival,
+  firstOrderDivergenceIndex,
+  parseSlotArrivalHhmm,
+  recalculateRouteStops,
+  type RecalculatedStop,
+  type RouteStop,
+} from "@/lib/route-recalc";
 import { supabaseMissingOrdersRouteNummerColumn } from "@/lib/orders-route-nummer-supabase";
 import { findPausedMpOrderIds } from "@/lib/mp-pause";
 
 type RouteInput = {
   routeNummer: number | null;
   orderIds: string[];
+  previousOrderIds: string[];
   vertrektijd: string;
 };
 
@@ -23,10 +31,53 @@ type OrderUpdate = {
 const DEFAULT_VERTREKTIJD_OVERIG = "10:30";
 
 /**
+ * Herberekent alleen vanaf de eerste gewijzigde stop. Ongewijzigde prefix
+ * (zelfde order-IDs in dezelfde volgorde) behoudt bestaande tijdsloten.
+ */
+async function recalculateFromDivergence(
+  orderIds: string[],
+  previousOrderIds: string[],
+  vertrektijd: string,
+  orderById: Map<string, Record<string, unknown>>
+): Promise<RecalculatedStop[]> {
+  const stops: RouteStop[] = orderIds.map((id) => {
+    const o = orderById.get(id)!;
+    return {
+      id,
+      volledig_adres: String(o.volledig_adres ?? ""),
+      bezorgtijd_voorkeur: o.bezorgtijd_voorkeur ? String(o.bezorgtijd_voorkeur) : null,
+    };
+  });
+
+  const divergeAt = firstOrderDivergenceIndex(previousOrderIds, orderIds);
+  if (divergeAt <= 0 || divergeAt >= orderIds.length) {
+    // Hele route opnieuw, of er is geen suffix (alleen verkort) → suffix leeg.
+    if (divergeAt >= orderIds.length) return [];
+    return recalculateRouteStops(stops, vertrektijd);
+  }
+
+  const prefixLastId = orderIds[divergeAt - 1]!;
+  const prefixLast = orderById.get(prefixLastId);
+  const arrival = parseSlotArrivalHhmm(
+    prefixLast ? String(prefixLast.aankomsttijd_slot ?? "") : null
+  );
+  const fromAddress = String(prefixLast?.volledig_adres ?? "").trim();
+  if (!arrival || !fromAddress) {
+    // Geen bruikbaar anker → veilige fallback: hele route opnieuw.
+    return recalculateRouteStops(stops, vertrektijd);
+  }
+
+  const suffix = stops.slice(divergeAt);
+  const departFromPrefix = departureAfterArrival(arrival);
+  return recalculateRouteStops(suffix, departFromPrefix, { fromAddress });
+}
+
+/**
  * POST /api/route/reorder
- * Body: { routes: [{ routeNummer, orderIds, vertrektijd }, ...] }
+ * Body: { routes: [{ routeNummer, orderIds, previousOrderIds?, vertrektijd }, ...] }
  *
  * Herberekent tijdsloten via Google Maps (reistijd + 20 min uitladen per stop).
+ * Alleen stops vanaf de eerste wijziging in volgorde worden herberekend.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -59,6 +110,10 @@ export async function POST(request: NextRequest) {
       const orderIds = Array.isArray(orderIdsRaw)
         ? orderIdsRaw.map((id: unknown) => String(id).trim()).filter(Boolean)
         : [];
+      const previousRaw = r.previousOrderIds ?? r.previous_order_ids;
+      const previousOrderIds = Array.isArray(previousRaw)
+        ? previousRaw.map((id: unknown) => String(id).trim()).filter(Boolean)
+        : [];
       const vertrektijd = String(r.vertrektijd ?? "").trim();
       if (
         routeNummer != null &&
@@ -69,7 +124,7 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
-      routes.push({ routeNummer, orderIds, vertrektijd });
+      routes.push({ routeNummer, orderIds, previousOrderIds, vertrektijd });
     }
 
     const allIdsRaw = routes.flatMap((r) => r.orderIds);
@@ -90,6 +145,7 @@ export async function POST(request: NextRequest) {
     const pausedMpOrderIds = await findPausedMpOrderIds(supabase, ownerEmail, allIdsRaw);
     for (const route of routes) {
       route.orderIds = route.orderIds.filter((id) => !pausedMpOrderIds.has(id));
+      route.previousOrderIds = route.previousOrderIds.filter((id) => !pausedMpOrderIds.has(id));
     }
     const allIds = allIdsRaw.filter((id) => !pausedMpOrderIds.has(id));
     if (allIds.length === 0) {
@@ -97,7 +153,7 @@ export async function POST(request: NextRequest) {
     }
     const { data: ordersData, error: ordersErr } = await supabase
       .from("orders")
-      .select("id, volledig_adres, bezorgtijd_voorkeur, naam, route_nummer")
+      .select("id, volledig_adres, bezorgtijd_voorkeur, naam, route_nummer, rit_nummer, aankomsttijd_slot")
       .eq("owner_email", ownerEmail)
       .in("id", allIds);
 
@@ -139,11 +195,9 @@ export async function POST(request: NextRequest) {
     };
 
     // Alle "Overig"-route-entries (routeNummer null) bundelen tot ÉÉN batch met ÉÉN
-    // vertrektijd, ook als de client per ongeluk meerdere aparte entries stuurt voor
-    // dezelfde groep. Zonder deze bundeling kon een deel van de losse orders met een
-    // andere (soms verkeerde) vertrektijd herberekend worden dan de rest, wat leidde tot
-    // een deel van de orders midden in de nacht en een onlogische sprong bij de rest.
+    // vertrektijd, ook als de client per ongeluk meerdere aparte entries stuurt.
     const overigOrderIds: string[] = [];
+    let overigPreviousOrderIds: string[] = [];
     let overigVertrektijd: string | null = null;
     const realRoutes: RouteInput[] = [];
     for (const route of routes) {
@@ -151,6 +205,9 @@ export async function POST(request: NextRequest) {
       if (route.routeNummer == null) {
         for (const id of route.orderIds) {
           if (!overigOrderIds.includes(id)) overigOrderIds.push(id);
+        }
+        if (overigPreviousOrderIds.length === 0 && route.previousOrderIds.length > 0) {
+          overigPreviousOrderIds = route.previousOrderIds;
         }
         if (!overigVertrektijd && /^\d{1,2}:\d{2}$/.test(route.vertrektijd)) {
           overigVertrektijd = route.vertrektijd;
@@ -161,15 +218,8 @@ export async function POST(request: NextRequest) {
     }
 
     if (overigOrderIds.length > 0) {
-      // De "Overig"-groep bevat twee soorten orders die niet uit elkaar te houden zijn
-      // puur op containernaam:
-      //  1) Orders die NU nog echt een route_nummer hebben en hier terecht zijn gekomen
-      //     omdat de gebruiker ze bewust uit een echte route naar Overig heeft gesleept
-      //     → dat is een expliciete "uit planning halen"-actie: ontkoppelen + tijdslot weg.
-      //  2) Orders die al los waren (nooit een route hadden) en enkel intern zijn
-      //     herschikt (bijv. 2 orders omgewisseld) → die moeten net als een echte route
-      //     herberekend worden via Google Maps in de nieuwe volgorde, NIET ontkoppeld
-      //     worden (dat vernietigde eerder het tijdslot van de hele groep).
+      // 1) Orders die NU nog een route_nummer hebben → bewust naar Overig gesleept: ontkoppelen.
+      // 2) Orders die al los waren → herberekensuffix vanaf eerste wijziging.
       const toUnplan: string[] = [];
       const toRecalc: string[] = [];
       for (const id of overigOrderIds) {
@@ -199,27 +249,19 @@ export async function POST(request: NextRequest) {
       }
 
       if (toRecalc.length > 0) {
-        const stops = toRecalc.map((id) => {
-          const o = orderById.get(id)! as Record<string, unknown>;
-          return {
-            id,
-            volledig_adres: String(o.volledig_adres ?? ""),
-            bezorgtijd_voorkeur: o.bezorgtijd_voorkeur
-              ? String(o.bezorgtijd_voorkeur)
-              : null,
-          };
-        });
         const rawVt = overigVertrektijd ?? DEFAULT_VERTREKTIJD_OVERIG;
-        // Verdediging: een vertrektijd in de nachtelijke uren (00:00–05:59) is nooit
-        // bedoeld als start van een bezorgdag. Dat ontstaat wanneer een eerdere lange
-        // route over middernacht heen is gewikkeld en dat slot per ongeluk als anker
-        // werd gebruikt. Forceer dan de standaard dag-vertrektijd.
         const [vh] = rawVt.split(":").map((x) => parseInt(x, 10));
         const vertrektijd =
           Number.isFinite(vh) && vh >= 0 && vh < 6
             ? DEFAULT_VERTREKTIJD_OVERIG
             : rawVt;
-        const recalculated = await recalculateRouteStops(stops, vertrektijd);
+        const previousForRecalc = overigPreviousOrderIds.filter((id) => toRecalc.includes(id));
+        const recalculated = await recalculateFromDivergence(
+          toRecalc,
+          previousForRecalc,
+          vertrektijd,
+          orderById
+        );
         for (const stop of recalculated) {
           updates.push({
             id: stop.id,
@@ -233,32 +275,51 @@ export async function POST(request: NextRequest) {
     }
 
     for (const route of realRoutes) {
-      const stops = route.orderIds.map((id) => {
-        const o = orderById.get(id)! as Record<string, unknown>;
-        return {
-          id,
-          volledig_adres: String(o.volledig_adres ?? ""),
-          bezorgtijd_voorkeur: o.bezorgtijd_voorkeur
-            ? String(o.bezorgtijd_voorkeur)
-            : null,
-        };
-      });
-
-      const recalculated = await recalculateRouteStops(stops, route.vertrektijd);
       const routeNummerDb =
         route.routeNummer != null && Number.isFinite(route.routeNummer) && route.routeNummer > 0
           ? route.routeNummer
           : null;
 
-      for (let i = 0; i < recalculated.length; i++) {
-        const stop = recalculated[i]!;
-        updates.push({
-          id: stop.id,
-          route_nummer: routeNummerDb,
-          rit_nummer: i + 1,
-          aankomsttijd_slot: stop.aankomsttijd_slot,
-          arrivalTime: stop.arrivalTime,
-        });
+      const recalculated = await recalculateFromDivergence(
+        route.orderIds,
+        route.previousOrderIds,
+        route.vertrektijd,
+        orderById
+      );
+      const recalculatedById = new Map(recalculated.map((s) => [s.id, s]));
+
+      // Alleen stops vanaf de eerste wijziging krijgen nieuwe tijdsloten.
+      // Prefix blijft onaangeroerd (zelfde aankomst), tenzij rit_nummer/route moet syncen.
+      for (let i = 0; i < route.orderIds.length; i++) {
+        const id = route.orderIds[i]!;
+        const ritNummer = i + 1;
+        const recalc = recalculatedById.get(id);
+        if (recalc) {
+          updates.push({
+            id,
+            route_nummer: routeNummerDb,
+            rit_nummer: ritNummer,
+            aankomsttijd_slot: recalc.aankomsttijd_slot,
+            arrivalTime: recalc.arrivalTime,
+          });
+          continue;
+        }
+        const existing = orderById.get(id);
+        const existingSlot = String(existing?.aankomsttijd_slot ?? "").trim();
+        const existingRit = Number(existing?.rit_nummer ?? 0);
+        const existingRoute = existing?.route_nummer != null ? Number(existing.route_nummer) : null;
+        if (
+          existingSlot &&
+          (existingRit !== ritNummer || existingRoute !== routeNummerDb)
+        ) {
+          updates.push({
+            id,
+            route_nummer: routeNummerDb,
+            rit_nummer: ritNummer,
+            aankomsttijd_slot: existingSlot,
+            arrivalTime: parseSlotArrivalHhmm(existingSlot) ?? "",
+          });
+        }
       }
     }
 
@@ -295,9 +356,14 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const changedSlotCount = updates.filter((u) => {
+      const prev = String(orderById.get(u.id)?.aankomsttijd_slot ?? "").trim();
+      return prev !== u.aankomsttijd_slot;
+    }).length;
+
     return NextResponse.json({
       ok: true,
-      message: `${updates.length} tijdsloten herberekend via Google Maps.`,
+      message: `${changedSlotCount} tijdsloten herberekend via Google Maps.`,
       updates: updates.map((u) => ({
         id: u.id,
         route_nummer: u.route_nummer,

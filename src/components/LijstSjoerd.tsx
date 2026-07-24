@@ -687,7 +687,12 @@ export default function LijstSjoerd({
         .map(([containerId, orderIds]) => {
           const routeNummer = parseContainerRoute(containerId);
           const rn = routeNummer ?? 1;
-          return { routeNummer, rn, orderIds };
+          return {
+            routeNummer,
+            rn,
+            orderIds,
+            previousOrderIds: prevContainers[containerId] ?? [],
+          };
         })
         .sort((a, b) => {
           const na = a.routeNummer ?? 9999;
@@ -705,7 +710,12 @@ export default function LijstSjoerd({
         // werd dat verkeerdelijk als vertrektijd gebruikt en startte de hele lijst 's nachts.
         if (entry.routeNummer == null) {
           const vertrektijd = getVertrektijdForRoute(1) ?? "";
-          routes.push({ routeNummer: null, orderIds: entry.orderIds, vertrektijd });
+          routes.push({
+            routeNummer: null,
+            orderIds: entry.orderIds,
+            previousOrderIds: entry.previousOrderIds,
+            vertrektijd,
+          });
           continue;
         }
         const vertrektijd = getVertrektijdForRoute(entry.rn);
@@ -718,6 +728,7 @@ export default function LijstSjoerd({
         routes.push({
           routeNummer: entry.routeNummer,
           orderIds: entry.orderIds,
+          previousOrderIds: entry.previousOrderIds,
           vertrektijd,
         });
       }

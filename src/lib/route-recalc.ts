@@ -81,20 +81,51 @@ export function sortStopsForTimedRoute(stops: RouteStop[]): RouteStop[] {
   );
 }
 
+/** Eerste index waar de nieuwe volgorde afwijkt van de vorige (of lengte van de kortere lijst). */
+export function firstOrderDivergenceIndex(
+  previousOrderIds: string[],
+  nextOrderIds: string[]
+): number {
+  const n = Math.min(previousOrderIds.length, nextOrderIds.length);
+  for (let i = 0; i < n; i++) {
+    if (previousOrderIds[i] !== nextOrderIds[i]) return i;
+  }
+  return n;
+}
+
+/** Start van een tijdslot "HH:MM - HH:MM" → genormaliseerde "HH:MM", of null. */
+export function parseSlotArrivalHhmm(slot: string | null | undefined): string | null {
+  const t = String(slot ?? "").split(" - ")[0]?.replace(".", ":").trim() ?? "";
+  const m = t.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const h = parseInt(m[1]!, 10);
+  const min = parseInt(m[2]!, 10);
+  if (!Number.isFinite(h) || !Number.isFinite(min)) return null;
+  return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+}
+
+/** Vertrektijd vanaf een stop = aankomst + uitlaadtijd. */
+export function departureAfterArrival(arrivalHhmm: string): string {
+  return fromMinutes(toMinutes(arrivalHhmm) + SERVICE_TIME_MINUTES);
+}
+
 /**
  * Haal reistijden op via Google en bereken tijdsloten.
- * Behoudt de aangeleverde stopvolgorde (handmatig slepen/omwisselen) — geen
- * hersortering op bezorgtijd-deadline, die zou de gebruikerskeuze overschrijven.
+ * Behoudt de aangeleverde stopvolgorde (handmatig slepen/omwisselen).
+ *
+ * `fromAddress`: als gezet, is de eerste etappe fromAddress→stops[0] i.p.v. depot→stops[0]
+ * (voor herberekening vanaf een ongewijzigde prefix van de route).
  */
 export async function recalculateRouteStops(
   stops: RouteStop[],
   vertrektijd: string,
-  depot = DEPOT_ADDRESS
+  options?: { depot?: string; fromAddress?: string }
 ): Promise<RecalculatedStop[]> {
   const addresses = stops.map((s) => String(s.volledig_adres ?? "").trim()).filter(Boolean);
   if (addresses.length !== stops.length) {
     throw new Error("Eén of meer stops hebben geen volledig adres.");
   }
-  const legMinutes = await getChainTravelMinutes(addresses, depot);
+  const startAddress = options?.fromAddress ?? options?.depot ?? DEPOT_ADDRESS;
+  const legMinutes = await getChainTravelMinutes(addresses, startAddress);
   return recalculateStopsFromLegMinutes(stops, vertrektijd, legMinutes);
 }
