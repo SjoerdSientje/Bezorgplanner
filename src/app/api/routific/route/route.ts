@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { getPlanningDate } from "@/lib/planning-date";
+import { getPlanningDate, isOrderReadyForSjoerdLijst } from "@/lib/planning-date";
 import { requireAccountEmail } from "@/lib/account";
 import {
   buildRoutificPayloadFromRoutes,
@@ -140,7 +140,8 @@ export async function POST(request: NextRequest) {
         .filter(Boolean)
     );
 
-    // Zelfde set als Lijst Sjoerd: alle orders met meenemen_in_planning (niet in Routes-tab).
+    // Zelfde set als Lijst Sjoerd: alle orders met meenemen_in_planning=ja ÉN een
+    // voorkeursdatum ("Datum opmerking") die nu naar vandaag/morgen wijst (niet in Routes-tab).
     // Belangrijk: gefilterde query (owner + status + meenemen), NIET fetchAllOrders() —
     // die haalt de volledige (multi-tenant) orders-tabel op zonder paginering en liep hier
     // stil tegen PostgREST's default max-rows (1000) aan bij >1000 orders totaal, waardoor
@@ -163,7 +164,7 @@ export async function POST(request: NextRequest) {
     const sjoerdEligible = filterOutPausedMpOrders(
       (sjoerdEligibleRaw ?? []) as unknown as Record<string, unknown>[],
       mpPaused
-    );
+    ).filter((o) => isOrderReadyForSjoerdLijst(o));
 
     const rows = (sjoerdEligible.filter(
       (o) => !routesTabOrderIds.has(String(o.id ?? "").trim())

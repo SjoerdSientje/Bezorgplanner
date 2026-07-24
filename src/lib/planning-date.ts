@@ -266,3 +266,18 @@ export function isDatumOpmerkingVandaagOfMorgen(
   const mentions = parseDateMentions(raw, now);
   return mentions.some((k) => k === todayKey || k === tomorrowKey);
 }
+
+/**
+ * "Lijst Sjoerd" / route-genereren-pool: een order telt hier alleen als klaar wanneer
+ * meenemen_in_planning=ja ÉN de voorkeursdatum ("Datum opmerking") op dit moment naar
+ * vandaag of morgen wijst. Voorkomt dat orders die ooit (lang geleden) op meenemen=ja zijn
+ * gezet, maar een lege of verlopen/andere voorkeursdatum hebben, toch in Lijst Sjoerd of de
+ * route-genereren-pool blijven hangen.
+ */
+export function isOrderReadyForSjoerdLijst(order: {
+  meenemen_in_planning?: unknown;
+  datum_opmerking?: unknown;
+}): boolean {
+  if (order?.meenemen_in_planning !== true) return false;
+  return isDatumOpmerkingVandaagOfMorgen(order?.datum_opmerking);
+}

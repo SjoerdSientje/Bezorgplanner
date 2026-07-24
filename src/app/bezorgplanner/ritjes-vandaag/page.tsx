@@ -20,7 +20,11 @@ import {
   sortRoutesTabOrders,
   type RitjesOrderFromApi,
 } from "@/lib/ritjes-mapping";
-import { comparePlanningDatumKeys, planningDatumGroupLabel } from "@/lib/planning-date";
+import {
+  comparePlanningDatumKeys,
+  planningDatumGroupLabel,
+  isOrderReadyForSjoerdLijst,
+} from "@/lib/planning-date";
 import StuurAppjesButton from "@/components/StuurAppjesButton";
 
 function normalizeToE164(input: string): string | null {
@@ -190,7 +194,7 @@ export default function RitjesVandaagPage() {
 
   const sjoerdOrders = useMemo((): RoutePickOrder[] => {
     return orders
-      .filter((o) => o.in_morgen_tab !== true && o.meenemen_in_planning === true)
+      .filter((o) => o.in_morgen_tab !== true && isOrderReadyForSjoerdLijst(o))
       .map((o) => ({
         id: String(o.id ?? "").trim(),
         naam: String(o.naam ?? ""),
@@ -524,7 +528,7 @@ export default function RitjesVandaagPage() {
                 tab === "alle"
                   ? `Alle ritten (${orders.length})`
                   : tab === "sjoerd"
-                  ? `Lijst Sjoerd (${orders.filter((o) => o.in_morgen_tab !== true && o.meenemen_in_planning === true).length})`
+                  ? `Lijst Sjoerd (${orders.filter((o) => o.in_morgen_tab !== true && isOrderReadyForSjoerdLijst(o)).length})`
                   : `Routes (${orders.filter((o) => o.in_morgen_tab === true).length})`;
               return (
                 <button

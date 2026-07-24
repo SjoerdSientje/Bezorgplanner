@@ -27,6 +27,7 @@ import ProductenCell from "@/components/ProductenCell";
 import OpmerkingKlantCell from "@/components/OpmerkingKlantCell";
 import type { AlleRittenOrder } from "@/components/AlleRittenTabel";
 import { compareOrdersOnRoute } from "@/lib/ritjes-mapping";
+import { isOrderReadyForSjoerdLijst } from "@/lib/planning-date";
 import { routeStyleForIndex } from "@/lib/route-colors";
 import { getVertrektijdForRoute } from "@/lib/route-vertrektijden";
 import { orderRouteLoad, type OrderForRoute } from "@/lib/routific-payload";
@@ -221,7 +222,7 @@ function sortRouteOrders(orders: AlleRittenOrder[]): AlleRittenOrder[] {
 }
 
 function groupByRoute(orders: AlleRittenOrder[]): RouteGroup[] {
-  const filtered = orders.filter((o) => o.meenemen_in_planning === true);
+  const filtered = orders.filter((o) => isOrderReadyForSjoerdLijst(o));
   const hasRoutes = filtered.some((o) => Number(o.route_nummer ?? 0) > 0);
 
   if (!hasRoutes) {
@@ -630,9 +631,9 @@ export default function LijstSjoerd({
     [orders]
   );
 
-  const sjoerdCount = orders.filter((o) => o.meenemen_in_planning === true).length;
+  const sjoerdCount = orders.filter((o) => isOrderReadyForSjoerdLijst(o)).length;
   const hasSlots = orders.some(
-    (o) => o.meenemen_in_planning === true && String(o.aankomsttijd_slot ?? "").trim() !== ""
+    (o) => isOrderReadyForSjoerdLijst(o) && String(o.aankomsttijd_slot ?? "").trim() !== ""
   );
   const touchReorder = useTouchReorder();
   const reorderEnabled = hasSlots && sjoerdCount >= 1;
