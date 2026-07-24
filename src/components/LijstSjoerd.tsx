@@ -699,29 +699,12 @@ export default function LijstSjoerd({
 
       const routes = [];
       for (const entry of routeEntries) {
-        // Overig (routeNummer null): orders die al los waren, worden hier ook herberekend
-        // via Google Maps (net als een echte route) zodat slepen/omwisselen een nieuwe
-        // volgorde + tijdsloten oplevert. Vertrektijd: ankeren op het VROEGSTE bestaande
-        // tijdslot binnen deze groep (vóór het slepen) — niet op de "route 1"-instelling
-        // uit Route genereren, want die hoort niet per-se bij deze losse orders en gaf
-        // in de praktijk een verkeerde/oude waarde, waardoor sommige orders midden in de
-        // nacht ingepland werden.
+        // Overig (routeNummer null): herberekent via Google Maps in de nieuwe volgorde.
+        // Vertrektijd = altijd die uit Route genereren (route 1). Niet ankeren op bestaande
+        // tijdsloten: als een lange route over middernacht heen is gewikkeld (bijv. 00:45),
+        // werd dat verkeerdelijk als vertrektijd gebruikt en startte de hele lijst 's nachts.
         if (entry.routeNummer == null) {
-          let anchorMin: number | null = null;
-          for (const id of entry.orderIds) {
-            const slot = String(orderById.get(id)?.aankomsttijd_slot ?? "").trim();
-            if (!slot) continue;
-            const startPart = slot.split(" - ")[0]?.replace(".", ":").trim() ?? "";
-            const [hh, mm] = startPart.split(":").map((x) => parseInt(x, 10));
-            if (Number.isFinite(hh)) {
-              const min = hh * 60 + (Number.isFinite(mm) ? mm : 0);
-              if (anchorMin == null || min < anchorMin) anchorMin = min;
-            }
-          }
-          const vertrektijd =
-            anchorMin != null
-              ? `${String(Math.floor(anchorMin / 60) % 24).padStart(2, "0")}:${String(anchorMin % 60).padStart(2, "0")}`
-              : getVertrektijdForRoute(1) ?? "";
+          const vertrektijd = getVertrektijdForRoute(1) ?? "";
           routes.push({ routeNummer: null, orderIds: entry.orderIds, vertrektijd });
           continue;
         }

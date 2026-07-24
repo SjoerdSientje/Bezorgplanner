@@ -81,17 +81,20 @@ export function sortStopsForTimedRoute(stops: RouteStop[]): RouteStop[] {
   );
 }
 
-/** Haal reistijden op via Google en bereken tijdsloten. */
+/**
+ * Haal reistijden op via Google en bereken tijdsloten.
+ * Behoudt de aangeleverde stopvolgorde (handmatig slepen/omwisselen) — geen
+ * hersortering op bezorgtijd-deadline, die zou de gebruikerskeuze overschrijven.
+ */
 export async function recalculateRouteStops(
   stops: RouteStop[],
   vertrektijd: string,
   depot = DEPOT_ADDRESS
 ): Promise<RecalculatedStop[]> {
-  const ordered = sortStopsForTimedRoute(stops);
-  const addresses = ordered.map((s) => String(s.volledig_adres ?? "").trim()).filter(Boolean);
-  if (addresses.length !== ordered.length) {
+  const addresses = stops.map((s) => String(s.volledig_adres ?? "").trim()).filter(Boolean);
+  if (addresses.length !== stops.length) {
     throw new Error("Eén of meer stops hebben geen volledig adres.");
   }
   const legMinutes = await getChainTravelMinutes(addresses, depot);
-  return recalculateStopsFromLegMinutes(ordered, vertrektijd, legMinutes);
+  return recalculateStopsFromLegMinutes(stops, vertrektijd, legMinutes);
 }

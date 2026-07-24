@@ -209,7 +209,16 @@ export async function POST(request: NextRequest) {
               : null,
           };
         });
-        const vertrektijd = overigVertrektijd ?? DEFAULT_VERTREKTIJD_OVERIG;
+        const rawVt = overigVertrektijd ?? DEFAULT_VERTREKTIJD_OVERIG;
+        // Verdediging: een vertrektijd in de nachtelijke uren (00:00–05:59) is nooit
+        // bedoeld als start van een bezorgdag. Dat ontstaat wanneer een eerdere lange
+        // route over middernacht heen is gewikkeld en dat slot per ongeluk als anker
+        // werd gebruikt. Forceer dan de standaard dag-vertrektijd.
+        const [vh] = rawVt.split(":").map((x) => parseInt(x, 10));
+        const vertrektijd =
+          Number.isFinite(vh) && vh >= 0 && vh < 6
+            ? DEFAULT_VERTREKTIJD_OVERIG
+            : rawVt;
         const recalculated = await recalculateRouteStops(stops, vertrektijd);
         for (const stop of recalculated) {
           updates.push({
