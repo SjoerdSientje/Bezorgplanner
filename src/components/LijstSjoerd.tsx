@@ -699,10 +699,13 @@ export default function LijstSjoerd({
 
       const routes = [];
       for (const entry of routeEntries) {
-        // Overig (routeNummer null) heeft geen vertrektijd nodig: er wordt niets
-        // herberekend via Google Maps, alleen eventueel een order ontkoppeld.
+        // Overig (routeNummer null): orders die al los waren, worden hier ook herberekend
+        // via Google Maps (net als een echte route) zodat slepen/omwisselen een nieuwe
+        // volgorde + tijdsloten oplevert. Gebruik "route 1" als vertrektijd-bron indien
+        // bekend; anders vult de API zelf een standaardtijd in (geen harde eis hier).
         if (entry.routeNummer == null) {
-          routes.push({ routeNummer: null, orderIds: entry.orderIds, vertrektijd: "" });
+          const vertrektijd = getVertrektijdForRoute(1) ?? "";
+          routes.push({ routeNummer: null, orderIds: entry.orderIds, vertrektijd });
           continue;
         }
         const vertrektijd = getVertrektijdForRoute(entry.rn);

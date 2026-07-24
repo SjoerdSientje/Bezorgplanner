@@ -14,10 +14,13 @@ type RouteInput = {
 type OrderUpdate = {
   id: string;
   route_nummer: number | null;
-  rit_nummer: number;
+  rit_nummer: number | null;
   aankomsttijd_slot: string;
   arrivalTime: string;
 };
+
+/** Vertrektijd voor Overig-herschikking als er geen route 1-vertrektijd bekend is. */
+const DEFAULT_VERTREKTIJD_OVERIG = "10:30";
 
 /**
  * POST /api/route/reorder
@@ -138,19 +141,25 @@ export async function POST(request: NextRequest) {
     for (const route of routes) {
       if (route.orderIds.length === 0) continue;
 
-      // Naar Overig slepen = uit planning halen (geen tijdslot). Let op: deze container
-      // bevat ook orders die simpelweg nooit een route hadden (nog niet gegenereerd, of
-      // niet meegenomen bij het genereren). Alleen orders die NU nog echt een route_nummer
-      // hebben in de database zijn daadwerkelijk uit een route gesleept — alleen die moeten
-      // ontkoppeld worden. Orders die al los waren, laten we ongewijzigd (anders vernietigt
-      // het simpelweg herschikken/omwisselen binnen Overig het bestaande tijdslot van álle
-      // orders in die groep, ook die er niets mee te maken hebben).
+      // De "Overig"-container bevat twee soorten orders die niet uit elkaar te houden
+      // zijn puur op containernaam:
+      //  1) Orders die NU nog echt een route_nummer hebben en hier terecht zijn gekomen
+      //     omdat de gebruiker ze bewust uit een echte route naar Overig heeft gesleept
+      //     → dat is een expliciete "uit planning halen"-actie: ontkoppelen + tijdslot weg.
+      //  2) Orders die al los waren (nooit een route hadden) en enkel intern zijn
+      //     herschikt (bijv. 2 orders omgewisseld) → die moeten net als een echte route
+      //     herberekend worden via Google Maps in de nieuwe volgorde, NIET ontkoppeld
+      //     worden (dat vernietigde eerder het tijdslot van de hele groep).
       if (route.routeNummer == null) {
+        const toUnplan: string[] = [];
+        const toRecalc: string[] = [];
         for (const id of route.orderIds) {
           const current = orderById.get(id) as Record<string, unknown> | undefined;
           const currentlyOnRoute = current?.route_nummer != null && Number(current.route_nummer) > 0;
-          if (!currentlyOnRoute) continue;
+          (currentlyOnRoute ? toUnplan : toRecalc).push(id);
+        }
 
+        for (const id of toUnplan) {
           const err = await patchOrder(id, {
             route_nummer: null,
             rit_nummer: null,
@@ -168,6 +177,32 @@ export async function POST(request: NextRequest) {
             .delete()
             .eq("owner_email", ownerEmail)
             .eq("order_id", id);
+        }
+
+        if (toRecalc.length > 0) {
+          const stops = toRecalc.map((id) => {
+            const o = orderById.get(id)! as Record<string, unknown>;
+            return {
+              id,
+              volledig_adres: String(o.volledig_adres ?? ""),
+              bezorgtijd_voorkeur: o.bezorgtijd_voorkeur
+                ? String(o.bezorgtijd_voorkeur)
+                : null,
+            };
+          });
+          const vertrektijd = /^\d{1,2}:\d{2}$/.test(route.vertrektijd)
+            ? route.vertrektijd
+            : DEFAULT_VERTREKTIJD_OVERIG;
+          const recalculated = await recalculateRouteStops(stops, vertrektijd);
+          for (const stop of recalculated) {
+            updates.push({
+              id: stop.id,
+              route_nummer: null,
+              rit_nummer: null,
+              aankomsttijd_slot: stop.aankomsttijd_slot,
+              arrivalTime: stop.arrivalTime,
+            });
+          }
         }
         continue;
       }
