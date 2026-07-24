@@ -108,7 +108,7 @@ export function sortRoutesTabOrders<T extends RitjesOrderFromApi>(orders: T[]): 
   });
 }
 
-/** Sorteer orders binnen dezelfde route: eerst Routific-stopvolgorde (rit_nummer), anders tijdslot. */
+/** Sorteer orders binnen dezelfde route: eerst stopvolgorde (rit_nummer), anders tijdslot. */
 export function compareOrdersOnRoute(
   a: RitjesOrderFromApi,
   b: RitjesOrderFromApi
@@ -117,7 +117,11 @@ export function compareOrdersOnRoute(
     const t = String(value ?? "").split(" - ")[0].replace(".", ":").trim();
     const [h, m] = t.split(":").map((x) => parseInt(x, 10));
     if (!Number.isFinite(h)) return 9999;
-    return h * 60 + (Number.isFinite(m) ? m : 0);
+    let mins = h * 60 + (Number.isFinite(m) ? m : 0);
+    // Stops die over middernacht heen zijn gewikkeld (00:00–05:59) horen NA de avond,
+    // niet vóór de ochtend — anders belandt de laatste stop bovenaan de lijst.
+    if (h >= 0 && h < 6) mins += 24 * 60;
+    return mins;
   };
 
   const ra = Number((a as Record<string, unknown>).rit_nummer ?? 0);

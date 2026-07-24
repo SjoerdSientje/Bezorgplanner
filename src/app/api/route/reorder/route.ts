@@ -255,21 +255,45 @@ export async function POST(request: NextRequest) {
           Number.isFinite(vh) && vh >= 0 && vh < 6
             ? DEFAULT_VERTREKTIJD_OVERIG
             : rawVt;
-        const previousForRecalc = overigPreviousOrderIds.filter((id) => toRecalc.includes(id));
         const recalculated = await recalculateFromDivergence(
           toRecalc,
-          previousForRecalc,
+          overigPreviousOrderIds,
           vertrektijd,
           orderById
         );
-        for (const stop of recalculated) {
-          updates.push({
-            id: stop.id,
-            route_nummer: null,
-            rit_nummer: null,
-            aankomsttijd_slot: stop.aankomsttijd_slot,
-            arrivalTime: stop.arrivalTime,
-          });
+        const recalculatedById = new Map(recalculated.map((s) => [s.id, s]));
+
+        // Belangrijk: ook in Overig rit_nummer 1..n zetten. Zonder rit_nummer sorteert
+        // de UI op kloktijd, waardoor een stop die over middernacht heen is gewikkeld
+        // (bijv. 01:13) bovenaan belandt alsof die als eerste vertrekt.
+        for (let i = 0; i < toRecalc.length; i++) {
+          const id = toRecalc[i]!;
+          const ritNummer = i + 1;
+          const recalc = recalculatedById.get(id);
+          if (recalc) {
+            updates.push({
+              id,
+              route_nummer: null,
+              rit_nummer: ritNummer,
+              aankomsttijd_slot: recalc.aankomsttijd_slot,
+              arrivalTime: recalc.arrivalTime,
+            });
+            continue;
+          }
+          const existing = orderById.get(id);
+          const existingSlot = String(existing?.aankomsttijd_slot ?? "").trim();
+          if (!existingSlot) continue;
+          const existingRit = Number(existing?.rit_nummer ?? 0);
+          // Prefix: slot behouden, wel rit_nummer synchroon zetten als die ontbreekt/verkeerd is.
+          if (existingRit !== ritNummer || existing?.rit_nummer == null) {
+            updates.push({
+              id,
+              route_nummer: null,
+              rit_nummer: ritNummer,
+              aankomsttijd_slot: existingSlot,
+              arrivalTime: parseSlotArrivalHhmm(existingSlot) ?? "",
+            });
+          }
         }
       }
     }
