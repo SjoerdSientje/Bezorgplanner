@@ -94,7 +94,7 @@ export async function POST(request: NextRequest) {
     }
     const { data: ordersData, error: ordersErr } = await supabase
       .from("orders")
-      .select("id, volledig_adres, bezorgtijd_voorkeur, naam")
+      .select("id, volledig_adres, bezorgtijd_voorkeur, naam, route_nummer")
       .eq("owner_email", ownerEmail)
       .in("id", allIds);
 
@@ -138,9 +138,19 @@ export async function POST(request: NextRequest) {
     for (const route of routes) {
       if (route.orderIds.length === 0) continue;
 
-      // Naar Overig slepen = uit planning halen (geen tijdslot).
+      // Naar Overig slepen = uit planning halen (geen tijdslot). Let op: deze container
+      // bevat ook orders die simpelweg nooit een route hadden (nog niet gegenereerd, of
+      // niet meegenomen bij het genereren). Alleen orders die NU nog echt een route_nummer
+      // hebben in de database zijn daadwerkelijk uit een route gesleept — alleen die moeten
+      // ontkoppeld worden. Orders die al los waren, laten we ongewijzigd (anders vernietigt
+      // het simpelweg herschikken/omwisselen binnen Overig het bestaande tijdslot van álle
+      // orders in die groep, ook die er niets mee te maken hebben).
       if (route.routeNummer == null) {
         for (const id of route.orderIds) {
+          const current = orderById.get(id) as Record<string, unknown> | undefined;
+          const currentlyOnRoute = current?.route_nummer != null && Number(current.route_nummer) > 0;
+          if (!currentlyOnRoute) continue;
+
           const err = await patchOrder(id, {
             route_nummer: null,
             rit_nummer: null,

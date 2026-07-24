@@ -699,6 +699,12 @@ export default function LijstSjoerd({
 
       const routes = [];
       for (const entry of routeEntries) {
+        // Overig (routeNummer null) heeft geen vertrektijd nodig: er wordt niets
+        // herberekend via Google Maps, alleen eventueel een order ontkoppeld.
+        if (entry.routeNummer == null) {
+          routes.push({ routeNummer: null, orderIds: entry.orderIds, vertrektijd: "" });
+          continue;
+        }
         const vertrektijd = getVertrektijdForRoute(entry.rn);
         if (!vertrektijd) {
           setReorderError(
