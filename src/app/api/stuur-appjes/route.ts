@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { sendWhatsAppByEvent } from "@/lib/whatsapp";
 import { requireAccountEmail } from "@/lib/account";
 import { getLatestOrNewPlanningDate } from "@/lib/planning-promote";
+import { getPlanningDate } from "@/lib/planning-date";
 import { isStuurAppjesEligibleOrder } from "@/lib/stuur-appjes-eligibility";
 import { isIncompleteMpOrder, isMpPausedForOwner } from "@/lib/mp-pause";
 
@@ -100,10 +101,17 @@ export async function POST(request: NextRequest) {
     }
 
     // Voor "nieuwe_order": toevoegen aan planning
+    // Doeldatum + WhatsApp-tekst ("vandaag"/"morgen") voor deze sectie volgen uitsluitend de
+    // 18:00-Amsterdam-rollover op het moment van versturen — bewust NIET de
+    // getLatestOrNewPlanningDate-heuristiek (die bij een al actieve batch voor zowel vandaag als
+    // morgen alles naar morgen duwt, ook als de order al een tijdslot vandaag heeft gekregen).
     const nieuweOrderOrders = selected.filter((o) => o.section === "nieuwe_order");
     let planningDatumVoorNieuweOrders: string | null = null;
+    let nieuweOrderIsMorgen = false;
     if (nieuweOrderOrders.length > 0) {
-      planningDatumVoorNieuweOrders = await getLatestOrNewPlanningDate(ownerEmail, supabase as any);
+      const { date, isTomorrow } = getPlanningDate();
+      planningDatumVoorNieuweOrders = date;
+      nieuweOrderIsMorgen = isTomorrow;
       const targetDate = planningDatumVoorNieuweOrders;
 
       // Bepaal hoogste volgorde voor die datum
@@ -201,6 +209,15 @@ export async function POST(request: NextRequest) {
           opmerkingen_klant: String(meta.opmerkingen_klant ?? ""),
           bezorgtijd_voorkeur: String(meta.bezorgtijd_voorkeur ?? ""),
           in_planning_en_ritjes_vandaag: inPlanningEnRitjesVandaag,
+          // Alleen voor "nieuwe_order": forceer "vandaag"/"morgen" in het bericht i.p.v. een datum,
+          // op basis van de 18:00-rollover op verzendmoment. Laat "nieuw_tijdslot" ongewijzigd.
+          ...(o.section === "nieuwe_order"
+            ? {
+                leveringLabelOverride: (nieuweOrderIsMorgen ? "morgen" : "vandaag") as
+                  | "vandaag"
+                  | "morgen",
+              }
+            : {}),
         },
         { ownerEmail }
       );

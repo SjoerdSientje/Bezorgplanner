@@ -37,6 +37,13 @@ export type WhatsAppOrderInput = {
   bezorgtijd_voorkeur?: string | null;
   /** True wanneer de order op verzendmoment in zowel ritjes_vandaag als planning staat. */
   in_planning_en_ritjes_vandaag?: boolean | null;
+  /**
+   * Alleen gezet door "stuur appjes" → "nieuwe order": forceert het woord "vandaag"/"morgen"
+   * in het bericht (i.p.v. een datum-string), gebaseerd op de 18:00-Amsterdam-rollover op
+   * verzendmoment. Andere flows (planning goedkeuren, nieuw tijdslot) laten dit veld leeg en
+   * behouden hun bestaande datum-weergave.
+   */
+  leveringLabelOverride?: "vandaag" | "morgen" | null;
 };
 
 export type SendWhatsAppResult = {
@@ -271,7 +278,7 @@ function buildAutoVariables(
 function buildBusinessVariables(order: WhatsAppOrderInput, count: number): string[] {
   const vars = [
     String(order.naam ?? ""),
-    formatDatumPlaceholderAmsterdam(order),
+    order.leveringLabelOverride ?? formatDatumPlaceholderAmsterdam(order),
     String(order.aankomsttijd_slot ?? ""),
     String(order.bestelling_totaal_prijs ?? ""),
   ];
