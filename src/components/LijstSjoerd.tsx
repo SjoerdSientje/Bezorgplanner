@@ -655,8 +655,16 @@ export default function LijstSjoerd({
     containersRef.current = containers;
   }, [containers]);
 
+  // Let op: NIET gaten op `recalculating` — die is nog steeds true tijdens de
+  // fetchRitjes()-refetch die na een succesvolle herschikking loopt (submitReorder await't
+  // onReorderComplete vóórdat de finally recalculating weer op false zet). Met die gate zou
+  // deze effect de resync na élke geslaagde herschikking overslaan, waardoor `containers`
+  // permanent blijft hangen op de oude, vóór-de-fetch berekende stand: bij de volgende
+  // sleep-actie kloppen container-IDs dan niet meer met de verse `orders`/`groups`, waardoor
+  // slepen stopt te werken en tijdsloten (voor orders die niet meer in de stale containers
+  // staan) niet meer getoond worden.
   useEffect(() => {
-    if (recalculating || isDraggingRef.current) return;
+    if (isDraggingRef.current) return;
     setContainers(groupsToContainers(groups));
   }, [groups]);
 
