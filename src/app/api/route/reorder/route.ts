@@ -138,11 +138,31 @@ export async function POST(request: NextRequest) {
       return error;
     };
 
+    // Alle "Overig"-route-entries (routeNummer null) bundelen tot ÉÉN batch met ÉÉN
+    // vertrektijd, ook als de client per ongeluk meerdere aparte entries stuurt voor
+    // dezelfde groep. Zonder deze bundeling kon een deel van de losse orders met een
+    // andere (soms verkeerde) vertrektijd herberekend worden dan de rest, wat leidde tot
+    // een deel van de orders midden in de nacht en een onlogische sprong bij de rest.
+    const overigOrderIds: string[] = [];
+    let overigVertrektijd: string | null = null;
+    const realRoutes: RouteInput[] = [];
     for (const route of routes) {
       if (route.orderIds.length === 0) continue;
+      if (route.routeNummer == null) {
+        for (const id of route.orderIds) {
+          if (!overigOrderIds.includes(id)) overigOrderIds.push(id);
+        }
+        if (!overigVertrektijd && /^\d{1,2}:\d{2}$/.test(route.vertrektijd)) {
+          overigVertrektijd = route.vertrektijd;
+        }
+      } else {
+        realRoutes.push(route);
+      }
+    }
 
-      // De "Overig"-container bevat twee soorten orders die niet uit elkaar te houden
-      // zijn puur op containernaam:
+    if (overigOrderIds.length > 0) {
+      // De "Overig"-groep bevat twee soorten orders die niet uit elkaar te houden zijn
+      // puur op containernaam:
       //  1) Orders die NU nog echt een route_nummer hebben en hier terecht zijn gekomen
       //     omdat de gebruiker ze bewust uit een echte route naar Overig heeft gesleept
       //     → dat is een expliciete "uit planning halen"-actie: ontkoppelen + tijdslot weg.
@@ -150,63 +170,60 @@ export async function POST(request: NextRequest) {
       //     herschikt (bijv. 2 orders omgewisseld) → die moeten net als een echte route
       //     herberekend worden via Google Maps in de nieuwe volgorde, NIET ontkoppeld
       //     worden (dat vernietigde eerder het tijdslot van de hele groep).
-      if (route.routeNummer == null) {
-        const toUnplan: string[] = [];
-        const toRecalc: string[] = [];
-        for (const id of route.orderIds) {
-          const current = orderById.get(id) as Record<string, unknown> | undefined;
-          const currentlyOnRoute = current?.route_nummer != null && Number(current.route_nummer) > 0;
-          (currentlyOnRoute ? toUnplan : toRecalc).push(id);
-        }
-
-        for (const id of toUnplan) {
-          const err = await patchOrder(id, {
-            route_nummer: null,
-            rit_nummer: null,
-            aankomsttijd_slot: null,
-          });
-          if (err) {
-            console.error("[route/reorder] unplan:", err);
-            return NextResponse.json(
-              { error: "Order uit route halen mislukt.", detail: err.message },
-              { status: 500 }
-            );
-          }
-          await supabase
-            .from("planning_slots")
-            .delete()
-            .eq("owner_email", ownerEmail)
-            .eq("order_id", id);
-        }
-
-        if (toRecalc.length > 0) {
-          const stops = toRecalc.map((id) => {
-            const o = orderById.get(id)! as Record<string, unknown>;
-            return {
-              id,
-              volledig_adres: String(o.volledig_adres ?? ""),
-              bezorgtijd_voorkeur: o.bezorgtijd_voorkeur
-                ? String(o.bezorgtijd_voorkeur)
-                : null,
-            };
-          });
-          const vertrektijd = /^\d{1,2}:\d{2}$/.test(route.vertrektijd)
-            ? route.vertrektijd
-            : DEFAULT_VERTREKTIJD_OVERIG;
-          const recalculated = await recalculateRouteStops(stops, vertrektijd);
-          for (const stop of recalculated) {
-            updates.push({
-              id: stop.id,
-              route_nummer: null,
-              rit_nummer: null,
-              aankomsttijd_slot: stop.aankomsttijd_slot,
-              arrivalTime: stop.arrivalTime,
-            });
-          }
-        }
-        continue;
+      const toUnplan: string[] = [];
+      const toRecalc: string[] = [];
+      for (const id of overigOrderIds) {
+        const current = orderById.get(id) as Record<string, unknown> | undefined;
+        const currentlyOnRoute = current?.route_nummer != null && Number(current.route_nummer) > 0;
+        (currentlyOnRoute ? toUnplan : toRecalc).push(id);
       }
 
+      for (const id of toUnplan) {
+        const err = await patchOrder(id, {
+          route_nummer: null,
+          rit_nummer: null,
+          aankomsttijd_slot: null,
+        });
+        if (err) {
+          console.error("[route/reorder] unplan:", err);
+          return NextResponse.json(
+            { error: "Order uit route halen mislukt.", detail: err.message },
+            { status: 500 }
+          );
+        }
+        await supabase
+          .from("planning_slots")
+          .delete()
+          .eq("owner_email", ownerEmail)
+          .eq("order_id", id);
+      }
+
+      if (toRecalc.length > 0) {
+        const stops = toRecalc.map((id) => {
+          const o = orderById.get(id)! as Record<string, unknown>;
+          return {
+            id,
+            volledig_adres: String(o.volledig_adres ?? ""),
+            bezorgtijd_voorkeur: o.bezorgtijd_voorkeur
+              ? String(o.bezorgtijd_voorkeur)
+              : null,
+          };
+        });
+        const vertrektijd = overigVertrektijd ?? DEFAULT_VERTREKTIJD_OVERIG;
+        const recalculated = await recalculateRouteStops(stops, vertrektijd);
+        for (const stop of recalculated) {
+          updates.push({
+            id: stop.id,
+            route_nummer: null,
+            rit_nummer: null,
+            aankomsttijd_slot: stop.aankomsttijd_slot,
+            arrivalTime: stop.arrivalTime,
+          });
+        }
+      }
+    }
+
+    for (const route of realRoutes) {
       const stops = route.orderIds.map((id) => {
         const o = orderById.get(id)! as Record<string, unknown>;
         return {
