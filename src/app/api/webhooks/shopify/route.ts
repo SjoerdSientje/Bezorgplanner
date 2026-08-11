@@ -13,6 +13,7 @@ import {
 import { allAccountEmails, shopifyWebhookOrderAppliesToOwner } from "@/lib/account";
 import { loadProductDefaultItemsRules } from "@/lib/product-rules-server";
 import { deductInventoryForShopifyOrder } from "@/lib/inventory";
+import { createSalesInvoiceFromShopifyOrder, isMoneybirdConfigured } from "@/lib/moneybird";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -28,6 +29,16 @@ export async function POST(request: NextRequest) {
       await deductInventoryForShopifyOrder(supabase, order);
     } catch (invErr) {
       console.error("[webhooks/shopify] inventory deduct:", invErr);
+    }
+
+    // Na voorraadaftrek (met shopify-mark): draft-factuur in Moneybird.
+    // Reference = shopify:{id} zodat de Moneybird-webhook geen dubbele aftrek doet.
+    if (isMoneybirdConfigured()) {
+      try {
+        await createSalesInvoiceFromShopifyOrder(order);
+      } catch (mbErr) {
+        console.error("[webhooks/shopify] moneybird invoice:", mbErr);
+      }
     }
 
     const { data: cutoffRows } = await supabase

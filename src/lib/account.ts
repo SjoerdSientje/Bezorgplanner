@@ -36,18 +36,23 @@ export function allAccountEmails(): string[] {
 const MALYAR_ACCOUNT = "malyar@aiventive.nl";
 const MALYAR_NOTE_REQUIRED_SUBSTRING = "malyar";
 
+/** Testorders: "malyar" ergens in de Shopify order note (case-insensitive). */
+export function isMalyarTestOrderNote(orderNote: string | null | undefined): boolean {
+  return String(orderNote ?? "").toLowerCase().includes(MALYAR_NOTE_REQUIRED_SUBSTRING);
+}
+
 /**
  * Bepaalt of een binnenkomende Shopify-webhook voor `ownerEmail` een order mag aanmaken/updaten.
- * Het account malyar@ krijgt alleen orders waar "Malyar" in de ordernote staat; overige accounts ongewijzigd.
+ * Orders met "malyar" in de note gaan alleen naar malyar@; overige orders nooit naar malyar@.
  */
 export function shopifyWebhookOrderAppliesToOwner(
   ownerEmail: string,
   orderNote: string | null | undefined
 ): boolean {
-  if (normalizeEmail(ownerEmail) !== normalizeEmail(MALYAR_ACCOUNT)) {
-    return true;
-  }
-  return String(orderNote ?? "").toLowerCase().includes(MALYAR_NOTE_REQUIRED_SUBSTRING);
+  const isMalyarOwner = normalizeEmail(ownerEmail) === normalizeEmail(MALYAR_ACCOUNT);
+  const isMalyarNote = isMalyarTestOrderNote(orderNote);
+  if (isMalyarNote) return isMalyarOwner;
+  return !isMalyarOwner;
 }
 
 /** Zelfde logica als `normalizePhone` in whatsapp.ts (voor vergelijken met toegestaan nummer). */

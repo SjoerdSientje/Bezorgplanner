@@ -60,6 +60,8 @@ function sourceLabel(source: InventorySource | null): string {
       return "Shopify";
     case "marktplaats":
       return "Marktplaats";
+    case "moneybird":
+      return "Moneybird";
     case "winkel":
       return "Winkel";
     case "handmatig":

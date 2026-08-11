@@ -10,7 +10,8 @@ import {
 } from "@/lib/shopify-admin";
 import type { ShopifyLineItem, ShopifyOrder, LineItemForJson } from "@/lib/shopify-order";
 import { buildStructuredLineItems } from "@/lib/shopify-order";
-import { allAccountEmails, shopifyWebhookOrderAppliesToOwner } from "@/lib/account";
+import { allAccountEmails, getInventoryScanOwnerEmail, shopifyWebhookOrderAppliesToOwner } from "@/lib/account";
+import { normalizeEmail } from "@/lib/auth-shared";
 import { getAmsterdamCalendarDate, getAmsterdamDayUtcRange } from "@/lib/planning-date";
 import { buildInventoryStockKeyInfo, type InventoryStockKeyInfo } from "@/lib/inventory-stock-key";
 import type { ProductDefaultItemsRulesV1 } from "@/lib/product-default-items-rules";
@@ -22,7 +23,7 @@ import {
 } from "@/lib/inventory-rules";
 
 export type InventoryCategory = "fiets" | "onderdeel" | "overig";
-export type InventorySource = "shopify" | "marktplaats" | "winkel" | "handmatig";
+export type InventorySource = "shopify" | "marktplaats" | "winkel" | "handmatig" | "moneybird";
 export type InventoryMutationType = "inkomend" | "uitgaand" | "correctie";
 
 export const LOW_STOCK_THRESHOLD = 3;
@@ -709,7 +710,7 @@ export async function getInventoryMutationsForDay(
 async function markOrderDeducted(
   supabase: SupabaseClient,
   ownerEmail: string,
-  source: "shopify" | "marktplaats",
+  source: "shopify" | "marktplaats" | "moneybird",
   externalOrderId: string
 ): Promise<boolean> {
   const { error } = await supabase.from("inventory_order_deductions").insert({
@@ -723,24 +724,31 @@ async function markOrderDeducted(
   return false;
 }
 
-export async function deductInventoryForLineItems(
+async function hasOrderDeduction(
+  supabase: SupabaseClient,
+  ownerEmail: string,
+  source: "shopify" | "marktplaats" | "moneybird",
+  externalOrderId: string
+): Promise<boolean> {
+  const { data } = await supabase
+    .from("inventory_order_deductions")
+    .select("external_order_id")
+    .eq("owner_email", ownerEmail)
+    .eq("source", source)
+    .eq("external_order_id", externalOrderId)
+    .maybeSingle();
+  return Boolean(data);
+}
+
+async function applyOutgoingMutationsForLineItems(
   supabase: SupabaseClient,
   params: {
     ownerEmail: string;
-    source: "shopify" | "marktplaats";
-    externalOrderId: string;
+    source: InventorySource;
     orderReference: string;
     lineItems: LineItemForDeduction[];
   }
 ): Promise<void> {
-  const isNew = await markOrderDeducted(
-    supabase,
-    params.ownerEmail,
-    params.source,
-    params.externalOrderId
-  );
-  if (!isNew) return;
-
   const orderProducten = formatLineItemsForSnapshot(params.lineItems);
 
   for (const item of params.lineItems) {
@@ -783,6 +791,32 @@ export async function deductInventoryForLineItems(
   }
 }
 
+export async function deductInventoryForLineItems(
+  supabase: SupabaseClient,
+  params: {
+    ownerEmail: string;
+    source: "shopify" | "marktplaats";
+    externalOrderId: string;
+    orderReference: string;
+    lineItems: LineItemForDeduction[];
+  }
+): Promise<void> {
+  const isNew = await markOrderDeducted(
+    supabase,
+    params.ownerEmail,
+    params.source,
+    params.externalOrderId
+  );
+  if (!isNew) return;
+
+  await applyOutgoingMutationsForLineItems(supabase, {
+    ownerEmail: params.ownerEmail,
+    source: params.source,
+    orderReference: params.orderReference,
+    lineItems: params.lineItems,
+  });
+}
+
 function formatLineItemsForSnapshot(lineItems: LineItemForDeduction[]): string {
   return lineItems
     .map((item) => {
@@ -817,6 +851,112 @@ export async function deductInventoryForShopifyOrder(
       lineItems,
     });
   }
+}
+
+function parseMoneybirdAmount(amount: string | null | undefined): number {
+  const raw = String(amount ?? "1").trim();
+  const m = raw.match(/(\d+(?:[.,]\d+)?)/);
+  if (!m) return 1;
+  const n = parseFloat(m[1]!.replace(",", "."));
+  return Number.isFinite(n) && n > 0 ? Math.max(1, Math.floor(n)) : 1;
+}
+
+type MoneybirdInvoiceDetailInput = {
+  description?: string | null;
+  amount?: string | null;
+};
+
+type MoneybirdInvoiceInput = {
+  id?: string | null;
+  reference?: string | null;
+  details?: MoneybirdInvoiceDetailInput[] | null;
+};
+
+function parseShopifyOrderIdFromInvoiceReference(
+  reference: string | null | undefined
+): string | null {
+  const raw = String(reference ?? "").trim();
+  const m = raw.match(/^shopify:(\d+)\b/i);
+  return m?.[1] ?? null;
+}
+
+function moneybirdDetailsToLineItems(
+  details: MoneybirdInvoiceDetailInput[] | null | undefined
+): LineItemForDeduction[] {
+  const out: LineItemForDeduction[] = [];
+  for (const d of details ?? []) {
+    const name = String(d.description ?? "").trim();
+    if (!name) continue;
+    // Strip " (#1234)" / " (orderName)" suffix we add when creating from Shopify.
+    const cleanName = name.replace(/\s*\([^)]*\)\s*$/, "").trim() || name;
+    out.push({
+      name: cleanName,
+      quantity: parseMoneybirdAmount(d.amount),
+    });
+  }
+  return mergeDeductionLineItems(out);
+}
+
+function moneybirdInvoiceOwnerEmail(): string {
+  const fromEnv = process.env.MONEYBIRD_INVOICE_OWNER_EMAIL?.trim();
+  if (fromEnv) return normalizeEmail(fromEnv);
+  return getInventoryScanOwnerEmail();
+}
+
+/**
+ * Voorraadaftrek voor een Moneybird-factuur.
+ * Idempotent op invoice-id. Skip stock als reference shopify:{id} al via Shopify is afgetrokken.
+ */
+export async function deductInventoryForMoneybirdInvoice(
+  supabase: SupabaseClient,
+  invoice: MoneybirdInvoiceInput
+): Promise<{ deducted: boolean; skippedReason?: string }> {
+  const invoiceId = String(invoice.id ?? "").trim();
+  if (!invoiceId) return { deducted: false, skippedReason: "missing_invoice_id" };
+
+  const ownerEmail = moneybirdInvoiceOwnerEmail();
+
+  const isNew = await markOrderDeducted(supabase, ownerEmail, "moneybird", invoiceId);
+  if (!isNew) {
+    return { deducted: false, skippedReason: "already_processed" };
+  }
+
+  const shopifyOrderId = parseShopifyOrderIdFromInvoiceReference(invoice.reference);
+  if (shopifyOrderId) {
+    const alreadyViaShopify = await hasOrderDeduction(
+      supabase,
+      ownerEmail,
+      "shopify",
+      shopifyOrderId
+    );
+    if (alreadyViaShopify) {
+      console.info(
+        "[inventory] Moneybird factuur",
+        invoiceId,
+        "skip — Shopify order",
+        shopifyOrderId,
+        "al afgetrokken"
+      );
+      return { deducted: false, skippedReason: "shopify_already_deducted" };
+    }
+  }
+
+  const lineItems = moneybirdDetailsToLineItems(invoice.details);
+  if (lineItems.length === 0) {
+    return { deducted: false, skippedReason: "no_line_items" };
+  }
+
+  const orderReference =
+    String(invoice.reference ?? "").trim() || `moneybird:${invoiceId}`;
+
+  await applyOutgoingMutationsForLineItems(supabase, {
+    ownerEmail,
+    source: "moneybird",
+    orderReference,
+    lineItems,
+  });
+
+  return { deducted: true };
 }
 
 export async function deductInventoryForMpOrder(
