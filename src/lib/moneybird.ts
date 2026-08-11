@@ -252,6 +252,7 @@ function unitPriceExclApprox(price: string | number | null | undefined): string 
  * Orders onder €498: factuur wordt direct verstuurd per e-mail (status open).
  * Orders vanaf €498: blijven draft (handmatig controleren/versturen).
  * Testorders met "malyar" in de note: altijd draft, ongeacht prijs.
+ * Totaal €0: geen factuur.
  */
 export async function createSalesInvoiceFromShopifyOrder(
   order: ShopifyOrder
@@ -263,6 +264,16 @@ export async function createSalesInvoiceFromShopifyOrder(
 
   const shopifyOrderId = String(order.id ?? "").trim();
   if (!shopifyOrderId) return null;
+
+  const totalIncl = parseFloat(String(order.total_price ?? 0));
+  if (!Number.isFinite(totalIncl) || totalIncl <= 0) {
+    console.info(
+      "[moneybird] order totaal €0 — geen factuur",
+      shopifyOrderId,
+      order.name ?? ""
+    );
+    return null;
+  }
 
   const reference = shopifyReferenceForOrderId(shopifyOrderId);
   const existing = await findSalesInvoiceByReference(reference);
@@ -316,7 +327,6 @@ export async function createSalesInvoiceFromShopifyOrder(
     body: JSON.stringify(payload),
   });
 
-  const totalIncl = parseFloat(String(order.total_price ?? 0));
   const isMalyarTest = isMalyarTestOrderNote(order.note);
   const shouldFinalize =
     !isMalyarTest &&
