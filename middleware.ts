@@ -11,6 +11,7 @@ function isPublicPath(pathname: string): boolean {
     pathname.startsWith("/favicon") ||
     pathname.startsWith("/api/auth") ||
     pathname.startsWith("/api/webhooks/shopify") ||
+    pathname.startsWith("/api/webhooks/moneybird") ||
     pathname.startsWith("/api/inventory/search") ||
     pathname.startsWith("/api/inventory/scan")
   ) {

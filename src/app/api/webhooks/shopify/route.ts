@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
       console.error("[webhooks/shopify] inventory deduct:", invErr);
     }
 
-    // Na voorraadaftrek (met shopify-mark): draft-factuur in Moneybird.
+    // Na voorraadaftrek (met shopify-mark): factuur in Moneybird.
     // Reference = shopify:{id} zodat de Moneybird-webhook geen dubbele aftrek doet.
     if (isMoneybirdConfigured()) {
       try {
@@ -39,6 +39,10 @@ export async function POST(request: NextRequest) {
       } catch (mbErr) {
         console.error("[webhooks/shopify] moneybird invoice:", mbErr);
       }
+    } else {
+      console.warn(
+        "[webhooks/shopify] Moneybird niet geconfigureerd — factuur overgeslagen (zet MONEYBIRD_ADMINISTRATION_ID, MONEYBIRD_API_TOKEN, MONEYBIRD_TAX_RATE_ID, MONEYBIRD_LEDGER_ACCOUNT_ID)."
+      );
     }
 
     const { data: cutoffRows } = await supabase
