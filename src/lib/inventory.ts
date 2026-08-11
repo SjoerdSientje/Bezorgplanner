@@ -164,27 +164,17 @@ async function mergeDuplicateRows(
   }
 }
 
-export async function syncInventoryFromShopify(
+async function upsertInventoryGroups(
   supabase: SupabaseClient,
-  ownerEmail: string
-): Promise<{ inserted: number; updated: number; removed: number; total: number }> {
-  const allProducts = await fetchAllShopifyProducts();
-  const products = allProducts.filter(
-    (product) => isShopifyProductActive(product) && !isExcludedFromInventory(product)
-  );
-  const categoryMap = await fetchInventoryCollectionProductIds();
-  const groups = buildInventoryGroups(products);
+  ownerEmail: string,
+  groups: Map<string, InventoryGroup>,
+  categoryMap: InventoryCategoryMap,
+  existingRows: InventoryProductRow[]
+): Promise<{ inserted: number; updated: number; existingRows: InventoryProductRow[]; variantCount: number }> {
   let inserted = 0;
   let updated = 0;
-  let removed = 0;
   let variantCount = 0;
-
-  const { data: existingRowsRaw } = await supabase
-    .from("inventory_products")
-    .select("*")
-    .eq("owner_email", ownerEmail);
-
-  let existingRows = (existingRowsRaw ?? []) as InventoryProductRow[];
+  let rows = existingRows;
 
   for (const group of Array.from(groups.values())) {
     variantCount += group.entries.length;
@@ -196,7 +186,7 @@ export async function syncInventoryFromShopify(
     const category = classifyInventoryCategory(product, categoryMap);
     const imageUrl = productImageUrl(product);
 
-    const matches = existingRows.filter((row) =>
+    const matches = rows.filter((row) =>
       rowMatchesGroup(row, stockInfo.groupKey, variantIdSet)
     );
 
@@ -222,7 +212,7 @@ export async function syncInventoryFromShopify(
       if (duplicates.length > 0) {
         await mergeDuplicateRows(supabase, primary.id, duplicates);
         const duplicateIds = new Set(duplicates.map((row) => row.id));
-        existingRows = existingRows.filter((row) => !duplicateIds.has(row.id));
+        rows = rows.filter((row) => !duplicateIds.has(row.id));
       }
 
       const stockQuantity = Math.max(
@@ -237,8 +227,10 @@ export async function syncInventoryFromShopify(
 
       if (!error) {
         updated++;
-        existingRows = existingRows.map((row) =>
-          row.id === primary.id ? ({ ...row, ...payload, stock_quantity: stockQuantity } as InventoryProductRow) : row
+        rows = rows.map((row) =>
+          row.id === primary.id
+            ? ({ ...row, ...payload, stock_quantity: stockQuantity } as InventoryProductRow)
+            : row
         );
       }
       continue;
@@ -256,24 +248,142 @@ export async function syncInventoryFromShopify(
 
     if (!error && insertedRow) {
       inserted++;
-      existingRows.push(insertedRow as InventoryProductRow);
+      rows.push(insertedRow as InventoryProductRow);
     }
   }
+
+  return { inserted, updated, existingRows: rows, variantCount };
+}
+
+export async function removeInventoryProductByShopifyId(
+  supabase: SupabaseClient,
+  ownerEmail: string,
+  shopifyProductId: number
+): Promise<number> {
+  const { data: deletedRows, error } = await supabase
+    .from("inventory_products")
+    .delete()
+    .eq("owner_email", ownerEmail)
+    .eq("shopify_product_id", shopifyProductId)
+    .select("id");
+
+  if (error) {
+    console.error("[inventory] remove product error:", error.message);
+    return 0;
+  }
+  return deletedRows?.length ?? 0;
+}
+
+/**
+ * Incrementele sync van één Shopify-product (create/update/status-change).
+ * Inactive/excluded → verwijderen uit voorraad.
+ */
+export async function syncInventoryProductFromShopify(
+  supabase: SupabaseClient,
+  ownerEmail: string,
+  product: ShopifyAdminProduct
+): Promise<{ inserted: number; updated: number; removed: number }> {
+  const shopifyProductId = Number(product.id);
+  if (!Number.isFinite(shopifyProductId) || shopifyProductId <= 0) {
+    return { inserted: 0, updated: 0, removed: 0 };
+  }
+
+  if (!isShopifyProductActive(product) || isExcludedFromInventory(product)) {
+    const removed = await removeInventoryProductByShopifyId(
+      supabase,
+      ownerEmail,
+      shopifyProductId
+    );
+    return { inserted: 0, updated: 0, removed };
+  }
+
+  const categoryMap = await fetchInventoryCollectionProductIds();
+  const groups = buildInventoryGroups([product]);
+  const keepGroupKeys = new Set(groups.keys());
+
+  const { data: existingRowsRaw } = await supabase
+    .from("inventory_products")
+    .select("*")
+    .eq("owner_email", ownerEmail)
+    .eq("shopify_product_id", shopifyProductId);
+
+  let existingRows = (existingRowsRaw ?? []) as InventoryProductRow[];
+
+  const { inserted, updated, existingRows: afterUpsert } = await upsertInventoryGroups(
+    supabase,
+    ownerEmail,
+    groups,
+    categoryMap,
+    existingRows
+  );
+
+  const orphanIds = afterUpsert
+    .filter(
+      (row) =>
+        row.shopify_product_id === shopifyProductId && !keepGroupKeys.has(row.group_key)
+    )
+    .map((row) => row.id);
+
+  let removed = 0;
+  if (orphanIds.length > 0) {
+    const { data: deletedRows, error } = await supabase
+      .from("inventory_products")
+      .delete()
+      .in("id", orphanIds)
+      .select("id");
+    if (!error) removed = deletedRows?.length ?? 0;
+  }
+
+  return { inserted, updated, removed };
+}
+
+export async function syncInventoryFromShopify(
+  supabase: SupabaseClient,
+  ownerEmail: string
+): Promise<{ inserted: number; updated: number; removed: number; total: number }> {
+  const allProducts = await fetchAllShopifyProducts();
+  const products = allProducts.filter(
+    (product) => isShopifyProductActive(product) && !isExcludedFromInventory(product)
+  );
+  const categoryMap = await fetchInventoryCollectionProductIds();
+  const groups = buildInventoryGroups(products);
+
+  const { data: existingRowsRaw } = await supabase
+    .from("inventory_products")
+    .select("*")
+    .eq("owner_email", ownerEmail);
+
+  const existingRows = (existingRowsRaw ?? []) as InventoryProductRow[];
+
+  const { inserted, updated, variantCount } = await upsertInventoryGroups(
+    supabase,
+    ownerEmail,
+    groups,
+    categoryMap,
+    existingRows
+  );
+
+  let removed = 0;
 
   const inactiveProductIds = allProducts
     .filter((product) => !isShopifyProductActive(product) || isExcludedFromInventory(product))
     .map((product) => product.id);
 
   if (inactiveProductIds.length > 0) {
-    const { data: deletedRows, error: deleteErr } = await supabase
-      .from("inventory_products")
-      .delete()
-      .eq("owner_email", ownerEmail)
-      .in("shopify_product_id", inactiveProductIds)
-      .select("id");
+    // Chunk .in() to avoid PostgREST URL limits.
+    const chunkSize = 100;
+    for (let i = 0; i < inactiveProductIds.length; i += chunkSize) {
+      const chunk = inactiveProductIds.slice(i, i + chunkSize);
+      const { data: deletedRows, error: deleteErr } = await supabase
+        .from("inventory_products")
+        .delete()
+        .eq("owner_email", ownerEmail)
+        .in("shopify_product_id", chunk)
+        .select("id");
 
-    if (!deleteErr) {
-      removed += deletedRows?.length ?? 0;
+      if (!deleteErr) {
+        removed += deletedRows?.length ?? 0;
+      }
     }
   }
 
@@ -740,6 +850,23 @@ async function hasOrderDeduction(
   return Boolean(data);
 }
 
+async function clearOrderDeduction(
+  supabase: SupabaseClient,
+  ownerEmail: string,
+  source: "shopify" | "marktplaats" | "moneybird",
+  externalOrderId: string
+): Promise<void> {
+  const { error } = await supabase
+    .from("inventory_order_deductions")
+    .delete()
+    .eq("owner_email", ownerEmail)
+    .eq("source", source)
+    .eq("external_order_id", externalOrderId);
+  if (error) {
+    console.error("[inventory] clear deduction mark error:", error.message);
+  }
+}
+
 async function applyOutgoingMutationsForLineItems(
   supabase: SupabaseClient,
   params: {
@@ -785,6 +912,57 @@ async function applyOutgoingMutationsForLineItems(
       quantity: qty,
       source: params.source,
       note: `Automatische aftrek order ${params.orderReference}`,
+      orderReference: params.orderReference,
+      orderProducten,
+    });
+  }
+}
+
+async function applyIncomingMutationsForLineItems(
+  supabase: SupabaseClient,
+  params: {
+    ownerEmail: string;
+    source: InventorySource;
+    orderReference: string;
+    lineItems: LineItemForDeduction[];
+  }
+): Promise<void> {
+  const orderProducten = formatLineItemsForSnapshot(params.lineItems);
+
+  for (const item of params.lineItems) {
+    const bundle = resolveBundleDeduction(item);
+    if (bundle) {
+      const product = await findProductByTitleContains(
+        supabase,
+        params.ownerEmail,
+        bundle.targetTitleContains
+      );
+      if (product) {
+        await applyInventoryMutation(supabase, {
+          ownerEmail: params.ownerEmail,
+          productId: product.id,
+          mutationType: "inkomend",
+          quantity: bundle.quantity,
+          source: params.source,
+          note: `Bundel-terugboeking annulering (${item.name}) order ${params.orderReference}`,
+          orderReference: params.orderReference,
+          orderProducten,
+        });
+      }
+      continue;
+    }
+
+    const qty = Math.max(1, Math.floor(Number(item.quantity ?? 1)));
+    const product = await findProductForLineItem(supabase, params.ownerEmail, item);
+    if (!product) continue;
+
+    await applyInventoryMutation(supabase, {
+      ownerEmail: params.ownerEmail,
+      productId: product.id,
+      mutationType: "inkomend",
+      quantity: qty,
+      source: params.source,
+      note: `Terugboeking annulering order ${params.orderReference}`,
       orderReference: params.orderReference,
       orderProducten,
     });
@@ -853,6 +1031,53 @@ export async function deductInventoryForShopifyOrder(
   }
 }
 
+/**
+ * Zet voorraad terug na Shopify-annulering.
+ * Alleen als er eerder een shopify-aftrek-mark was; mark wordt daarna gewist (idempotent).
+ */
+export async function restoreInventoryForShopifyOrder(
+  supabase: SupabaseClient,
+  order: ShopifyOrder
+): Promise<void> {
+  const shopifyOrderId = String(order.id ?? "").trim();
+  if (!shopifyOrderId) return;
+
+  const rawItems = order.line_items ?? [];
+  if (rawItems.length === 0) return;
+
+  const orderReference = String(order.name ?? shopifyOrderId);
+
+  for (const ownerEmail of allAccountEmails()) {
+    if (!shopifyWebhookOrderAppliesToOwner(ownerEmail, order.note)) continue;
+
+    const hadDeduction = await hasOrderDeduction(
+      supabase,
+      ownerEmail,
+      "shopify",
+      shopifyOrderId
+    );
+    if (!hadDeduction) continue;
+
+    const rules = await loadProductDefaultItemsRules(supabase, ownerEmail);
+    const lineItems = buildInventoryDeductionLineItems(rawItems, rules);
+
+    await applyIncomingMutationsForLineItems(supabase, {
+      ownerEmail,
+      source: "shopify",
+      orderReference,
+      lineItems,
+    });
+
+    await clearOrderDeduction(supabase, ownerEmail, "shopify", shopifyOrderId);
+    console.info(
+      "[inventory] Shopify annulering — voorraad teruggeboekt",
+      orderReference,
+      "owner",
+      ownerEmail
+    );
+  }
+}
+
 function parseMoneybirdAmount(amount: string | null | undefined): number {
   const raw = String(amount ?? "1").trim();
   const m = raw.match(/(\d+(?:[.,]\d+)?)/);
@@ -904,7 +1129,7 @@ function moneybirdInvoiceOwnerEmail(): string {
 }
 
 /**
- * Voorraadaftrek voor een Moneybird-factuur.
+ * Voorraadaftrek voor een Moneybird-factuur (aanroepen na verzenden, niet bij concept).
  * Idempotent op invoice-id. Skip stock als reference shopify:{id} al via Shopify is afgetrokken.
  */
 export async function deductInventoryForMoneybirdInvoice(

@@ -198,6 +198,7 @@ export function extractPakketjesLineItems(order: ShopifyOrder): { name: string; 
 
 /** Order komt alleen in Ritjes voor vandaag als hij door dit filter gaat */
 export function passesRitjesFilter(order: ShopifyOrder): boolean {
+  if (order.cancelled_at) return false;
   if (isShowroomShippingOrder(order)) return false;
 
   const totalPrice = parseFloat(String(order.total_price ?? 0));

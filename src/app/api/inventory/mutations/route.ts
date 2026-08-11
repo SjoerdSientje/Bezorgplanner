@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireAccountEmail } from "@/lib/account";
+import { getInventoryOwnerEmail, requireAccountEmail } from "@/lib/account";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { getInventoryMutationsForDay } from "@/lib/inventory";
 import { getAmsterdamCalendarDate } from "@/lib/planning-date";
@@ -8,7 +8,8 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
   try {
-    const ownerEmail = requireAccountEmail(request);
+    requireAccountEmail(request);
+    const ownerEmail = getInventoryOwnerEmail(request);
     const supabase = createServerSupabaseClient();
 
     const dateParam = request.nextUrl.searchParams.get("date");

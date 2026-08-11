@@ -10,20 +10,152 @@ import {
   shopifyOrderCreatedAt,
   type ShopifyOrder,
 } from "@/lib/shopify-order";
-import { allAccountEmails, shopifyWebhookOrderAppliesToOwner } from "@/lib/account";
+import {
+  allAccountEmails,
+  getInventoryScanOwnerEmail,
+  shopifyWebhookOrderAppliesToOwner,
+} from "@/lib/account";
 import { loadProductDefaultItemsRules } from "@/lib/product-rules-server";
-import { deductInventoryForShopifyOrder } from "@/lib/inventory";
-import { createSalesInvoiceFromShopifyOrder, isMoneybirdConfigured } from "@/lib/moneybird";
+import {
+  deductInventoryForShopifyOrder,
+  restoreInventoryForShopifyOrder,
+  removeInventoryProductByShopifyId,
+  syncInventoryProductFromShopify,
+} from "@/lib/inventory";
+import {
+  createSalesInvoiceFromShopifyOrder,
+  isMoneybirdConfigured,
+  removeMoneybirdProductForShopifyId,
+  upsertMoneybirdProductFromShopify,
+} from "@/lib/moneybird";
+import type { ShopifyAdminProduct } from "@/lib/shopify-admin";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
+async function handleProductWebhook(
+  topic: string,
+  raw: string
+): Promise<NextResponse> {
+  const supabase = createClient(supabaseUrl, supabaseServiceKey);
+  const ownerEmail = getInventoryScanOwnerEmail();
+  const payload = JSON.parse(raw) as ShopifyAdminProduct & { id?: number };
+
+  if (topic === "products/delete") {
+    const productId = Number(payload.id);
+    if (!Number.isFinite(productId) || productId <= 0) {
+      return NextResponse.json({ ok: true, skipped: "missing_product_id" });
+    }
+    const removed = await removeInventoryProductByShopifyId(
+      supabase,
+      ownerEmail,
+      productId
+    );
+    let moneybird: { removed: boolean } | { error: string } = { removed: false };
+    if (isMoneybirdConfigured()) {
+      try {
+        const ok = await removeMoneybirdProductForShopifyId(productId);
+        moneybird = { removed: ok };
+      } catch (mbErr) {
+        console.error("[webhooks/shopify] moneybird product delete:", mbErr);
+        moneybird = {
+          error: mbErr instanceof Error ? mbErr.message : "moneybird delete failed",
+        };
+      }
+    }
+    return NextResponse.json({ ok: true, topic, removed, ownerEmail, moneybird });
+  }
+
+  if (!payload.id || !payload.title) {
+    return NextResponse.json({ ok: true, skipped: "invalid_product_payload" });
+  }
+
+  // Ensure variants array exists for group builder.
+  const product: ShopifyAdminProduct = {
+    ...payload,
+    variants: Array.isArray(payload.variants) ? payload.variants : [],
+    status: String(payload.status ?? "active"),
+    vendor: String(payload.vendor ?? ""),
+    product_type: String(payload.product_type ?? ""),
+    tags: String(payload.tags ?? ""),
+    handle: String(payload.handle ?? ""),
+  };
+
+  const result = await syncInventoryProductFromShopify(supabase, ownerEmail, product);
+
+  let moneybird: Record<string, unknown> = { skipped: true };
+  if (isMoneybirdConfigured()) {
+    try {
+      moneybird = await upsertMoneybirdProductFromShopify(product);
+    } catch (mbErr) {
+      console.error("[webhooks/shopify] moneybird product sync:", mbErr);
+      moneybird = {
+        error: mbErr instanceof Error ? mbErr.message : "moneybird sync failed",
+      };
+    }
+  }
+
+  return NextResponse.json({ ok: true, topic, ...result, ownerEmail, moneybird });
+}
+
 export async function POST(request: NextRequest) {
   try {
     const raw = await request.text();
+    const topic = (request.headers.get("x-shopify-topic") ?? "").trim().toLowerCase();
+
+    if (
+      topic === "products/create" ||
+      topic === "products/update" ||
+      topic === "products/delete"
+    ) {
+      try {
+        return await handleProductWebhook(topic, raw);
+      } catch (prodErr) {
+        console.error("[webhooks/shopify] product sync:", prodErr);
+        return NextResponse.json(
+          { ok: false, error: prodErr instanceof Error ? prodErr.message : "product sync failed" },
+          { status: 200 }
+        );
+      }
+    }
+
     const order = JSON.parse(raw) as ShopifyOrder;
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    const shopifyOrderId = String(order.id ?? "").trim();
+
+    // Annulering: voorraad terug, uit ritjes/pakketjes, geen Moneybird-factuur.
+    if (order.cancelled_at) {
+      try {
+        await restoreInventoryForShopifyOrder(supabase, order);
+      } catch (invErr) {
+        console.error("[webhooks/shopify] inventory restore on cancel:", invErr);
+      }
+
+      if (shopifyOrderId) {
+        for (const ownerEmail of allAccountEmails()) {
+          if (!shopifyWebhookOrderAppliesToOwner(ownerEmail, order.note)) {
+            continue;
+          }
+          await supabase
+            .from("pakketjes_orders")
+            .delete()
+            .eq("owner_email", ownerEmail)
+            .eq("shopify_order_id", shopifyOrderId);
+          await supabase
+            .from("orders")
+            .delete()
+            .eq("owner_email", ownerEmail)
+            .eq("order_id", shopifyOrderId)
+            .eq("source", "shopify");
+        }
+      }
+
+      return NextResponse.json(
+        { ok: true, cancelled: true, shopifyOrderId: shopifyOrderId || null },
+        { status: 200 }
+      );
+    }
 
     try {
       await deductInventoryForShopifyOrder(supabase, order);
@@ -55,17 +187,17 @@ export async function POST(request: NextRequest) {
       ])
     );
 
-    const shopifyOrderId = String(order.id ?? "").trim();
+    const shopifyOrderIdForPakketjes = String(order.id ?? "").trim();
     const orderCreatedMs = shopifyOrderCreatedAt(order).getTime();
 
-    if (shopifyOrderId) {
+    if (shopifyOrderIdForPakketjes) {
       for (const ownerEmail of allAccountEmails()) {
         if (!shopifyWebhookOrderAppliesToOwner(ownerEmail, order.note)) {
           await supabase
             .from("pakketjes_orders")
             .delete()
             .eq("owner_email", ownerEmail)
-            .eq("shopify_order_id", shopifyOrderId);
+            .eq("shopify_order_id", shopifyOrderIdForPakketjes);
           continue;
         }
 
@@ -77,7 +209,7 @@ export async function POST(request: NextRequest) {
               .from("pakketjes_orders")
               .delete()
               .eq("owner_email", ownerEmail)
-              .eq("shopify_order_id", shopifyOrderId);
+              .eq("shopify_order_id", shopifyOrderIdForPakketjes);
             continue;
           }
         }
@@ -86,7 +218,7 @@ export async function POST(request: NextRequest) {
           const total = parseFloat(String(order.total_price ?? 0));
           const row = {
             owner_email: ownerEmail,
-            shopify_order_id: shopifyOrderId,
+            shopify_order_id: shopifyOrderIdForPakketjes,
             order_nummer: String(order.name ?? ""),
             naam: pakketjesCustomerName(order),
             adres: shopifyOrderDisplayAdres(order),
@@ -105,7 +237,7 @@ export async function POST(request: NextRequest) {
             .from("pakketjes_orders")
             .delete()
             .eq("owner_email", ownerEmail)
-            .eq("shopify_order_id", shopifyOrderId);
+            .eq("shopify_order_id", shopifyOrderIdForPakketjes);
         }
       }
     }

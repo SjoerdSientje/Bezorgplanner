@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireAccountEmail } from "@/lib/account";
+import { getInventoryOwnerEmail, requireAccountEmail } from "@/lib/account";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { applyInventoryMutation, type InventoryMutationType } from "@/lib/inventory";
 
@@ -7,7 +7,8 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
   try {
-    const ownerEmail = requireAccountEmail(request);
+    requireAccountEmail(request);
+    const ownerEmail = getInventoryOwnerEmail(request);
     const body = await request.json().catch(() => ({}));
 
     const productId = String(body.productId ?? "").trim();

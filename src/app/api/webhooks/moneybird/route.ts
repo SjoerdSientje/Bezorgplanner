@@ -25,6 +25,16 @@ const HANDLED_ACTIONS = new Set([
   "sales_invoice_state_changed_to_paid",
 ]);
 
+/** Voorraad pas aftrekken als de factuur echt is verzonden (niet bij concept/create). */
+const DEDUCT_ACTIONS = new Set([
+  "sales_invoice_state_changed_to_open",
+  "sales_invoice_state_changed_to_scheduled",
+  "sales_invoice_state_changed_to_pending_payment",
+  "sales_invoice_state_changed_to_late",
+  "sales_invoice_state_changed_to_reminded",
+  "sales_invoice_state_changed_to_paid",
+]);
+
 export async function POST(request: NextRequest) {
   try {
     const raw = await request.text();
@@ -47,19 +57,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, skipped: "action" });
     }
 
-    // Alleen bij create aftrekken — state-changes hergebruiken dezelfde mark (idempotent).
-    // sales_invoice_created is de primaire trigger; andere sales_invoice_* events
-    // mogen binnenkomen maar doen niets nieuws als de mark al staat.
     const invoice = payload.entity;
     if (!invoice?.id) {
       return NextResponse.json({ ok: true, skipped: "no_entity" });
     }
 
-    // Alleen aftrekken bij create (of open als create-event gemist werd).
-    const shouldAttemptDeduct =
-      action === "sales_invoice_created" ||
-      action === "sales_invoice_state_changed_to_open" ||
-      !action;
+    // Concept (sales_invoice_created) → geen voorraadaftrek.
+    // Pas aftrekken bij verzenden / open (en latere betaalstatussen als fallback).
+    const shouldAttemptDeduct = DEDUCT_ACTIONS.has(action);
 
     if (!shouldAttemptDeduct) {
       return NextResponse.json({ ok: true, skipped: "action_not_deduct" });

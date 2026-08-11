@@ -6,6 +6,10 @@
 import { createHmac, timingSafeEqual } from "crypto";
 import { isMalyarTestOrderNote } from "@/lib/account";
 import type { ShopifyOrder } from "@/lib/shopify-order";
+import {
+  isShopifyProductActive,
+  type ShopifyAdminProduct,
+} from "@/lib/shopify-admin";
 
 const MONEYBIRD_API_BASE = "https://moneybird.com/api/v2";
 
@@ -64,6 +68,10 @@ async function moneybirdFetch<T>(
         : String(body ?? res.statusText);
     throw new Error(`Moneybird ${res.status}: ${detail}`);
   }
+  // DELETE e.d. kunnen 204 zonder body teruggeven.
+  if (body == null && (res.status === 204 || res.status === 200)) {
+    return undefined as T;
+  }
   return body as T;
 }
 
@@ -102,6 +110,21 @@ export function parseShopifyOrderIdFromReference(
   const raw = String(reference ?? "").trim();
   const m = raw.match(/^shopify:(\d+)\b/i);
   return m?.[1] ?? null;
+}
+
+async function findSalesInvoiceByReference(
+  reference: string
+): Promise<MoneybirdSalesInvoice | null> {
+  const enc = encodeURIComponent(reference);
+  try {
+    return await moneybirdFetch<MoneybirdSalesInvoice>(
+      `/sales_invoices/find_by_reference/${enc}.json`
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("Moneybird 404")) return null;
+    throw err;
+  }
 }
 
 /**
@@ -241,6 +264,18 @@ export async function createSalesInvoiceFromShopifyOrder(
   const shopifyOrderId = String(order.id ?? "").trim();
   if (!shopifyOrderId) return null;
 
+  const reference = shopifyReferenceForOrderId(shopifyOrderId);
+  const existing = await findSalesInvoiceByReference(reference);
+  if (existing) {
+    console.info(
+      "[moneybird] factuur bestaat al voor",
+      reference,
+      "— skip create",
+      existing.id
+    );
+    return existing;
+  }
+
   const taxRateId = process.env.MONEYBIRD_TAX_RATE_ID!.trim();
   const ledgerAccountId = process.env.MONEYBIRD_LEDGER_ACCOUNT_ID!.trim();
 
@@ -269,7 +304,7 @@ export async function createSalesInvoiceFromShopifyOrder(
   const payload = {
     sales_invoice: {
       contact_id: contact.id,
-      reference: shopifyReferenceForOrderId(shopifyOrderId),
+      reference,
       currency: "EUR",
       prices_are_incl_tax: false,
       details_attributes: details,
@@ -333,4 +368,117 @@ export async function createSalesInvoiceFromShopifyOrder(
   }
 
   return created;
+}
+
+export type MoneybirdProduct = {
+  id: string;
+  identifier?: string | null;
+  description?: string | null;
+  title?: string | null;
+  price?: string | null;
+  currency?: string | null;
+  tax_rate_id?: string | null;
+  ledger_account_id?: string | null;
+};
+
+/** Zelfde conventie als bestaande Moneybird-catalogus: identifier = Shopify product-id. */
+export function shopifyProductIdentifier(shopifyProductId: string | number): string {
+  return String(shopifyProductId).trim();
+}
+
+export async function findProductByIdentifier(
+  identifier: string
+): Promise<MoneybirdProduct | null> {
+  const enc = encodeURIComponent(identifier);
+  try {
+    return await moneybirdFetch<MoneybirdProduct>(`/products/identifier/${enc}.json`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("Moneybird 404")) return null;
+    throw err;
+  }
+}
+
+function firstVariantPrice(product: ShopifyAdminProduct): string {
+  const raw = product.variants?.[0]?.price;
+  const n = typeof raw === "string" ? parseFloat(raw) : Number(raw ?? 0);
+  if (!Number.isFinite(n) || n < 0) return "0.00";
+  return n.toFixed(2);
+}
+
+/**
+ * Upsert Moneybird-product voor een actief Shopify-product.
+ * Draft/archived → verwijderen/deactiveren.
+ */
+export async function upsertMoneybirdProductFromShopify(
+  product: ShopifyAdminProduct
+): Promise<{ action: "created" | "updated" | "removed" | "skipped"; productId?: string }> {
+  if (!isMoneybirdConfigured()) {
+    return { action: "skipped" };
+  }
+
+  const shopifyProductId = Number(product.id);
+  if (!Number.isFinite(shopifyProductId) || shopifyProductId <= 0) {
+    return { action: "skipped" };
+  }
+
+  if (!isShopifyProductActive(product)) {
+    const removed = await removeMoneybirdProductForShopifyId(shopifyProductId);
+    return { action: removed ? "removed" : "skipped" };
+  }
+
+  const identifier = shopifyProductIdentifier(shopifyProductId);
+  const description = String(product.title ?? "").trim() || `Shopify ${identifier}`;
+  const taxRateId = process.env.MONEYBIRD_TAX_RATE_ID!.trim();
+  const ledgerAccountId = process.env.MONEYBIRD_LEDGER_ACCOUNT_ID!.trim();
+  const payload = {
+    product: {
+      identifier,
+      description,
+      price: firstVariantPrice(product),
+      currency: "EUR",
+      tax_rate_id: taxRateId,
+      ledger_account_id: ledgerAccountId,
+    },
+  };
+
+  const existing = await findProductByIdentifier(identifier);
+  if (existing?.id) {
+    const updated = await moneybirdFetch<MoneybirdProduct>(`/products/${existing.id}.json`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+    console.info("[moneybird] product bijgewerkt", updated.id, identifier, description);
+    return { action: "updated", productId: updated.id };
+  }
+
+  const created = await moneybirdFetch<MoneybirdProduct>("/products.json", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  console.info("[moneybird] product aangemaakt", created.id, identifier, description);
+  return { action: "created", productId: created.id };
+}
+
+/** Verwijder/deactiveer Moneybird-product gekoppeld aan Shopify product-id. */
+export async function removeMoneybirdProductForShopifyId(
+  shopifyProductId: string | number
+): Promise<boolean> {
+  if (!isMoneybirdConfigured()) return false;
+
+  const identifier = shopifyProductIdentifier(shopifyProductId);
+  if (!identifier) return false;
+
+  const existing = await findProductByIdentifier(identifier);
+  if (!existing?.id) return false;
+
+  try {
+    await moneybirdFetch<unknown>(`/products/${existing.id}.json`, { method: "DELETE" });
+    console.info("[moneybird] product verwijderd/gedeactiveerd", existing.id, identifier);
+    return true;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("Moneybird 404")) return false;
+    throw err;
+  }
 }

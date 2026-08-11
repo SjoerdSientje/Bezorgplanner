@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireAccountEmail } from "@/lib/account";
+import { getInventoryOwnerEmail, requireAccountEmail } from "@/lib/account";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import {
   getInventoryStats,
@@ -9,10 +9,13 @@ import {
 import { ShopifyAdminError } from "@/lib/shopify-admin";
 
 export const dynamic = "force-dynamic";
+/** Volledige Shopify-catalogus-sync kan >10s duren. */
+export const maxDuration = 60;
 
 export async function GET(request: NextRequest) {
   try {
-    const ownerEmail = requireAccountEmail(request);
+    requireAccountEmail(request);
+    const ownerEmail = getInventoryOwnerEmail(request);
     const supabase = createServerSupabaseClient();
     const category = request.nextUrl.searchParams.get("category");
 
@@ -49,7 +52,8 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const ownerEmail = requireAccountEmail(request);
+    requireAccountEmail(request);
+    const ownerEmail = getInventoryOwnerEmail(request);
     const supabase = createServerSupabaseClient();
     const result = await syncInventoryFromShopify(supabase, ownerEmail);
     const stats = await getInventoryStats(supabase, ownerEmail);
@@ -63,8 +67,13 @@ export async function POST(request: NextRequest) {
           ? e.message
           : "Synchroniseren mislukt.";
 
+    console.error("[api/inventory] sync failed:", e);
+
     return NextResponse.json(
-      { error: message, detail: e instanceof ShopifyAdminError ? e.detail : undefined },
+      {
+        error: message,
+        detail: e instanceof ShopifyAdminError ? e.detail : undefined,
+      },
       { status: 502 }
     );
   }
