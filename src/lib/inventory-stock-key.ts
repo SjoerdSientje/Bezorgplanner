@@ -76,6 +76,23 @@ function getOptionValue(
   return trimmed || null;
 }
 
+/**
+ * Marketing-lagen (combi/family/basic deal e.d.) — geen eigen fysieke voorraadregel.
+ * Delen dezelfde group_key als de onderliggende fiets (+ kleur).
+ */
+export function isInventoryMarketingOverlayTitle(title: string): boolean {
+  const t = title.trim();
+  if (!t) return false;
+  if (/family[- ]?deal/i.test(t)) return true;
+  if (/combi[- ]?deal/i.test(t)) return true;
+  // "Basic" als deal-laag, niet als modelnaam elders
+  if (/\bbasic\b/i.test(t)) return true;
+  if (/\bjunior\s*6\+?\b/i.test(t)) return true;
+  if (/\s*\+\s*ringslot/i.test(t)) return true;
+  if (/\s*\+\s*achterzitje/i.test(t)) return true;
+  return false;
+}
+
 /** Verwijder marketing/accessoire-tekst die geen aparte fiets is. */
 export function cleanTitleForGrouping(title: string): string {
   return title

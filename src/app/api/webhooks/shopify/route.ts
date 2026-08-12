@@ -56,7 +56,13 @@ async function handleProductWebhook(
     const removed = await removeInventoryProductByShopifyId(
       supabase,
       ownerEmail,
-      productId
+      productId,
+      {
+        title: typeof payload.title === "string" ? payload.title : null,
+        variantIds: Array.isArray(payload.variants)
+          ? payload.variants.map((v) => Number(v.id)).filter((id) => Number.isFinite(id) && id > 0)
+          : [],
+      }
     );
     let moneybird: { removed: boolean } | { error: string } = { removed: false };
     if (isMoneybirdConfigured()) {

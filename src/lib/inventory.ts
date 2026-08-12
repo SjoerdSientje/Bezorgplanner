@@ -13,7 +13,11 @@ import { buildStructuredLineItems } from "@/lib/shopify-order";
 import { allAccountEmails, getInventoryScanOwnerEmail, shopifyWebhookOrderAppliesToOwner } from "@/lib/account";
 import { normalizeEmail } from "@/lib/auth-shared";
 import { getAmsterdamCalendarDate, getAmsterdamDayUtcRange } from "@/lib/planning-date";
-import { buildInventoryStockKeyInfo, type InventoryStockKeyInfo } from "@/lib/inventory-stock-key";
+import {
+  buildInventoryStockKeyInfo,
+  isInventoryMarketingOverlayTitle,
+  type InventoryStockKeyInfo,
+} from "@/lib/inventory-stock-key";
 import type { ProductDefaultItemsRulesV1 } from "@/lib/product-default-items-rules";
 import { loadProductDefaultItemsRules } from "@/lib/product-rules-server";
 import {
@@ -124,8 +128,24 @@ function pickRepresentativeEntry(group: InventoryGroup): {
   product: ShopifyAdminProduct;
   variant: ShopifyAdminProductVariant;
 } {
-  const withImage = group.entries.find((e) => e.product.image?.src);
-  return withImage ?? group.entries[0];
+  // Fysieke fiets (niet combi/family/basic deal) heeft voorrang als voorraadrij-identiteit.
+  const physical = group.entries.filter(
+    (e) => !isInventoryMarketingOverlayTitle(e.product.title)
+  );
+  const pool = physical.length > 0 ? physical : group.entries;
+  const withImage = pool.find((e) => e.product.image?.src);
+  return withImage ?? pool[0];
+}
+
+function unionVariantIds(...lists: Array<Iterable<number>>): number[] {
+  const set = new Set<number>();
+  for (const list of lists) {
+    for (const id of Array.from(list)) {
+      const n = Number(id);
+      if (Number.isFinite(n) && n > 0) set.add(n);
+    }
+  }
+  return Array.from(set).sort((a, b) => a - b);
 }
 
 function variantIdsForGroup(group: InventoryGroup): number[] {
@@ -181,19 +201,63 @@ async function upsertInventoryGroups(
 
     const { product, variant } = pickRepresentativeEntry(group);
     const { stockInfo } = group;
-    const variantIds = variantIdsForGroup(group);
-    const variantIdSet = new Set(variantIds);
+    const incomingVariantIds = variantIdsForGroup(group);
+    const variantIdSet = new Set(incomingVariantIds);
     const category = classifyInventoryCategory(product, categoryMap);
     const imageUrl = productImageUrl(product);
+    const incomingIsOverlay = isInventoryMarketingOverlayTitle(product.title);
 
     const matches = rows.filter((row) =>
       rowMatchesGroup(row, stockInfo.groupKey, variantIdSet)
     );
 
+    const mergedVariantIds = unionVariantIds(
+      incomingVariantIds,
+      ...matches.map((row) => [
+        row.shopify_variant_id,
+        ...(row.shopify_variant_ids ?? []),
+      ])
+    );
+
+    // Marketing-deal op bestaande fysieke groep: alleen variant-ids koppelen.
+    // Geen match (bijv. "LT5000 Combideal" terwijl LT5000 nog niet bestaat) → wél nieuwe
+    // voorraadrij op de schoongemaakte group_key; latere base-fiets merge't daarop.
+    if (matches.length > 0 && incomingIsOverlay) {
+      const primary = pickPrimaryRow(matches, stockInfo.groupKey);
+      const duplicates = matches.filter((row) => row.id !== primary.id);
+      if (duplicates.length > 0) {
+        await mergeDuplicateRows(supabase, primary.id, duplicates);
+        const duplicateIds = new Set(duplicates.map((row) => row.id));
+        rows = rows.filter((row) => !duplicateIds.has(row.id));
+      }
+
+      const { error } = await supabase
+        .from("inventory_products")
+        .update({
+          shopify_variant_ids: mergedVariantIds,
+          group_key: stockInfo.groupKey,
+        })
+        .eq("id", primary.id);
+
+      if (!error) {
+        updated++;
+        rows = rows.map((row) =>
+          row.id === primary.id
+            ? ({
+                ...row,
+                shopify_variant_ids: mergedVariantIds,
+                group_key: stockInfo.groupKey,
+              } as InventoryProductRow)
+            : row
+        );
+      }
+      continue;
+    }
+
     const payload = {
       shopify_product_id: product.id,
       shopify_variant_id: variant.id,
-      shopify_variant_ids: variantIds,
+      shopify_variant_ids: mergedVariantIds,
       group_key: stockInfo.groupKey,
       title: stockInfo.displayTitle,
       variant_title: stockInfo.trimLabel,
@@ -255,28 +319,95 @@ async function upsertInventoryGroups(
   return { inserted, updated, existingRows: rows, variantCount };
 }
 
+/**
+ * Ontkoppel of verwijder een Shopify-product uit voorraad.
+ * - Marketing-deal (combi/family/basic): nooit de fysieke voorraadrij wissen; alleen variant-ids loskoppelen.
+ * - Fysiek product: rij verwijderen als dit de eigenaar is, anders alleen variant-ids strippen.
+ */
 export async function removeInventoryProductByShopifyId(
   supabase: SupabaseClient,
   ownerEmail: string,
-  shopifyProductId: number
-): Promise<number> {
-  const { data: deletedRows, error } = await supabase
-    .from("inventory_products")
-    .delete()
-    .eq("owner_email", ownerEmail)
-    .eq("shopify_product_id", shopifyProductId)
-    .select("id");
-
-  if (error) {
-    console.error("[inventory] remove product error:", error.message);
-    return 0;
+  shopifyProductId: number,
+  options?: {
+    variantIds?: number[];
+    title?: string | null;
   }
-  return deletedRows?.length ?? 0;
+): Promise<number> {
+  const variantIds = unionVariantIds(options?.variantIds ?? []);
+  const titleHint = String(options?.title ?? "").trim();
+  const incomingIsOverlay =
+    titleHint.length > 0 ? isInventoryMarketingOverlayTitle(titleHint) : false;
+
+  let touched = 0;
+
+  // Altijd: strip bekende variant-ids uit alle rijen (deal loskoppelen onder V8).
+  if (variantIds.length > 0) {
+    const { data: candidatesRaw } = await supabase
+      .from("inventory_products")
+      .select("*")
+      .eq("owner_email", ownerEmail);
+
+    for (const row of (candidatesRaw ?? []) as InventoryProductRow[]) {
+      const current = unionVariantIds([
+        row.shopify_variant_id,
+        ...(row.shopify_variant_ids ?? []),
+      ]);
+      const remaining = current.filter((id) => !variantIds.includes(id));
+      if (remaining.length === current.length) continue;
+
+      // Deal-ontkoppeling: voorraadrij blijft, aantallen blijven.
+      if (remaining.length === 0 && row.shopify_product_id === shopifyProductId && !incomingIsOverlay) {
+        const { error } = await supabase.from("inventory_products").delete().eq("id", row.id);
+        if (!error) touched++;
+        continue;
+      }
+
+      const nextPrimaryVariant = remaining[0] ?? row.shopify_variant_id;
+      const { error } = await supabase
+        .from("inventory_products")
+        .update({
+          shopify_variant_ids: remaining.length > 0 ? remaining : current,
+          shopify_variant_id: nextPrimaryVariant,
+        })
+        .eq("id", row.id);
+      if (!error) touched++;
+    }
+  }
+
+  const { data: ownedRowsRaw } = await supabase
+    .from("inventory_products")
+    .select("*")
+    .eq("owner_email", ownerEmail)
+    .eq("shopify_product_id", shopifyProductId);
+
+  const ownedRows = (ownedRowsRaw ?? []) as InventoryProductRow[];
+
+  for (const row of ownedRows) {
+    // Marketing-overlay (combi/family/basic): voorraad niet aanpassen.
+    if (incomingIsOverlay) {
+      continue;
+    }
+
+    // products/delete stuurt vaak alleen { id }. Geen titel → niet wissen als de
+    // rij duidelijk een gedeelde groep is (meerdere variant-ids): voorkomt dat een
+    // oude deal-eigenaar de V8-voorraad weggooit.
+    if (titleHint.length === 0 && variantIds.length === 0) {
+      const shared = (row.shopify_variant_ids?.length ?? 0) > 1;
+      if (shared) continue;
+    }
+
+    const { error } = await supabase.from("inventory_products").delete().eq("id", row.id);
+    if (!error) touched++;
+  }
+
+  return touched;
 }
 
 /**
  * Incrementele sync van één Shopify-product (create/update/status-change).
- * Inactive/excluded → verwijderen uit voorraad.
+ * - Combi/family/basic deal → onderliggende groep (zelfde model+kleur), geen aparte voorraadrij.
+ * - Nieuw model of kleur → nieuwe voorraadrij.
+ * - Inactive/excluded → ontkoppelen (deal) of rij verwijderen (fysiek product).
  */
 export async function syncInventoryProductFromShopify(
   supabase: SupabaseClient,
@@ -288,11 +419,16 @@ export async function syncInventoryProductFromShopify(
     return { inserted: 0, updated: 0, removed: 0 };
   }
 
+  const variantIds = (product.variants ?? [])
+    .map((v) => Number(v.id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+
   if (!isShopifyProductActive(product) || isExcludedFromInventory(product)) {
     const removed = await removeInventoryProductByShopifyId(
       supabase,
       ownerEmail,
-      shopifyProductId
+      shopifyProductId,
+      { variantIds, title: product.title }
     );
     return { inserted: 0, updated: 0, removed };
   }
@@ -300,14 +436,51 @@ export async function syncInventoryProductFromShopify(
   const categoryMap = await fetchInventoryCollectionProductIds();
   const groups = buildInventoryGroups([product]);
   const keepGroupKeys = new Set(groups.keys());
+  const groupKeys = Array.from(keepGroupKeys);
 
-  const { data: existingRowsRaw } = await supabase
+  // Belangrijk: match op group_key (V8 + kleur), niet alleen op dit Shopify-product-id —
+  // anders krijgt een combideal een eigen voorraadrij i.p.v. onder V8 te hangen.
+  let existingRows: InventoryProductRow[] = [];
+  if (groupKeys.length > 0) {
+    const { data: byGroup } = await supabase
+      .from("inventory_products")
+      .select("*")
+      .eq("owner_email", ownerEmail)
+      .in("group_key", groupKeys);
+    existingRows = (byGroup ?? []) as InventoryProductRow[];
+  }
+
+  const { data: byProduct } = await supabase
     .from("inventory_products")
     .select("*")
     .eq("owner_email", ownerEmail)
     .eq("shopify_product_id", shopifyProductId);
 
-  let existingRows = (existingRowsRaw ?? []) as InventoryProductRow[];
+  const seen = new Set(existingRows.map((r) => r.id));
+  for (const row of (byProduct ?? []) as InventoryProductRow[]) {
+    if (!seen.has(row.id)) {
+      existingRows.push(row);
+      seen.add(row.id);
+    }
+  }
+
+  // Ook rijen die dit product's variant-ids al bevatten (oude sync-staat).
+  if (variantIds.length > 0) {
+    const { data: allRows } = await supabase
+      .from("inventory_products")
+      .select("*")
+      .eq("owner_email", ownerEmail);
+    for (const row of (allRows ?? []) as InventoryProductRow[]) {
+      if (seen.has(row.id)) continue;
+      const ids = new Set(
+        unionVariantIds([row.shopify_variant_id, ...(row.shopify_variant_ids ?? [])])
+      );
+      if (variantIds.some((id) => ids.has(id))) {
+        existingRows.push(row as InventoryProductRow);
+        seen.add(row.id);
+      }
+    }
+  }
 
   const { inserted, updated, existingRows: afterUpsert } = await upsertInventoryGroups(
     supabase,
@@ -317,10 +490,14 @@ export async function syncInventoryProductFromShopify(
     existingRows
   );
 
+  // Alleen wees-rijen van DIT fysieke product opruimen — nooit een gedeelde groep wissen
+  // omdat een deal-product een andere group_key had.
   const orphanIds = afterUpsert
     .filter(
       (row) =>
-        row.shopify_product_id === shopifyProductId && !keepGroupKeys.has(row.group_key)
+        row.shopify_product_id === shopifyProductId &&
+        !keepGroupKeys.has(row.group_key) &&
+        !isInventoryMarketingOverlayTitle(product.title)
     )
     .map((row) => row.id);
 
