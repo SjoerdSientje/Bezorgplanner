@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { requireAccountEmail } from "@/lib/account";
+import { repairCompletedOrdersWithWrongStatus } from "@/lib/order-completion";
 
 export const dynamic = "force-dynamic";
 
@@ -8,6 +9,7 @@ export async function GET(request: NextRequest) {
   try {
     const ownerEmail = requireAccountEmail(request);
     const supabase = createServerSupabaseClient();
+    await repairCompletedOrdersWithWrongStatus(supabase, ownerEmail);
     const { data: orders, error } = await supabase
       .from("orders")
       .select("*")

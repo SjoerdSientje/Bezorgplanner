@@ -29,6 +29,10 @@ import {
   upsertMoneybirdProductFromShopify,
 } from "@/lib/moneybird";
 import type { ShopifyAdminProduct } from "@/lib/shopify-admin";
+import {
+  inferCompletedStatus,
+  isOrderMarkedCompleted,
+} from "@/lib/order-completion";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -257,7 +261,7 @@ export async function POST(request: NextRequest) {
 
       const { data: existing } = await supabase
         .from("orders")
-        .select("id")
+        .select("id, status, afgerond_at, mp_tags, order_nummer")
         .eq("owner_email", ownerEmail)
         .eq("order_id", row.order_id)
         .eq("source", "shopify")
@@ -294,6 +298,15 @@ export async function POST(request: NextRequest) {
       };
 
       if (existing) {
+        if (isOrderMarkedCompleted(existing)) {
+          if (String(existing.status ?? "") === "ritjes_vandaag" && existing.afgerond_at) {
+            await supabase
+              .from("orders")
+              .update({ status: inferCompletedStatus(existing) })
+              .eq("id", existing.id);
+          }
+          continue;
+        }
         await supabase.from("orders").update(insertRow).eq("id", existing.id);
         insertedOrUpdatedIds.push(existing.id);
         continue;
