@@ -56,6 +56,10 @@ export interface ShopifyLineItem {
 export interface ShopifyShippingLine {
   title?: string | null;
   code?: string | null;
+  /** Verzendkosten incl. BTW (Shopify REST). */
+  price?: string | number | null;
+  /** Na kortingen op verzending. */
+  discounted_price?: string | number | null;
 }
 
 export interface ShopifyOrder {

@@ -6,7 +6,7 @@
 import { createHmac, timingSafeEqual } from "crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { isMalyarTestOrderNote } from "@/lib/account";
-import type { ShopifyLineItem, ShopifyOrder } from "@/lib/shopify-order";
+import type { ShopifyLineItem, ShopifyOrder, ShopifyShippingLine } from "@/lib/shopify-order";
 import {
   isShopifyProductActive,
   type ShopifyAdminProduct,
@@ -331,6 +331,23 @@ function lineItemNetTotalIncl(li: ShopifyLineItem): number {
   return Math.max(0, total);
 }
 
+function lineItemUnitPriceIncl(li: ShopifyLineItem): number {
+  const qty = Math.max(1, Math.floor(Number(li.quantity ?? 1)));
+  return lineItemNetTotalIncl(li) / qty;
+}
+
+function shippingLineNetTotalIncl(line: ShopifyShippingLine): number {
+  const discounted = parseMoneyAmount(line.discounted_price);
+  if (Number.isFinite(discounted)) return Math.max(0, discounted);
+  const price = parseMoneyAmount(line.price);
+  return Number.isFinite(price) ? Math.max(0, price) : 0;
+}
+
+function invoiceDetailLineTotalIncl(detail: MoneybirdInvoiceDetailPayload): number {
+  const excl = (parseFloat(detail.price) || 0) * (parseFloat(detail.amount) || 0);
+  return excl * 1.21;
+}
+
 /** Ordertotaal incl. BTW — total_price, current_total_price of som van regels. */
 export function shopifyOrderBillableTotalIncl(order: ShopifyOrder): number {
   const fromTotal = parseMoneyAmount(order.total_price);
@@ -339,10 +356,14 @@ export function shopifyOrderBillableTotalIncl(order: ShopifyOrder): number {
     (sum, li) => sum + lineItemNetTotalIncl(li),
     0
   );
+  const shippingSum = (order.shipping_lines ?? []).reduce(
+    (sum, sl) => sum + shippingLineNetTotalIncl(sl),
+    0
+  );
 
   if (Number.isFinite(fromTotal)) return Math.max(0, fromTotal);
   if (Number.isFinite(fromCurrent)) return Math.max(0, fromCurrent);
-  return lineSum;
+  return lineSum + shippingSum;
 }
 
 function isZeroInvoiceTotal(totalIncl: number): boolean {
@@ -365,27 +386,66 @@ function buildInvoiceDetailsFromShopifyOrder(
   const ledgerAccountId = process.env.MONEYBIRD_LEDGER_ACCOUNT_ID!.trim();
   const orderName = String(order.name ?? shopifyOrderId).trim();
 
-  const details = (order.line_items ?? [])
-    .map((li) => {
-      const description = String(li.name ?? "").trim() || "Product";
-      const amount = Math.max(1, Math.floor(Number(li.quantity ?? 1)));
-      return {
-        description: `${description} (${orderName})`,
-        price: unitPriceExclApprox(li.price),
-        amount: String(amount),
-        tax_rate_id: taxRateId,
-        ledger_account_id: ledgerAccountId,
-      };
-    })
-    .filter((d) => d.description);
+  const details: MoneybirdInvoiceDetailPayload[] = [];
+
+  for (const li of order.line_items ?? []) {
+    const description = String(li.name ?? "").trim();
+    if (!description) continue;
+    const unitIncl = lineItemUnitPriceIncl(li);
+    if (unitIncl < 0.01) continue;
+    const amount = Math.max(1, Math.floor(Number(li.quantity ?? 1)));
+    details.push({
+      description: `${description} (${orderName})`,
+      price: unitPriceExclApprox(unitIncl),
+      amount: String(amount),
+      tax_rate_id: taxRateId,
+      ledger_account_id: ledgerAccountId,
+    });
+  }
+
+  for (const sl of order.shipping_lines ?? []) {
+    const shippingIncl = shippingLineNetTotalIncl(sl);
+    if (shippingIncl < 0.01) continue;
+    const title = String(sl.title ?? "Verzendkosten").trim() || "Verzendkosten";
+    details.push({
+      description: `${title} (${orderName})`,
+      price: unitPriceExclApprox(shippingIncl),
+      amount: "1",
+      tax_rate_id: taxRateId,
+      ledger_account_id: ledgerAccountId,
+    });
+  }
 
   if (details.length === 0) return null;
+
+  const targetIncl = shopifyOrderBillableTotalIncl(order);
+  if (targetIncl >= 0.01) {
+    const builtIncl = details.reduce((sum, d) => sum + invoiceDetailLineTotalIncl(d), 0);
+    const diffIncl = Math.round((builtIncl - targetIncl) * 100) / 100;
+    if (diffIncl > 0.01) {
+      details.push({
+        description: `Korting (${orderName})`,
+        price: (-diffIncl / 1.21).toFixed(2),
+        amount: "1",
+        tax_rate_id: taxRateId,
+        ledger_account_id: ledgerAccountId,
+      });
+    } else if (diffIncl < -0.01) {
+      details.push({
+        description: `Aanpassing (${orderName})`,
+        price: (-diffIncl / 1.21).toFixed(2),
+        amount: "1",
+        tax_rate_id: taxRateId,
+        ledger_account_id: ledgerAccountId,
+      });
+    }
+  }
 
   const detailsTotalExcl = details.reduce(
     (sum, d) => sum + (parseFloat(d.price) || 0) * (parseFloat(d.amount) || 0),
     0
   );
-  if (detailsTotalExcl < 0.01) return null;
+  if (detailsTotalExcl < 0.01 && targetIncl < 0.01) return null;
 
   return details;
 }
