@@ -178,6 +178,8 @@ export type ParallelRouteSpec = {
   meerdereRitten?: boolean;
   /** Handmatig gekozen orders voor deze route (Routific type-koppeling). */
   orderIds?: string[];
+  /** Vrije weergavenaam (bv. bezorger); leeg = "Route N". */
+  naam?: string;
 };
 
 function sanitizeVisitId(id: string): string {

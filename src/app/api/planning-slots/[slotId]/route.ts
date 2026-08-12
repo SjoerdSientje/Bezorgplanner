@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { requireAccountEmail } from "@/lib/account";
 import { promoteRitjesVoorMorgen } from "@/lib/planning-promote";
+import { freezeRelativeDatumOpmerking } from "@/lib/planning-date";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +20,7 @@ export async function DELETE(
     const supabase = createServerSupabaseClient();
     const { data: slot, error: slotErr } = await supabase
       .from("planning_slots")
-      .select("id, order_id")
+      .select("id, order_id, datum")
       .eq("owner_email", ownerEmail)
       .eq("id", slotId)
       .maybeSingle();
@@ -40,6 +41,35 @@ export async function DELETE(
       console.error("[api/planning-slots DELETE]", error);
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
+
+    // Voorkom dat de order met oud tijdslot + relatieve "vandaag" meteen weer in
+    // Lijst Sjoerd / Planning goedkeuren belandt.
+    const { data: orderRow } = await supabase
+      .from("orders")
+      .select("id, datum_opmerking")
+      .eq("owner_email", ownerEmail)
+      .eq("id", slot.order_id)
+      .maybeSingle();
+
+    const slotDatum = String(slot.datum ?? "").trim();
+    const updatePayload: Record<string, unknown> = {
+      aankomsttijd_slot: null,
+      rit_nummer: null,
+      route_nummer: null,
+      route_naam: null,
+    };
+    if (slotDatum && orderRow) {
+      updatePayload.datum_opmerking = freezeRelativeDatumOpmerking(
+        orderRow.datum_opmerking,
+        slotDatum
+      );
+    }
+
+    await supabase
+      .from("orders")
+      .update(updatePayload)
+      .eq("owner_email", ownerEmail)
+      .eq("id", slot.order_id);
 
     // Als de planning nu leeg is, promoot ritjes voor morgen naar vandaag.
     await promoteRitjesVoorMorgen(ownerEmail, supabase as any);

@@ -59,3 +59,26 @@ export const ROUTE_STYLES: RouteStyle[] = [
 export function routeStyleForIndex(index: number): RouteStyle {
   return ROUTE_STYLES[index % ROUTE_STYLES.length]!;
 }
+
+/** Weergavenaam: custom naam, anders "Route N". */
+export function routeDisplayLabel(
+  routeNummer: number | null | undefined,
+  routeNaam?: string | null
+): string {
+  const custom = String(routeNaam ?? "").trim();
+  if (custom) return custom;
+  const n = Number(routeNummer);
+  if (Number.isFinite(n) && n > 0) return `Route ${n}`;
+  return "Route";
+}
+
+/** Eerste niet-lege route_naam uit een lijst orders van dezelfde route. */
+export function routeNaamFromOrders(
+  orders: Array<{ route_naam?: string | null } | Record<string, unknown>>
+): string | null {
+  for (const o of orders) {
+    const name = String((o as { route_naam?: unknown }).route_naam ?? "").trim();
+    if (name) return name;
+  }
+  return null;
+}

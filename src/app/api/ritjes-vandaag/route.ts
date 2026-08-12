@@ -5,6 +5,7 @@ import { sortRitjesOrdersNewestFirst } from "@/lib/ritjes-mapping";
 import { requireAccountEmail } from "@/lib/account";
 import { filterOutPausedMpOrders, isMpPausedForOwner } from "@/lib/mp-pause";
 import { repairCompletedOrdersWithWrongStatus } from "@/lib/order-completion";
+import { rollForwardPastPlanningSlots } from "@/lib/planning-promote";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +14,7 @@ export async function GET(request: NextRequest) {
     const ownerEmail = requireAccountEmail(request);
     const supabase = createServerSupabaseClient();
     await repairCompletedOrdersWithWrongStatus(supabase, ownerEmail);
+    await rollForwardPastPlanningSlots(ownerEmail, supabase as any);
     const mpPaused = await isMpPausedForOwner(supabase, ownerEmail);
     const { data: dataRaw, error } = await supabase
       .from("orders")

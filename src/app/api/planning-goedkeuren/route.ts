@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { getTargetPlanningDate } from "@/lib/planning-promote";
+import {
+  freezeRelativeDatumOpmerking,
+  isOrderReadyForSjoerdLijst,
+} from "@/lib/planning-date";
 import { sendWhatsAppByEvent } from "@/lib/whatsapp";
 import { requireAccountEmail } from "@/lib/account";
 import { filterOutPausedMpOrders, isMpPausedForOwner } from "@/lib/mp-pause";
+
 /**
  * POST /api/planning-goedkeuren
  *
@@ -23,12 +28,13 @@ export async function POST(request: NextRequest) {
     const supabase = createServerSupabaseClient();
 
     // Eén doeldatum voor de hele batch: bij actieve planning → morgen; anders → 18:00-regel.
+    // (Rolt eerst openstaande slots van eerdere dagen naar vandaag.)
     const { date: targetDate, isRitjesVoorMorgen } = await getTargetPlanningDate(
       ownerEmail,
       supabase as any
     );
 
-    // Orders ophalen die in aanmerking komen
+    // Orders ophalen die in aanmerking komen — zelfde pool als Lijst Sjoerd.
     const mpPaused = await isMpPausedForOwner(supabase, ownerEmail);
     const { data: ordersRaw, error: queryError } = await supabase
       .from("orders")
@@ -51,7 +57,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const orders = filterOutPausedMpOrders(ordersRaw ?? [], mpPaused);
+    const orders = filterOutPausedMpOrders(ordersRaw ?? [], mpPaused).filter((o) =>
+      isOrderReadyForSjoerdLijst(o)
+    );
 
     // Orders die al in een actieve planning_slot zitten (Routes-tab, lopende rit) nooit
     // opnieuw indelen of dupliceren.
@@ -156,6 +164,19 @@ export async function POST(request: NextRequest) {
         { error: "Planning opslaan mislukt.", detail: insertErr.message },
         { status: 500 }
       );
+    }
+
+    // Relatieve "vandaag"/"morgen" vastzetten op de planningsdatum, zodat deze orders
+    // de volgende dag niet opnieuw in Lijst Sjoerd belanden.
+    for (const o of batchOrders) {
+      const frozen = freezeRelativeDatumOpmerking(o.datum_opmerking, targetDate);
+      if (frozen !== String(o.datum_opmerking ?? "").trim()) {
+        await supabase
+          .from("orders")
+          .update({ datum_opmerking: frozen })
+          .eq("owner_email", ownerEmail)
+          .eq("id", o.id);
+      }
     }
 
     // Stuur WhatsApp-bericht per order — altijd de standaard template op basis van ordertype,

@@ -281,3 +281,27 @@ export function isOrderReadyForSjoerdLijst(order: {
   if (order?.meenemen_in_planning !== true) return false;
   return isDatumOpmerkingVandaagOfMorgen(order?.datum_opmerking);
 }
+
+/** YYYY-MM-DD → DD-MM (voor datum_opmerking). */
+export function formatPlanningDatumOpmerking(isoDate: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(isoDate ?? "").trim());
+  if (!m) return String(isoDate ?? "").trim();
+  return `${m[3]}-${m[2]}`;
+}
+
+/**
+ * Zet relatieve "vandaag"/"morgen" in datum_opmerking om naar een vaste kalenderdatum.
+ * Zo blijven goedgekeurde/ingeplande orders de volgende dag niet eeuwig in Lijst Sjoerd.
+ */
+export function freezeRelativeDatumOpmerking(
+  datumOpmerking: unknown,
+  targetIsoDate: string
+): string {
+  const raw = String(datumOpmerking ?? "").trim();
+  const targetLabel = formatPlanningDatumOpmerking(targetIsoDate);
+  if (!raw) return targetLabel;
+  if (!/\bvandaag\b/i.test(raw) && !/\emorgen\b/i.test(raw)) return raw;
+  return raw
+    .replace(/\bvandaag\b/gi, targetLabel)
+    .replace(/\emorgen\b/gi, targetLabel);
+}

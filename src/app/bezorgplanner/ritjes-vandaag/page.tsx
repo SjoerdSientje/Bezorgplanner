@@ -26,6 +26,7 @@ import {
   isOrderReadyForSjoerdLijst,
 } from "@/lib/planning-date";
 import StuurAppjesButton from "@/components/StuurAppjesButton";
+import { routeDisplayLabel, routeNaamFromOrders } from "@/lib/route-colors";
 
 function normalizeToE164(input: string): string | null {
   const s = String(input ?? "").trim();
@@ -629,7 +630,10 @@ export default function RitjesVandaagPage() {
                         <div key={sub.routeNum ?? "overig"}>
                           {sub.routeNum != null && (
                             <h3 className={`mb-2 text-sm font-semibold ${routeLabelColor}`}>
-                              Route {sub.routeNum}
+                              {routeDisplayLabel(
+                                sub.routeNum,
+                                routeNaamFromOrders(subOrders as AlleRittenOrder[])
+                              )}
                             </h3>
                           )}
                           <EditableSheetTable

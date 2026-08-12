@@ -28,7 +28,7 @@ import OpmerkingKlantCell from "@/components/OpmerkingKlantCell";
 import type { AlleRittenOrder } from "@/components/AlleRittenTabel";
 import { compareOrdersOnRoute } from "@/lib/ritjes-mapping";
 import { isOrderReadyForSjoerdLijst } from "@/lib/planning-date";
-import { routeStyleForIndex } from "@/lib/route-colors";
+import { routeStyleForIndex, routeDisplayLabel, routeNaamFromOrders } from "@/lib/route-colors";
 import { getVertrektijdForRoute } from "@/lib/route-vertrektijden";
 import { orderRouteLoad, type OrderForRoute } from "@/lib/routific-payload";
 
@@ -763,10 +763,17 @@ export default function LijstSjoerd({
   );
 
   const routeOptions = useMemo((): RouteOption[] => {
-    return groups.map((g) => ({
-      containerId: routeContainerId(g.routeNum),
-      label: g.routeNum != null ? `Route ${g.routeNum}` : "Overig",
-    }));
+    return groups.map((g) => {
+      const naam =
+        g.routeNum != null ? routeNaamFromOrders(g.orders) : null;
+      return {
+        containerId: routeContainerId(g.routeNum),
+        label:
+          g.routeNum != null
+            ? routeDisplayLabel(g.routeNum, naam)
+            : "Overig",
+      };
+    });
   }, [groups]);
 
   const applyReorder = useCallback(
@@ -960,13 +967,20 @@ export default function LijstSjoerd({
       ) : (
         containerEntries.map(({ containerId, routeNum, orderIds }) => {
           const style = routeNum != null ? routeStyleForIndex(routeNum - 1) : null;
+          const routeOrders = orderIds
+            .map((id) => orderById.get(id))
+            .filter((o): o is AlleRittenOrder => Boolean(o));
+          const headerLabel =
+            routeNum != null
+              ? routeDisplayLabel(routeNum, routeNaamFromOrders(routeOrders))
+              : "Overig";
           return (
             <div key={containerId}>
               {showRouteHeaders && routeNum != null && style && (
                 <div
                   className={`border border-stone-200 border-l-4 px-3 py-2 ${style.bg} ${style.border}`}
                 >
-                  <span className={`text-sm font-semibold ${style.header}`}>{style.label}</span>
+                  <span className={`text-sm font-semibold ${style.header}`}>{headerLabel}</span>
                   <span className="ml-2 text-xs text-stone-500">
                     ({orderIds.length} order{orderIds.length === 1 ? "" : "s"} ·{" "}
                     {totalLoadForOrders(orderIds, orderById)} load-eenh.)
@@ -1112,6 +1126,14 @@ function RouteGroupRows({
   dragEnabled: boolean;
   onPatch: (id: string, fields: Record<string, unknown>) => void;
 }) {
+  const routeOrders = orderIds
+    .map((id) => orderById.get(id))
+    .filter((o): o is AlleRittenOrder => Boolean(o));
+  const headerLabel =
+    routeNum != null
+      ? routeDisplayLabel(routeNum, routeNaamFromOrders(routeOrders))
+      : "Overig";
+
   return (
     <div>
       {showRouteHeader && routeNum != null && style && (
@@ -1119,7 +1141,7 @@ function RouteGroupRows({
           containerId={containerId}
           className={`${style.bg} border-l-4 ${style.border}`}
         >
-          <span className={`text-sm font-semibold ${style.header}`}>{style.label}</span>
+          <span className={`text-sm font-semibold ${style.header}`}>{headerLabel}</span>
           <span className="ml-2 text-xs text-stone-500">
             ({orderIds.length} order{orderIds.length === 1 ? "" : "s"} ·{" "}
             {totalLoadForOrders(orderIds, orderById)} load-eenh.)

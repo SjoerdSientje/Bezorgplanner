@@ -307,7 +307,33 @@ export async function POST(request: NextRequest) {
           }
           continue;
         }
-        await supabase.from("orders").update(insertRow).eq("id", existing.id);
+
+        // Ingeplande orders: geen planning-velden overschrijven (voorkomt dat bevroren
+        // datum_opmerking weer "vandaag" wordt en orders terug in Lijst Sjoerd belanden).
+        const { data: activeSlot } = await supabase
+          .from("planning_slots")
+          .select("id")
+          .eq("owner_email", ownerEmail)
+          .eq("order_id", existing.id)
+          .neq("status", "afgerond")
+          .limit(1)
+          .maybeSingle();
+
+        if (activeSlot?.id) {
+          const {
+            status: _s,
+            meenemen_in_planning: _m,
+            datum_opmerking: _d,
+            nieuw_appje_sturen: _n,
+            datum: _datum,
+            model: _model,
+            serienummer: _serienummer,
+            ...safeUpdate
+          } = insertRow;
+          await supabase.from("orders").update(safeUpdate).eq("id", existing.id);
+        } else {
+          await supabase.from("orders").update(insertRow).eq("id", existing.id);
+        }
         insertedOrUpdatedIds.push(existing.id);
         continue;
       }

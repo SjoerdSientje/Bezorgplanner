@@ -12,9 +12,11 @@ type SupabaseLikeError = {
 export function supabaseMissingOrdersRouteNummerColumn(err: SupabaseLikeError): boolean {
   if (!err) return false;
   const blob = `${err.message ?? ""} ${err.details ?? ""} ${err.code ?? ""}`.toLowerCase();
-  if (blob.includes("route_nummer")) return true;
+  if (blob.includes("route_nummer") || blob.includes("route_naam")) return true;
   if (blob.includes("42703")) return true;
   if (blob.includes("column") && blob.includes("does not exist")) return true;
-  if (blob.includes("schema cache") && blob.includes("route_nummer")) return true;
+  if (blob.includes("schema cache") && (blob.includes("route_nummer") || blob.includes("route_naam"))) {
+    return true;
+  }
   return false;
 }

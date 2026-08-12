@@ -44,6 +44,9 @@ export interface Order {
   serienummer: string | null;
   mp_tags: string | null;
   link_aankoopbewijs: string | null;
+  route_nummer?: number | null;
+  route_naam?: string | null;
+  rit_nummer?: number | null;
 
   bezorger_naam: string | null;
   betaalmethode: string | null;

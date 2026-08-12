@@ -12,6 +12,9 @@ export type RoutePickOrder = {
 
 type Props = {
   routeIndex: number;
+  routeNaam?: string;
+  /** Weergavenamen per route-index (voor "al op andere route"-badge). */
+  routeNames?: string[];
   orders: RoutePickOrder[];
   selectedIds: string[];
   assignedElsewhere: Map<string, number>;
@@ -21,6 +24,8 @@ type Props = {
 
 export default function RouteOrderPicker({
   routeIndex,
+  routeNaam,
+  routeNames,
   orders,
   selectedIds,
   assignedElsewhere,
@@ -29,6 +34,7 @@ export default function RouteOrderPicker({
 }: Props) {
   const style = routeStyleForIndex(routeIndex);
   const selected = new Set(selectedIds);
+  const title = String(routeNaam ?? "").trim() || style.label;
 
   function toggle(id: string) {
     if (assignedElsewhere.has(id) && assignedElsewhere.get(id) !== routeIndex) return;
@@ -54,7 +60,7 @@ export default function RouteOrderPicker({
         >
           <div className={`border-b border-stone-100 px-5 py-4 ${style.bg}`}>
             <h3 className={`text-base font-semibold ${style.header}`}>
-              {style.label} — kies adressen
+              {title} — kies adressen
             </h3>
             <p className="mt-1 text-xs text-stone-600">
               Selecteer orders uit Lijst Sjoerd voor deze bezorger ({selectedIds.length}{" "}
@@ -105,7 +111,8 @@ export default function RouteOrderPicker({
                           </span>
                           {disabled && otherRoute != null && (
                             <span className="rounded bg-stone-200 px-1.5 py-0.5 text-[10px] font-medium text-stone-600">
-                              Route {otherRoute + 1}
+                              {String(routeNames?.[otherRoute] ?? "").trim() ||
+                                `Route ${otherRoute + 1}`}
                             </span>
                           )}
                         </div>

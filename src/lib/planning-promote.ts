@@ -11,6 +11,75 @@ function getTodayAmsterdam(): string {
   return `${y}-${m}-${d}`;
 }
 
+/**
+ * Openstaande planning van gisteren (of eerder) doorschuiven naar vandaag.
+ * Zo blijven onbezorgde stops zichtbaar voor de bezorger, en ziet getTargetPlanningDate
+ * dat er nog een actieve rit loopt — nieuwe batches gaan dan naar morgen i.p.v. door
+ * dezelfde "vandaag"-planning te lopen.
+ */
+export async function rollForwardPastPlanningSlots(
+  ownerEmail: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: SupabaseClient<any, any, any>
+): Promise<number> {
+  const todayISO = getTodayAmsterdam();
+
+  const { data: pastSlots, error } = await supabase
+    .from("planning_slots")
+    .select("id, order_id")
+    .eq("owner_email", ownerEmail)
+    .lt("datum", todayISO)
+    .neq("status", "afgerond");
+
+  if (error) {
+    console.error("[planning-promote] rollForward query", error);
+    return 0;
+  }
+
+  const pastRows = (pastSlots ?? []) as Array<{ id: string; order_id: string }>;
+  if (pastRows.length === 0) return 0;
+
+  const { data: todaySlots } = await supabase
+    .from("planning_slots")
+    .select("order_id")
+    .eq("owner_email", ownerEmail)
+    .eq("datum", todayISO)
+    .neq("status", "afgerond");
+
+  const todayOrderIds = new Set(
+    ((todaySlots ?? []) as Array<{ order_id: string }>).map((s) => String(s.order_id))
+  );
+
+  const toMove: string[] = [];
+  const toDelete: string[] = [];
+  for (const row of pastRows) {
+    if (todayOrderIds.has(String(row.order_id))) toDelete.push(row.id);
+    else toMove.push(row.id);
+  }
+
+  if (toDelete.length > 0) {
+    await supabase
+      .from("planning_slots")
+      .delete()
+      .eq("owner_email", ownerEmail)
+      .in("id", toDelete);
+  }
+
+  if (toMove.length > 0) {
+    const { error: updErr } = await supabase
+      .from("planning_slots")
+      .update({ datum: todayISO })
+      .eq("owner_email", ownerEmail)
+      .in("id", toMove);
+    if (updErr) {
+      console.error("[planning-promote] rollForward update", updErr);
+      return 0;
+    }
+  }
+
+  return toMove.length;
+}
+
 function getTomorrowAmsterdam(): string {
   const now = new Date();
   const amsterdam = new Date(now.toLocaleString("en-US", { timeZone: "Europe/Amsterdam" }));
@@ -33,6 +102,10 @@ export async function getTargetPlanningDate(
 ): Promise<{ date: string; isRitjesVoorMorgen: boolean }> {
   const tomorrowAmsterdam = getTomorrowAmsterdam();
   const todayAmsterdam = getTodayAmsterdam();
+
+  // Eerst openstaande ritten van eerdere dagen naar vandaag trekken, anders denkt
+  // goedkeuren dat de planning "leeg" is en zet een nieuwe batch óók op vandaag.
+  await rollForwardPastPlanningSlots(ownerEmail, supabase);
 
   const { data: activeSlots } = await supabase
     .from("planning_slots")

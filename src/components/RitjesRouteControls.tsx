@@ -217,6 +217,7 @@ export default function RitjesRouteControls({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           routes: cleaned.map((r) => ({
+            naam: String(r.naam ?? "").trim() || undefined,
             vertrektijd: r.vertrektijd.trim(),
             maxFietsen: r.maxFietsen,
             meerdereRitten: r.meerdereRitten,
@@ -351,9 +352,25 @@ export default function RitjesRouteControls({
                       className={`rounded-lg border border-stone-200 border-l-4 px-3 py-2 ${style.border} ${style.bg}`}
                     >
                       <div className="mb-2 flex flex-wrap items-center gap-2">
-                        <span className={`text-xs font-semibold ${style.header}`}>
-                          {style.label}
-                        </span>
+                        <input
+                          type="text"
+                          value={row.naam}
+                          onChange={(e) => {
+                            const next = [...routes];
+                            next[i] = { ...next[i]!, naam: e.target.value };
+                            setRoutes(next);
+                          }}
+                          onBlur={() => {
+                            const trimmed = String(row.naam ?? "").trim();
+                            if (trimmed) return;
+                            const next = [...routes];
+                            next[i] = { ...next[i]!, naam: `Route ${i + 1}` };
+                            setRoutes(next);
+                          }}
+                          placeholder={`Route ${i + 1}`}
+                          aria-label={`Naam route ${i + 1}`}
+                          className={`min-w-[7rem] max-w-[12rem] rounded border border-transparent bg-transparent px-1 py-0.5 text-xs font-semibold ${style.header} hover:border-current/30 focus:border-current focus:bg-white focus:outline-none`}
+                        />
                         <button
                           type="button"
                           onClick={() => setPickerRouteIndex(i)}
@@ -419,6 +436,7 @@ export default function RitjesRouteControls({
                   setRoutes((prev) => [
                     ...prev,
                     {
+                      naam: `Route ${prev.length + 1}`,
                       vertrektijd: prev[prev.length - 1]?.vertrektijd || "10:30",
                       maxFietsen: 11,
                       meerdereRitten: false,
@@ -455,6 +473,8 @@ export default function RitjesRouteControls({
       {pickerRouteIndex != null && (
         <RouteOrderPicker
           routeIndex={pickerRouteIndex}
+          routeNaam={routes[pickerRouteIndex]?.naam}
+          routeNames={routes.map((r, i) => String(r.naam ?? "").trim() || `Route ${i + 1}`)}
           orders={sjoerdOrders}
           selectedIds={routes[pickerRouteIndex]?.orderIds ?? []}
           assignedElsewhere={assignedElsewhereForPicker}

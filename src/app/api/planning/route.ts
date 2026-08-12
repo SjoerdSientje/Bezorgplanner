@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { requireAccountEmail } from "@/lib/account";
 import { isMpPausedForOwner } from "@/lib/mp-pause";
+import { rollForwardPastPlanningSlots } from "@/lib/planning-promote";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +14,7 @@ export async function GET(request: NextRequest) {
   try {
     const ownerEmail = requireAccountEmail(request);
     const supabase = createServerSupabaseClient();
+    await rollForwardPastPlanningSlots(ownerEmail, supabase as any);
     const mpPaused = await isMpPausedForOwner(supabase, ownerEmail);
     const { data: slots, error: slotsErr } = await supabase
       .from("planning_slots")
@@ -85,6 +87,7 @@ export async function GET(request: NextRequest) {
           aankomsttijd: slot.aankomsttijd ?? "",
           /** Parallelle routes (1, 2, …) of null bij één bus / grote bus */
           route_nummer: o.route_nummer != null ? Number(o.route_nummer) : null,
+          route_naam: o.route_naam != null ? String(o.route_naam) : null,
           rit_nummer: o.rit_nummer,
           tijd_opmerking: tijdOpmerking,
           order_nummer: o.order_nummer ?? "",

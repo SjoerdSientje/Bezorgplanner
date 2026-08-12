@@ -20,6 +20,7 @@ import {
 import { SERVICE_TIME_MINUTES } from "@/lib/routific-payload";
 import { supabaseMissingOrdersRouteNummerColumn } from "@/lib/orders-route-nummer-supabase";
 import { filterOutPausedMpOrders, isMpPausedForOwner } from "@/lib/mp-pause";
+import { rollForwardPastPlanningSlots } from "@/lib/planning-promote";
 
 const ROUTIFIC_VRP_URL = "https://api.routific.com/v1/vrp-long";
 const ROUTIFIC_JOBS_URL = "https://api.routific.com/jobs";
@@ -102,7 +103,8 @@ export async function POST(request: NextRequest) {
       const orderIds = Array.isArray(orderIdsRaw)
         ? orderIdsRaw.map((id) => String(id).trim()).filter(Boolean)
         : undefined;
-      parallelRoutes.push({ shift_start: ts, capacity: cap, meerdereRitten, orderIds });
+      const naam = String(r.naam ?? r.name ?? "").trim() || undefined;
+      parallelRoutes.push({ shift_start: ts, capacity: cap, meerdereRitten, orderIds, naam });
     }
 
     const vertrektijd = parallelRoutes[0]!.shift_start;
@@ -126,6 +128,10 @@ export async function POST(request: NextRequest) {
     }
 
     const supabase = createClient(supabaseUrl, serviceKey);
+
+    // Openstaande ritten van eerdere dagen eerst naar vandaag, zodat ze via
+    // planning_slots buiten Lijst Sjoerd / Routific blijven.
+    await rollForwardPastPlanningSlots(ownerEmail, supabase as any);
 
     // Zelfde logica als tab "Routes" op ritjes-vandaag: orders met actieve planning_slot
     // horen niet in Routific (handmatige route/planning), wel nog bij Stuur appjes.
@@ -273,21 +279,27 @@ export async function POST(request: NextRequest) {
       tijd_opmerking: string;
       rit_nummer: number | null;
       route_nummer: number | null;
+      route_naam: string | null;
     }[] = [];
     let volgorde = 0;
 
-    /** Schrijf order-update; zonder route_nummer-kolom (migratie 014) opnieuw proberen. */
+    /** Schrijf order-update; zonder route_nummer/route_naam-kolom opnieuw proberen. */
     const patchOrder = async (
       orderId: string,
-      payload: { rit_nummer: number | null; route_nummer: number | null; aankomsttijd_slot?: string | null }
+      payload: {
+        rit_nummer: number | null;
+        route_nummer: number | null;
+        route_naam?: string | null;
+        aankomsttijd_slot?: string | null;
+      }
     ) => {
       let { error } = await supabase
         .from("orders")
         .update(payload)
         .eq("owner_email", ownerEmail)
         .eq("id", orderId);
-      if (error && supabaseMissingOrdersRouteNummerColumn(error) && "route_nummer" in payload) {
-        const { route_nummer: _r, ...rest } = payload;
+      if (error && supabaseMissingOrdersRouteNummerColumn(error)) {
+        const { route_nummer: _r, route_naam: _n, ...rest } = payload;
         const r2 = await supabase.from("orders").update(rest).eq("owner_email", ownerEmail).eq("id", orderId);
         error = r2.error;
       }
@@ -311,7 +323,14 @@ export async function POST(request: NextRequest) {
 
     for (let vi = 0; vi < parallelRoutes.length; vi++) {
       const routeNum = vi + 1;
-      const routeNummerDb = meerDanEenRoute ? routeNum : null;
+      const customNaam = String(parallelRoutes[vi]?.naam ?? "").trim();
+      const defaultLabel = `Route ${routeNum}`;
+      const hasMeaningfulName = Boolean(customNaam) && customNaam !== defaultLabel;
+      // Eén route zonder eigen naam → geen route_nummer (bestaand gedrag).
+      // Meerdere routes of een custom naam → wel nummer + weergavenaam.
+      const routeNummerDb = meerDanEenRoute || hasMeaningfulName ? routeNum : null;
+      const routeNaamDb =
+        customNaam || (routeNummerDb != null ? defaultLabel : null);
 
       // Bij "meerdere ritten" de stops van alle legs van deze route (in ritvolgorde) achter
       // elkaar plakken, zodat rit_nummer doorloopt en het één logische route blijft.
@@ -332,6 +351,7 @@ export async function POST(request: NextRequest) {
           tijd_opmerking: slot.arrivalTime,
           rit_nummer: slot.rit_nummer,
           route_nummer: slot.route_nummer,
+          route_naam: routeNaamDb,
         });
       }
     }
@@ -357,7 +377,12 @@ export async function POST(request: NextRequest) {
     // verouderde tijdsloten van een vorige run zichtbaar blijven voor unserved orders.
     const clearErrors: string[] = [];
     for (const o of rowsForRouting) {
-      const err = await patchOrder(o.id, { aankomsttijd_slot: null, rit_nummer: null, route_nummer: null });
+      const err = await patchOrder(o.id, {
+        aankomsttijd_slot: null,
+        rit_nummer: null,
+        route_nummer: null,
+        route_naam: null,
+      });
       if (err) clearErrors.push(`${o.id}: ${err.message}`);
     }
     if (clearErrors.length > 0) {
@@ -378,6 +403,7 @@ export async function POST(request: NextRequest) {
           aankomsttijd_slot: s.aankomsttijd,
           rit_nummer: s.rit_nummer,
           route_nummer: s.route_nummer,
+          route_naam: s.route_naam,
         });
         if (err) writeErrors.push(`${s.order_id}: ${err.message}`);
       }

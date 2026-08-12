@@ -7,6 +7,7 @@ import ProductenCell from "@/components/ProductenCell";
 import OpmerkingKlantCell from "@/components/OpmerkingKlantCell";
 import { compareOrdersOnRoute } from "@/lib/ritjes-mapping";
 import { comparePlanningDatumKeys, planningDatumGroupLabel } from "@/lib/planning-date";
+import { routeDisplayLabel, routeNaamFromOrders } from "@/lib/route-colors";
 const PLANNING_HEADERS = [
   "Order nummer",
   "Naam",
@@ -32,6 +33,7 @@ type PlanningRow = {
   datum: string;
   /** Parallelle Routific-voertuigen; null = geen splitsing */
   route_nummer?: number | null;
+  route_naam?: string | null;
   rit_nummer?: number | null;
   order_nummer: string;
   naam: string;
@@ -386,7 +388,7 @@ export default function PlanningPage() {
   const deleteSlot = useCallback(
     async (slotId: string, orderNummer: string) => {
       const ok = window.confirm(
-        `Order verwijderen uit planning?\n\n${orderNummer || slotId}\n\nDe order blijft gewoon staan in Ritjes voor vandaag.`
+        `Order verwijderen uit planning?\n\n${orderNummer || slotId}\n\nDe order gaat terug naar Ritjes voor vandaag (zonder tijdslot).`
       );
       if (!ok) return;
       // Optimistische UI: rij direct verbergen
@@ -515,13 +517,21 @@ export default function PlanningPage() {
               const { text: datumLabel, isToday } = planningDatumGroupLabel(group.datum);
               return (
               <div key={group.datum} className="space-y-8">
-                {group.sections.map((section, sidx) => (
+                {group.sections.map((section, sidx) => {
+                  const routeLabel =
+                    section.routeNum != null
+                      ? routeDisplayLabel(
+                          section.routeNum,
+                          routeNaamFromOrders(section.rows)
+                        )
+                      : null;
+                  return (
                   <PlanningTabel
                     key={section.routeNum ?? `all-${sidx}`}
                     rows={section.rows}
                     label={
-                      section.routeNum != null
-                        ? `Route ${section.routeNum} — ${group.datum}`
+                      routeLabel != null
+                        ? `${routeLabel} — ${group.datum}`
                         : group.sections.length > 1
                           ? `Overig — ${group.datum}`
                           : datumLabel
@@ -543,7 +553,8 @@ export default function PlanningPage() {
                     }
                     onDeleteSlot={deleteSlot}
                   />
-                ))}
+                  );
+                })}
               </div>
               );
             })
