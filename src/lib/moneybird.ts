@@ -349,6 +349,150 @@ function isZeroInvoiceTotal(totalIncl: number): boolean {
   return !Number.isFinite(totalIncl) || totalIncl < 0.01;
 }
 
+type MoneybirdInvoiceDetailPayload = {
+  description: string;
+  price: string;
+  amount: string;
+  tax_rate_id: string;
+  ledger_account_id: string;
+};
+
+function buildInvoiceDetailsFromShopifyOrder(
+  order: ShopifyOrder
+): MoneybirdInvoiceDetailPayload[] | null {
+  const shopifyOrderId = String(order.id ?? "").trim();
+  const taxRateId = process.env.MONEYBIRD_TAX_RATE_ID!.trim();
+  const ledgerAccountId = process.env.MONEYBIRD_LEDGER_ACCOUNT_ID!.trim();
+  const orderName = String(order.name ?? shopifyOrderId).trim();
+
+  const details = (order.line_items ?? [])
+    .map((li) => {
+      const description = String(li.name ?? "").trim() || "Product";
+      const amount = Math.max(1, Math.floor(Number(li.quantity ?? 1)));
+      return {
+        description: `${description} (${orderName})`,
+        price: unitPriceExclApprox(li.price),
+        amount: String(amount),
+        tax_rate_id: taxRateId,
+        ledger_account_id: ledgerAccountId,
+      };
+    })
+    .filter((d) => d.description);
+
+  if (details.length === 0) return null;
+
+  const detailsTotalExcl = details.reduce(
+    (sum, d) => sum + (parseFloat(d.price) || 0) * (parseFloat(d.amount) || 0),
+    0
+  );
+  if (detailsTotalExcl < 0.01) return null;
+
+  return details;
+}
+
+function isDraftMoneybirdInvoice(invoice: MoneybirdSalesInvoice): boolean {
+  return String(invoice.state ?? "").toLowerCase() === "draft";
+}
+
+/**
+ * orders/updated: alleen bestaande conceptfactuur bijwerken — nooit een nieuwe aanmaken.
+ */
+export async function updateDraftSalesInvoiceFromShopifyOrder(
+  order: ShopifyOrder
+): Promise<MoneybirdSalesInvoice | null> {
+  if (!isMoneybirdConfigured()) {
+    console.warn("[moneybird] niet geconfigureerd — factuur-update overgeslagen.");
+    return null;
+  }
+
+  const shopifyOrderId = String(order.id ?? "").trim();
+  if (!shopifyOrderId) return null;
+
+  if (isZeroInvoiceTotal(shopifyOrderBillableTotalIncl(order))) {
+    console.info(
+      "[moneybird] order update totaal €0 — geen factuurwijziging",
+      shopifyOrderId,
+      order.name ?? ""
+    );
+    return null;
+  }
+
+  const reference = shopifyReferenceForOrderId(shopifyOrderId);
+  const existing = await findSalesInvoiceByReference(reference);
+  if (!existing?.id) {
+    console.info(
+      "[moneybird] order update — geen bestaande factuur, geen nieuwe create",
+      reference
+    );
+    return null;
+  }
+
+  const full = await moneybirdFetch<MoneybirdSalesInvoice>(
+    `/sales_invoices/${existing.id}.json`
+  );
+
+  if (!isDraftMoneybirdInvoice(full)) {
+    console.info(
+      "[moneybird] order update — factuur niet meer concept, skip",
+      full.id,
+      full.state ?? "?"
+    );
+    return full;
+  }
+
+  const details = buildInvoiceDetailsFromShopifyOrder(order);
+  if (!details) {
+    console.warn("[moneybird] order update — geen factuurregels", shopifyOrderId);
+    return null;
+  }
+
+  const contact = await findOrCreateContactForShopifyOrder(order);
+  const destroyOld = (full.details ?? [])
+    .filter((d) => d.id)
+    .map((d) => ({ id: d.id, _destroy: "1" }));
+
+  const updated = await moneybirdFetch<MoneybirdSalesInvoice>(
+    `/sales_invoices/${full.id}.json`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        sales_invoice: {
+          contact_id: contact.id,
+          details_attributes: [...destroyOld, ...details],
+        },
+      }),
+    }
+  );
+
+  console.info(
+    "[moneybird] conceptfactuur bijgewerkt",
+    updated.id,
+    "voor Shopify",
+    order.name ?? shopifyOrderId
+  );
+  return updated;
+}
+
+/**
+ * Routeert Moneybird-factuuractie op Shopify-webhook topic.
+ * - orders/create → nieuwe factuur (indien van toepassing)
+ * - orders/updated → alleen bestaande conceptfactuur bijwerken
+ */
+export async function syncSalesInvoiceFromShopifyOrder(
+  supabase: SupabaseClient,
+  order: ShopifyOrder,
+  topic: string
+): Promise<MoneybirdSalesInvoice | null> {
+  const normalizedTopic = topic.trim().toLowerCase();
+  if (normalizedTopic === "orders/updated") {
+    return updateDraftSalesInvoiceFromShopifyOrder(order);
+  }
+  if (normalizedTopic === "orders/create") {
+    return createSalesInvoiceFromShopifyOrder(supabase, order);
+  }
+  return null;
+}
+
 /**
  * Maakt een sales invoice in Moneybird voor een Shopify-order.
  * Reference = shopify:{id} zodat de Moneybird-webhook dubbele voorraadaftrek kan skippen.
@@ -416,41 +560,12 @@ export async function createSalesInvoiceFromShopifyOrder(
       return existing;
     }
 
-    const taxRateId = process.env.MONEYBIRD_TAX_RATE_ID!.trim();
-    const ledgerAccountId = process.env.MONEYBIRD_LEDGER_ACCOUNT_ID!.trim();
-
     const contact = await findOrCreateContactForShopifyOrder(order);
     const orderName = String(order.name ?? shopifyOrderId).trim();
 
-    const details = (order.line_items ?? [])
-      .map((li) => {
-        const description = String(li.name ?? "").trim() || "Product";
-        const amount = Math.max(1, Math.floor(Number(li.quantity ?? 1)));
-        return {
-          description: `${description} (${orderName})`,
-          price: unitPriceExclApprox(li.price),
-          amount: String(amount),
-          tax_rate_id: taxRateId,
-          ledger_account_id: ledgerAccountId,
-        };
-      })
-      .filter((d) => d.description);
-
-    if (details.length === 0) {
-      console.warn("[moneybird] geen line items voor order", shopifyOrderId);
-      return null;
-    }
-
-    const detailsTotalExcl = details.reduce(
-      (sum, d) => sum + (parseFloat(d.price) || 0) * (parseFloat(d.amount) || 0),
-      0
-    );
-    if (detailsTotalExcl < 0.01) {
-      console.info(
-        "[moneybird] factuurregels totaal €0 — geen factuur",
-        shopifyOrderId,
-        order.name ?? ""
-      );
+    const details = buildInvoiceDetailsFromShopifyOrder(order);
+    if (!details) {
+      console.warn("[moneybird] geen factuurregels voor order", shopifyOrderId);
       return null;
     }
 

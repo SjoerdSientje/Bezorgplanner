@@ -23,9 +23,9 @@ import {
   syncInventoryProductFromShopify,
 } from "@/lib/inventory";
 import {
-  createSalesInvoiceFromShopifyOrder,
   isMoneybirdConfigured,
   removeMoneybirdProductForShopifyId,
+  syncSalesInvoiceFromShopifyOrder,
   upsertMoneybirdProductFromShopify,
 } from "@/lib/moneybird";
 import type { ShopifyAdminProduct } from "@/lib/shopify-admin";
@@ -163,11 +163,12 @@ export async function POST(request: NextRequest) {
       console.error("[webhooks/shopify] inventory deduct:", invErr);
     }
 
-    // Na voorraadaftrek (met shopify-mark): factuur in Moneybird.
-    // Reference = shopify:{id} zodat de Moneybird-webhook geen dubbele aftrek doet.
+    // Moneybird: create alleen bij orders/create; update alleen concept bij orders/updated.
     if (isMoneybirdConfigured()) {
       try {
-        await createSalesInvoiceFromShopifyOrder(supabase, order);
+        if (topic === "orders/create" || topic === "orders/updated") {
+          await syncSalesInvoiceFromShopifyOrder(supabase, order, topic);
+        }
       } catch (mbErr) {
         console.error("[webhooks/shopify] moneybird invoice:", mbErr);
       }
