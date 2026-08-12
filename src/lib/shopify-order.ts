@@ -76,6 +76,8 @@ export interface ShopifyOrder {
   billing_address?: ShopifyAddress | null;
   line_items?: ShopifyLineItem[] | null;
   shipping_lines?: ShopifyShippingLine[] | null;
+  /** Huidig ordertotaal (nieuwere Shopify webhooks). */
+  current_total_price?: string | number | null;
 }
 
 const PRICE_LIMIT_FIETS = 500;

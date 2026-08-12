@@ -5,7 +5,7 @@
 
 import { createHmac, timingSafeEqual } from "crypto";
 import { isMalyarTestOrderNote } from "@/lib/account";
-import type { ShopifyOrder } from "@/lib/shopify-order";
+import type { ShopifyLineItem, ShopifyOrder } from "@/lib/shopify-order";
 import {
   isShopifyProductActive,
   type ShopifyAdminProduct,
@@ -245,6 +245,45 @@ function unitPriceExclApprox(price: string | number | null | undefined): string 
   return excl.toFixed(2);
 }
 
+function parseMoneyAmount(value: string | number | null | undefined): number {
+  const raw = String(value ?? "").trim().replace(",", ".");
+  if (!raw) return NaN;
+  const n = parseFloat(raw);
+  return Number.isFinite(n) ? n : NaN;
+}
+
+function lineItemNetTotalIncl(li: ShopifyLineItem): number {
+  const price = parseMoneyAmount(li.price);
+  const qty = Math.max(1, Math.floor(Number(li.quantity ?? 1)));
+  if (!Number.isFinite(price)) return 0;
+  let total = price * qty;
+  const discount = parseMoneyAmount(li.total_discount);
+  if (Number.isFinite(discount)) total -= discount;
+  for (const allocation of li.discount_allocations ?? []) {
+    const amt = parseMoneyAmount(allocation.amount);
+    if (Number.isFinite(amt)) total -= amt;
+  }
+  return Math.max(0, total);
+}
+
+/** Ordertotaal incl. BTW — total_price, current_total_price of som van regels. */
+export function shopifyOrderBillableTotalIncl(order: ShopifyOrder): number {
+  const fromTotal = parseMoneyAmount(order.total_price);
+  const fromCurrent = parseMoneyAmount(order.current_total_price);
+  const lineSum = (order.line_items ?? []).reduce(
+    (sum, li) => sum + lineItemNetTotalIncl(li),
+    0
+  );
+
+  if (Number.isFinite(fromTotal)) return Math.max(0, fromTotal);
+  if (Number.isFinite(fromCurrent)) return Math.max(0, fromCurrent);
+  return lineSum;
+}
+
+function isZeroInvoiceTotal(totalIncl: number): boolean {
+  return !Number.isFinite(totalIncl) || totalIncl < 0.01;
+}
+
 /**
  * Maakt een sales invoice in Moneybird voor een Shopify-order.
  * Reference = shopify:{id} zodat de Moneybird-webhook dubbele voorraadaftrek kan skippen.
@@ -265,12 +304,13 @@ export async function createSalesInvoiceFromShopifyOrder(
   const shopifyOrderId = String(order.id ?? "").trim();
   if (!shopifyOrderId) return null;
 
-  const totalIncl = parseFloat(String(order.total_price ?? 0));
-  if (!Number.isFinite(totalIncl) || totalIncl <= 0) {
+  const totalIncl = shopifyOrderBillableTotalIncl(order);
+  if (isZeroInvoiceTotal(totalIncl)) {
     console.info(
       "[moneybird] order totaal €0 — geen factuur",
       shopifyOrderId,
-      order.name ?? ""
+      order.name ?? "",
+      `(berekend: €${totalIncl.toFixed(2)})`
     );
     return null;
   }
@@ -309,6 +349,19 @@ export async function createSalesInvoiceFromShopifyOrder(
 
   if (details.length === 0) {
     console.warn("[moneybird] geen line items voor order", shopifyOrderId);
+    return null;
+  }
+
+  const detailsTotalExcl = details.reduce(
+    (sum, d) => sum + (parseFloat(d.price) || 0) * (parseFloat(d.amount) || 0),
+    0
+  );
+  if (detailsTotalExcl < 0.01) {
+    console.info(
+      "[moneybird] factuurregels totaal €0 — geen factuur",
+      shopifyOrderId,
+      order.name ?? ""
+    );
     return null;
   }
 
