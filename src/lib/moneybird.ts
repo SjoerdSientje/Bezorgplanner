@@ -160,15 +160,16 @@ async function findSalesInvoiceByReferenceWithRetry(
 async function acquireMoneybirdShopifyInvoiceLock(
   supabase: SupabaseClient,
   shopifyOrderId: string
-): Promise<"acquired" | "existing"> {
+): Promise<"acquired" | "existing" | "unavailable"> {
   const { error } = await supabase
     .from("moneybird_shopify_invoice_locks")
     .insert({ shopify_order_id: shopifyOrderId });
 
   if (!error) return "acquired";
   if (error.code === "23505") return "existing";
+  // Tabel ontbreekt / RLS / netwerk: niet behandelen als "bestaat al" (dat skipte create).
   console.error("[moneybird] invoice lock insert error:", error.message);
-  return "existing";
+  return "unavailable";
 }
 
 async function releaseMoneybirdShopifyInvoiceLock(
@@ -554,6 +555,39 @@ export async function syncSalesInvoiceFromShopifyOrder(
 }
 
 /**
+ * Verwijder Moneybird-factuur voor een Shopify-order (reference shopify:{id}).
+ * Concepten worden verwijderd; openstaande/verstuurde facturen worden geprobeerd te
+ * verwijderen — faalt dat, dan loggen we (handmatig credit/verwijderen in Moneybird).
+ */
+export async function deleteSalesInvoiceForShopifyOrderId(
+  shopifyOrderId: string
+): Promise<{ deleted: boolean; invoiceId?: string; error?: string }> {
+  if (!isMoneybirdConfigured()) {
+    return { deleted: false, error: "moneybird_not_configured" };
+  }
+  const id = String(shopifyOrderId ?? "").trim();
+  if (!id) return { deleted: false, error: "missing_shopify_order_id" };
+
+  const reference = shopifyReferenceForOrderId(id);
+  const existing = await findSalesInvoiceByReference(reference);
+  if (!existing?.id) {
+    return { deleted: false };
+  }
+
+  try {
+    await moneybirdFetch<unknown>(`/sales_invoices/${existing.id}.json`, {
+      method: "DELETE",
+    });
+    console.info("[moneybird] factuur verwijderd", existing.id, "voor", reference);
+    return { deleted: true, invoiceId: existing.id };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[moneybird] factuur verwijderen mislukt", existing.id, msg);
+    return { deleted: false, invoiceId: existing.id, error: msg };
+  }
+}
+
+/**
  * Maakt een sales invoice in Moneybird voor een Shopify-order.
  * Reference = shopify:{id} zodat de Moneybird-webhook dubbele voorraadaftrek kan skippen.
  *
@@ -606,6 +640,7 @@ export async function createSalesInvoiceFromShopifyOrder(
     return null;
   }
 
+  const lockHeld = lock === "acquired";
   let created: MoneybirdSalesInvoice | null = null;
   try {
     const existing = await findSalesInvoiceByReference(reference);
@@ -697,8 +732,10 @@ export async function createSalesInvoiceFromShopifyOrder(
     return created;
   } finally {
     if (created?.id) {
-      await storeMoneybirdShopifyInvoiceId(supabase, shopifyOrderId, created.id);
-    } else {
+      if (lockHeld) {
+        await storeMoneybirdShopifyInvoiceId(supabase, shopifyOrderId, created.id);
+      }
+    } else if (lockHeld) {
       await releaseMoneybirdShopifyInvoiceLock(supabase, shopifyOrderId);
     }
   }

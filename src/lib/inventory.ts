@@ -1042,9 +1042,6 @@ export async function restoreInventoryForShopifyOrder(
   const shopifyOrderId = String(order.id ?? "").trim();
   if (!shopifyOrderId) return;
 
-  const rawItems = order.line_items ?? [];
-  if (rawItems.length === 0) return;
-
   const orderReference = String(order.name ?? shopifyOrderId);
 
   for (const ownerEmail of allAccountEmails()) {
@@ -1058,19 +1055,178 @@ export async function restoreInventoryForShopifyOrder(
     );
     if (!hadDeduction) continue;
 
+    // Bij voorkeur netto mutaties terugdraaien (klopt ook na product-wijzigingen via update).
+    const reversed = await reverseNetShopifyDeductionsForOrder(
+      supabase,
+      ownerEmail,
+      orderReference,
+      "Terugboeking annulering/verwijdering"
+    );
+
+    if (!reversed) {
+      // Fallback: huidige line items (oude orders zonder nette mutatie-trail).
+      const rawItems = order.line_items ?? [];
+      if (rawItems.length > 0) {
+        const rules = await loadProductDefaultItemsRules(supabase, ownerEmail);
+        const lineItems = buildInventoryDeductionLineItems(rawItems, rules);
+        await applyIncomingMutationsForLineItems(supabase, {
+          ownerEmail,
+          source: "shopify",
+          orderReference,
+          lineItems,
+        });
+      }
+    }
+
+    await clearOrderDeduction(supabase, ownerEmail, "shopify", shopifyOrderId);
+    console.info(
+      "[inventory] Shopify annulering/verwijdering — voorraad teruggeboekt",
+      orderReference,
+      "owner",
+      ownerEmail
+    );
+  }
+}
+
+/**
+ * Draai netto shopify-mutaties voor een order_reference terug (uitgaand − inkomend per product).
+ * @returns true als er mutaties waren om terug te boeken.
+ */
+async function reverseNetShopifyDeductionsForOrder(
+  supabase: SupabaseClient,
+  ownerEmail: string,
+  orderReference: string,
+  notePrefix: string
+): Promise<boolean> {
+  const ref = String(orderReference ?? "").trim();
+  if (!ref) return false;
+
+  const { data: muts, error } = await supabase
+    .from("inventory_mutations")
+    .select("product_id, mutation_type, quantity")
+    .eq("owner_email", ownerEmail)
+    .eq("source", "shopify")
+    .eq("order_reference", ref);
+
+  if (error) {
+    console.error("[inventory] reverse mutations query:", error.message);
+    return false;
+  }
+  if (!muts?.length) return false;
+
+  const netByProduct = new Map<string, number>();
+  for (const m of muts) {
+    const productId = String(m.product_id ?? "").trim();
+    if (!productId) continue;
+    const qty = Math.max(0, Math.floor(Number(m.quantity ?? 0)));
+    if (qty <= 0) continue;
+    const type = String(m.mutation_type ?? "");
+    const delta = type === "uitgaand" ? qty : type === "inkomend" ? -qty : 0;
+    if (delta === 0) continue;
+    netByProduct.set(productId, (netByProduct.get(productId) ?? 0) + delta);
+  }
+
+  let didAnything = false;
+  for (const [productId, net] of Array.from(netByProduct.entries())) {
+    if (net > 0) {
+      // Nog netto uitgaand → terugboeken
+      await applyInventoryMutation(supabase, {
+        ownerEmail,
+        productId,
+        mutationType: "inkomend",
+        quantity: net,
+        source: "shopify",
+        note: `${notePrefix} order ${ref}`,
+        orderReference: ref,
+      });
+      didAnything = true;
+    } else if (net < 0) {
+      await applyInventoryMutation(supabase, {
+        ownerEmail,
+        productId,
+        mutationType: "uitgaand",
+        quantity: -net,
+        source: "shopify",
+        note: `${notePrefix} correctie order ${ref}`,
+        orderReference: ref,
+      });
+      didAnything = true;
+    }
+  }
+  return didAnything;
+}
+
+/**
+ * orders/updated: voorraad in sync brengen met huidige line items.
+ * — Eerdere aftrek voor deze order terugboeken
+ * — Opnieuw aftrekken met de huidige producten/aantallen
+ * Alleen als er al een shopify-aftrek was, of de order al in de planner staat.
+ */
+export async function syncInventoryForShopifyOrderUpdate(
+  supabase: SupabaseClient,
+  order: ShopifyOrder
+): Promise<void> {
+  const shopifyOrderId = String(order.id ?? "").trim();
+  if (!shopifyOrderId) return;
+
+  const orderReference = String(order.name ?? shopifyOrderId);
+  const rawItems = order.line_items ?? [];
+
+  for (const ownerEmail of allAccountEmails()) {
+    if (!shopifyWebhookOrderAppliesToOwner(ownerEmail, order.note)) continue;
+
+    const hadDeduction = await hasOrderDeduction(
+      supabase,
+      ownerEmail,
+      "shopify",
+      shopifyOrderId
+    );
+
+    const { data: existingOrder } = await supabase
+      .from("orders")
+      .select("id")
+      .eq("owner_email", ownerEmail)
+      .eq("order_id", shopifyOrderId)
+      .eq("source", "shopify")
+      .maybeSingle();
+
+    if (!hadDeduction && !existingOrder?.id) {
+      // Order stond niet in planner en had geen voorraadaftrek → niets doen (geen "stille create").
+      continue;
+    }
+
+    if (hadDeduction) {
+      await reverseNetShopifyDeductionsForOrder(
+        supabase,
+        ownerEmail,
+        orderReference,
+        "Terugboeking vóór her-aftrek (order update)"
+      );
+      await clearOrderDeduction(supabase, ownerEmail, "shopify", shopifyOrderId);
+    }
+
+    if (rawItems.length === 0) {
+      console.info(
+        "[inventory] Shopify update — geen line items, aftrek gewist",
+        orderReference,
+        ownerEmail
+      );
+      continue;
+    }
+
     const rules = await loadProductDefaultItemsRules(supabase, ownerEmail);
     const lineItems = buildInventoryDeductionLineItems(rawItems, rules);
 
-    await applyIncomingMutationsForLineItems(supabase, {
+    await deductInventoryForLineItems(supabase, {
       ownerEmail,
       source: "shopify",
+      externalOrderId: shopifyOrderId,
       orderReference,
       lineItems,
     });
 
-    await clearOrderDeduction(supabase, ownerEmail, "shopify", shopifyOrderId);
     console.info(
-      "[inventory] Shopify annulering — voorraad teruggeboekt",
+      "[inventory] Shopify update — voorraad hersynchroniseerd",
       orderReference,
       "owner",
       ownerEmail

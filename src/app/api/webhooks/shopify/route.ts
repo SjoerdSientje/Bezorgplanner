@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
   passesRitjesFilter,
   mapShopifyOrderToRitjesRow,
@@ -19,6 +19,7 @@ import { loadProductDefaultItemsRules } from "@/lib/product-rules-server";
 import {
   deductInventoryForShopifyOrder,
   restoreInventoryForShopifyOrder,
+  syncInventoryForShopifyOrderUpdate,
   removeInventoryProductByShopifyId,
   syncInventoryProductFromShopify,
 } from "@/lib/inventory";
@@ -26,6 +27,7 @@ import {
   isMoneybirdConfigured,
   removeMoneybirdProductForShopifyId,
   syncSalesInvoiceFromShopifyOrder,
+  deleteSalesInvoiceForShopifyOrderId,
   upsertMoneybirdProductFromShopify,
 } from "@/lib/moneybird";
 import type { ShopifyAdminProduct } from "@/lib/shopify-admin";
@@ -35,7 +37,8 @@ import {
 } from "@/lib/order-completion";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const supabaseServiceKey =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
 async function handleProductWebhook(
   topic: string,
@@ -74,7 +77,6 @@ async function handleProductWebhook(
     return NextResponse.json({ ok: true, skipped: "invalid_product_payload" });
   }
 
-  // Ensure variants array exists for group builder.
   const product: ShopifyAdminProduct = {
     ...payload,
     variants: Array.isArray(payload.variants) ? payload.variants : [],
@@ -102,6 +104,131 @@ async function handleProductWebhook(
   return NextResponse.json({ ok: true, topic, ...result, ownerEmail, moneybird });
 }
 
+/**
+ * Verwijder Shopify-order uit ritjes, pakketjes, Moneybird (+ voorraad terugzetten).
+ * Gebruikt bij annulering én orders/deleted.
+ */
+async function removeShopifyOrderEverywhere(
+  supabase: SupabaseClient,
+  shopifyOrderId: string,
+  orderForInventory: ShopifyOrder | null
+): Promise<void> {
+  // orders/deleted stuurt vaak alleen { id }. Haal naam/line items uit DB voor correcte restore.
+  let orderPayload: ShopifyOrder | null = orderForInventory;
+  if (!orderPayload?.name || !(orderPayload.line_items?.length)) {
+    const { data: dbOrder } = await supabase
+      .from("orders")
+      .select("order_nummer, line_items_json, producten")
+      .eq("order_id", shopifyOrderId)
+      .eq("source", "shopify")
+      .limit(1)
+      .maybeSingle();
+
+    if (dbOrder) {
+      const synthetic: ShopifyOrder = {
+        id: shopifyOrderId,
+        name: String(dbOrder.order_nummer ?? shopifyOrderId),
+        line_items: [],
+      };
+      try {
+        const parsed = JSON.parse(String(dbOrder.line_items_json ?? "[]"));
+        if (Array.isArray(parsed)) {
+          synthetic.line_items = parsed.map((li: { name?: string; quantity?: number }) => ({
+            name: String(li.name ?? ""),
+            quantity: Math.max(1, Number(li.quantity ?? 1) || 1),
+          }));
+        }
+      } catch {
+        // ignore
+      }
+      if (!synthetic.line_items?.length && dbOrder.producten) {
+        synthetic.line_items = String(dbOrder.producten)
+          .split("\n")
+          .map((n) => n.trim())
+          .filter(Boolean)
+          .map((name) => ({ name, quantity: 1 }));
+      }
+      orderPayload = {
+        ...synthetic,
+        ...(orderForInventory ?? {}),
+        id: shopifyOrderId,
+        name: orderForInventory?.name ?? synthetic.name,
+        line_items: orderForInventory?.line_items?.length
+          ? orderForInventory.line_items
+          : synthetic.line_items,
+      };
+    }
+  }
+
+  if (orderPayload) {
+    try {
+      await restoreInventoryForShopifyOrder(supabase, orderPayload);
+    } catch (invErr) {
+      console.error("[webhooks/shopify] inventory restore:", invErr);
+    }
+  }
+
+  if (isMoneybirdConfigured()) {
+    try {
+      await deleteSalesInvoiceForShopifyOrderId(shopifyOrderId);
+    } catch (mbErr) {
+      console.error("[webhooks/shopify] moneybird invoice delete:", mbErr);
+    }
+  }
+
+  for (const ownerEmail of allAccountEmails()) {
+    await supabase
+      .from("pakketjes_orders")
+      .delete()
+      .eq("owner_email", ownerEmail)
+      .eq("shopify_order_id", shopifyOrderId);
+    await supabase
+      .from("orders")
+      .delete()
+      .eq("owner_email", ownerEmail)
+      .eq("order_id", shopifyOrderId)
+      .eq("source", "shopify");
+  }
+
+  await supabase
+    .from("moneybird_shopify_invoice_locks")
+    .delete()
+    .eq("shopify_order_id", shopifyOrderId);
+}
+
+type RitjesInsertRow = ReturnType<typeof mapShopifyOrderToRitjesRow> & {
+  owner_email: string;
+};
+
+async function insertRitjesRow(
+  supabase: SupabaseClient,
+  insertRow: RitjesInsertRow
+): Promise<string | null> {
+  const { data: d1, error: e1 } = await supabase
+    .from("orders")
+    .insert(insertRow)
+    .select("id")
+    .single();
+
+  if (!e1) return d1?.id ?? null;
+
+  console.error("[webhooks/shopify] Supabase insert error:", e1.message);
+  if (e1.message?.includes("line_items_json")) {
+    const { line_items_json: _omit, ...rowWithoutJson } = insertRow;
+    const { data: d2, error: e2 } = await supabase
+      .from("orders")
+      .insert(rowWithoutJson)
+      .select("id")
+      .single();
+    if (e2) {
+      console.error("[webhooks/shopify] Definitieve insert-fout:", e2);
+      throw new Error(e2.message);
+    }
+    return d2?.id ?? null;
+  }
+  throw new Error(e1.message);
+}
+
 export async function POST(request: NextRequest) {
   try {
     const raw = await request.text();
@@ -124,55 +251,52 @@ export async function POST(request: NextRequest) {
     }
 
     const order = JSON.parse(raw) as ShopifyOrder;
-
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     const shopifyOrderId = String(order.id ?? "").trim();
+    const isCreate = topic === "orders/create";
+    const isUpdate = topic === "orders/updated";
+    const isDelete = topic === "orders/deleted" || topic === "orders/delete";
 
-    // Annulering: voorraad terug, uit ritjes/pakketjes, geen Moneybird-factuur.
-    if (order.cancelled_at) {
-      try {
-        await restoreInventoryForShopifyOrder(supabase, order);
-      } catch (invErr) {
-        console.error("[webhooks/shopify] inventory restore on cancel:", invErr);
+    // Verwijderen / annuleren
+    if (isDelete || Boolean(order.cancelled_at)) {
+      if (!shopifyOrderId) {
+        return NextResponse.json({ ok: true, skipped: "missing_order_id" }, { status: 200 });
       }
-
-      if (shopifyOrderId) {
-        for (const ownerEmail of allAccountEmails()) {
-          if (!shopifyWebhookOrderAppliesToOwner(ownerEmail, order.note)) {
-            continue;
-          }
-          await supabase
-            .from("pakketjes_orders")
-            .delete()
-            .eq("owner_email", ownerEmail)
-            .eq("shopify_order_id", shopifyOrderId);
-          await supabase
-            .from("orders")
-            .delete()
-            .eq("owner_email", ownerEmail)
-            .eq("order_id", shopifyOrderId)
-            .eq("source", "shopify");
-        }
-      }
-
+      await removeShopifyOrderEverywhere(
+        supabase,
+        shopifyOrderId,
+        isDelete && !order.line_items ? null : order
+      );
       return NextResponse.json(
-        { ok: true, cancelled: true, shopifyOrderId: shopifyOrderId || null },
+        {
+          ok: true,
+          deleted: true,
+          reason: isDelete ? "orders/deleted" : "cancelled",
+          shopifyOrderId,
+        },
         { status: 200 }
       );
     }
 
-    try {
-      await deductInventoryForShopifyOrder(supabase, order);
-    } catch (invErr) {
-      console.error("[webhooks/shopify] inventory deduct:", invErr);
+    if (!isCreate && !isUpdate) {
+      return NextResponse.json({ ok: true, skipped: "unhandled_topic", topic }, { status: 200 });
     }
 
-    // Moneybird: create alleen bij orders/create; update alleen concept bij orders/updated.
+    // Voorraad: create = aftrekken; update = hersync (terug + opnieuw); delete/cancel = restore.
+    try {
+      if (isCreate) {
+        await deductInventoryForShopifyOrder(supabase, order);
+      } else if (isUpdate) {
+        await syncInventoryForShopifyOrderUpdate(supabase, order);
+      }
+    } catch (invErr) {
+      console.error("[webhooks/shopify] inventory:", invErr);
+    }
+
+    // Moneybird: create alleen bij create; draft-update alleen bij update (bestaande factuur).
     if (isMoneybirdConfigured()) {
       try {
-        if (topic === "orders/create" || topic === "orders/updated") {
-          await syncSalesInvoiceFromShopifyOrder(supabase, order, topic);
-        }
+        await syncSalesInvoiceFromShopifyOrder(supabase, order, topic);
       } catch (mbErr) {
         console.error("[webhooks/shopify] moneybird invoice:", mbErr);
       }
@@ -182,6 +306,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // ── Pakketjes ──────────────────────────────────────────────────────────
     const { data: cutoffRows } = await supabase
       .from("pakketjes_owner_cutoff")
       .select("owner_email, ignore_shopify_created_before");
@@ -191,39 +316,31 @@ export async function POST(request: NextRequest) {
         r.ignore_shopify_created_before,
       ])
     );
-
-    const shopifyOrderIdForPakketjes = String(order.id ?? "").trim();
     const orderCreatedMs = shopifyOrderCreatedAt(order).getTime();
 
-    if (shopifyOrderIdForPakketjes) {
+    if (shopifyOrderId) {
       for (const ownerEmail of allAccountEmails()) {
         if (!shopifyWebhookOrderAppliesToOwner(ownerEmail, order.note)) {
-          await supabase
-            .from("pakketjes_orders")
-            .delete()
-            .eq("owner_email", ownerEmail)
-            .eq("shopify_order_id", shopifyOrderIdForPakketjes);
           continue;
         }
 
         const cutoffIso = cutoffByOwner.get(ownerEmail);
-        if (cutoffIso) {
-          const cutoffMs = new Date(cutoffIso).getTime();
-          if (orderCreatedMs < cutoffMs) {
-            await supabase
-              .from("pakketjes_orders")
-              .delete()
-              .eq("owner_email", ownerEmail)
-              .eq("shopify_order_id", shopifyOrderIdForPakketjes);
-            continue;
-          }
+        if (cutoffIso && orderCreatedMs < new Date(cutoffIso).getTime()) {
+          continue;
         }
+
+        const { data: existingPakket } = await supabase
+          .from("pakketjes_orders")
+          .select("id")
+          .eq("owner_email", ownerEmail)
+          .eq("shopify_order_id", shopifyOrderId)
+          .maybeSingle();
 
         if (qualifiesForPakketjes(order)) {
           const total = parseFloat(String(order.total_price ?? 0));
           const row = {
             owner_email: ownerEmail,
-            shopify_order_id: shopifyOrderIdForPakketjes,
+            shopify_order_id: shopifyOrderId,
             order_nummer: String(order.name ?? ""),
             naam: pakketjesCustomerName(order),
             adres: shopifyOrderDisplayAdres(order),
@@ -231,33 +348,45 @@ export async function POST(request: NextRequest) {
             totaal_prijs: total,
             fulfillment_status: order.fulfillment_status ?? null,
           };
-          const { error: pErr } = await supabase.from("pakketjes_orders").upsert(row, {
-            onConflict: "owner_email,shopify_order_id",
-          });
-          if (pErr) {
-            console.error("[webhooks/shopify] pakketjes upsert:", pErr.message);
+
+          if (isCreate) {
+            const { error: pErr } = await supabase.from("pakketjes_orders").upsert(row, {
+              onConflict: "owner_email,shopify_order_id",
+            });
+            if (pErr) console.error("[webhooks/shopify] pakketjes upsert:", pErr.message);
+          } else if (existingPakket?.id) {
+            // Update: alleen als de pakketjes-rij al bestaat — nooit nieuw aanmaken.
+            const { error: pErr } = await supabase
+              .from("pakketjes_orders")
+              .update({
+                order_nummer: row.order_nummer,
+                naam: row.naam,
+                adres: row.adres,
+                items: row.items,
+                totaal_prijs: row.totaal_prijs,
+                fulfillment_status: row.fulfillment_status,
+              })
+              .eq("id", existingPakket.id);
+            if (pErr) console.error("[webhooks/shopify] pakketjes update:", pErr.message);
           }
-        } else {
-          await supabase
-            .from("pakketjes_orders")
-            .delete()
-            .eq("owner_email", ownerEmail)
-            .eq("shopify_order_id", shopifyOrderIdForPakketjes);
+        } else if (existingPakket?.id) {
+          // Voldoet niet meer → verwijderen (alleen als rij al bestond).
+          await supabase.from("pakketjes_orders").delete().eq("id", existingPakket.id);
         }
       }
     }
 
-    if (!passesRitjesFilter(order)) {
-      return NextResponse.json({ ok: true, skipped: "ritjes_filter" }, { status: 200 });
-    }
-
+    // ── Ritjes ─────────────────────────────────────────────────────────────
     const insertedOrUpdatedIds: string[] = [];
+
     for (const ownerEmail of allAccountEmails()) {
       if (!shopifyWebhookOrderAppliesToOwner(ownerEmail, order.note)) {
         continue;
       }
+
       const productRules = await loadProductDefaultItemsRules(supabase, ownerEmail);
       const row = mapShopifyOrderToRitjesRow(order, productRules);
+      if (!row.order_id) continue;
 
       const { data: existing } = await supabase
         .from("orders")
@@ -267,7 +396,7 @@ export async function POST(request: NextRequest) {
         .eq("source", "shopify")
         .maybeSingle();
 
-      const insertRow = {
+      const insertRow: RitjesInsertRow = {
         owner_email: ownerEmail,
         source: row.source,
         type: row.type,
@@ -297,7 +426,11 @@ export async function POST(request: NextRequest) {
         line_items_json: row.line_items_json,
       };
 
-      if (existing) {
+      // UPDATE-pad: alleen als de order al in de bezorgplanner staat.
+      if (isUpdate) {
+        if (!existing) {
+          continue;
+        }
         if (isOrderMarkedCompleted(existing)) {
           if (String(existing.status ?? "") === "ritjes_vandaag" && existing.afgerond_at) {
             await supabase
@@ -308,8 +441,12 @@ export async function POST(request: NextRequest) {
           continue;
         }
 
-        // Ingeplande orders: geen planning-velden overschrijven (voorkomt dat bevroren
-        // datum_opmerking weer "vandaag" wordt en orders terug in Lijst Sjoerd belanden).
+        if (!passesRitjesFilter(order)) {
+          // Voldoet niet meer → uit ritjes (planning_slots cascaden mee).
+          await supabase.from("orders").delete().eq("id", existing.id);
+          continue;
+        }
+
         const { data: activeSlot } = await supabase
           .from("planning_slots")
           .select("id")
@@ -338,40 +475,26 @@ export async function POST(request: NextRequest) {
         continue;
       }
 
-      let inserted: { id: string } | null = null;
-      let insertError = null;
-      const { data: d1, error: e1 } = await supabase
-        .from("orders")
-        .insert(insertRow)
-        .select("id")
-        .single();
-
-      if (e1) {
-        console.error("[webhooks/shopify] Supabase insert error:", e1.message);
-        if (e1.message?.includes("line_items_json")) {
-          const { line_items_json: _omit, ...rowWithoutJson } = insertRow;
-          const { data: d2, error: e2 } = await supabase
-            .from("orders")
-            .insert(rowWithoutJson)
-            .select("id")
-            .single();
-          inserted = d2;
-          insertError = e2;
-        } else {
-          insertError = e1;
-        }
-      } else {
-        inserted = d1;
+      // CREATE-pad: nieuwe rij (of update als create-webhook opnieuw komt).
+      if (!passesRitjesFilter(order)) {
+        continue;
       }
 
-      if (insertError) {
-        console.error("[webhooks/shopify] Definitieve insert-fout:", insertError);
-        return NextResponse.json({ error: insertError.message }, { status: 500 });
+      if (existing) {
+        if (isOrderMarkedCompleted(existing)) continue;
+        await supabase.from("orders").update(insertRow).eq("id", existing.id);
+        insertedOrUpdatedIds.push(existing.id);
+        continue;
       }
-      if (inserted?.id) insertedOrUpdatedIds.push(inserted.id);
+
+      const insertedId = await insertRitjesRow(supabase, insertRow);
+      if (insertedId) insertedOrUpdatedIds.push(insertedId);
     }
 
-    return NextResponse.json({ ok: true, ids: insertedOrUpdatedIds }, { status: 200 });
+    return NextResponse.json(
+      { ok: true, topic, ids: insertedOrUpdatedIds },
+      { status: 200 }
+    );
   } catch (e) {
     console.error("[webhooks/shopify]", e);
     return NextResponse.json(
