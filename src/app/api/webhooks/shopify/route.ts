@@ -167,7 +167,7 @@ export async function POST(request: NextRequest) {
     // Reference = shopify:{id} zodat de Moneybird-webhook geen dubbele aftrek doet.
     if (isMoneybirdConfigured()) {
       try {
-        await createSalesInvoiceFromShopifyOrder(order);
+        await createSalesInvoiceFromShopifyOrder(supabase, order);
       } catch (mbErr) {
         console.error("[webhooks/shopify] moneybird invoice:", mbErr);
       }

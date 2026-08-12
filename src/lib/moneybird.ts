@@ -4,6 +4,7 @@
  */
 
 import { createHmac, timingSafeEqual } from "crypto";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { isMalyarTestOrderNote } from "@/lib/account";
 import type { ShopifyLineItem, ShopifyOrder } from "@/lib/shopify-order";
 import {
@@ -122,9 +123,73 @@ async function findSalesInvoiceByReference(
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes("Moneybird 404")) throw err;
+  }
+
+  // Fallback: lijstfilter (vindt ook als find_by_reference traag is na create).
+  try {
+    const filter = encodeURIComponent(`reference:${reference},period:this_year`);
+    const list = await moneybirdFetch<MoneybirdSalesInvoice[]>(
+      `/sales_invoices.json?filter=${filter}&per_page=10`
+    );
+    if (!Array.isArray(list) || list.length === 0) return null;
+    const exact = list.find((inv) => String(inv.reference ?? "") === reference);
+    return exact ?? list[0] ?? null;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes("Moneybird 404")) return null;
     throw err;
   }
+}
+
+async function findSalesInvoiceByReferenceWithRetry(
+  reference: string,
+  attempts = 8,
+  delayMs = 400
+): Promise<MoneybirdSalesInvoice | null> {
+  for (let i = 0; i < attempts; i++) {
+    const found = await findSalesInvoiceByReference(reference);
+    if (found) return found;
+    if (i < attempts - 1) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  return null;
+}
+
+async function acquireMoneybirdShopifyInvoiceLock(
+  supabase: SupabaseClient,
+  shopifyOrderId: string
+): Promise<"acquired" | "existing"> {
+  const { error } = await supabase
+    .from("moneybird_shopify_invoice_locks")
+    .insert({ shopify_order_id: shopifyOrderId });
+
+  if (!error) return "acquired";
+  if (error.code === "23505") return "existing";
+  console.error("[moneybird] invoice lock insert error:", error.message);
+  return "existing";
+}
+
+async function releaseMoneybirdShopifyInvoiceLock(
+  supabase: SupabaseClient,
+  shopifyOrderId: string
+): Promise<void> {
+  await supabase
+    .from("moneybird_shopify_invoice_locks")
+    .delete()
+    .eq("shopify_order_id", shopifyOrderId);
+}
+
+async function storeMoneybirdShopifyInvoiceId(
+  supabase: SupabaseClient,
+  shopifyOrderId: string,
+  moneybirdInvoiceId: string
+): Promise<void> {
+  await supabase
+    .from("moneybird_shopify_invoice_locks")
+    .update({ moneybird_invoice_id: moneybirdInvoiceId })
+    .eq("shopify_order_id", shopifyOrderId);
 }
 
 /**
@@ -294,6 +359,7 @@ function isZeroInvoiceTotal(totalIncl: number): boolean {
  * Totaal €0: geen factuur.
  */
 export async function createSalesInvoiceFromShopifyOrder(
+  supabase: SupabaseClient,
   order: ShopifyOrder
 ): Promise<MoneybirdSalesInvoice | null> {
   if (!isMoneybirdConfigured()) {
@@ -316,121 +382,151 @@ export async function createSalesInvoiceFromShopifyOrder(
   }
 
   const reference = shopifyReferenceForOrderId(shopifyOrderId);
-  const existing = await findSalesInvoiceByReference(reference);
-  if (existing) {
-    console.info(
-      "[moneybird] factuur bestaat al voor",
-      reference,
-      "— skip create",
-      existing.id
-    );
-    return existing;
-  }
-
-  const taxRateId = process.env.MONEYBIRD_TAX_RATE_ID!.trim();
-  const ledgerAccountId = process.env.MONEYBIRD_LEDGER_ACCOUNT_ID!.trim();
-
-  const contact = await findOrCreateContactForShopifyOrder(order);
-  const orderName = String(order.name ?? shopifyOrderId).trim();
-
-  const details = (order.line_items ?? [])
-    .map((li) => {
-      const description = String(li.name ?? "").trim() || "Product";
-      const amount = Math.max(1, Math.floor(Number(li.quantity ?? 1)));
-      return {
-        description: `${description} (${orderName})`,
-        price: unitPriceExclApprox(li.price),
-        amount: String(amount),
-        tax_rate_id: taxRateId,
-        ledger_account_id: ledgerAccountId,
-      };
-    })
-    .filter((d) => d.description);
-
-  if (details.length === 0) {
-    console.warn("[moneybird] geen line items voor order", shopifyOrderId);
-    return null;
-  }
-
-  const detailsTotalExcl = details.reduce(
-    (sum, d) => sum + (parseFloat(d.price) || 0) * (parseFloat(d.amount) || 0),
-    0
-  );
-  if (detailsTotalExcl < 0.01) {
-    console.info(
-      "[moneybird] factuurregels totaal €0 — geen factuur",
-      shopifyOrderId,
-      order.name ?? ""
-    );
-    return null;
-  }
-
-  const payload = {
-    sales_invoice: {
-      contact_id: contact.id,
-      reference,
-      currency: "EUR",
-      prices_are_incl_tax: false,
-      details_attributes: details,
-    },
-  };
-
-  let created = await moneybirdFetch<MoneybirdSalesInvoice>("/sales_invoices.json", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-
-  const isMalyarTest = isMalyarTestOrderNote(order.note);
-  const shouldFinalize =
-    !isMalyarTest &&
-    Number.isFinite(totalIncl) &&
-    totalIncl > 0 &&
-    totalIncl < AUTO_FINALIZE_INVOICE_BELOW_EUR;
-
-  if (shouldFinalize && created.id) {
-    try {
-      const email =
-        String(order.email ?? order.contact_email ?? order.customer?.email ?? "")
-          .trim() || undefined;
-      created = await moneybirdFetch<MoneybirdSalesInvoice>(
-        `/sales_invoices/${created.id}/send_invoice.json`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({
-            sales_invoice_sending: {
-              delivery_method: "Email",
-              ...(email ? { email_address: email } : {}),
-            },
-          }),
-        }
-      );
+  const lock = await acquireMoneybirdShopifyInvoiceLock(supabase, shopifyOrderId);
+  if (lock === "existing") {
+    const existing = await findSalesInvoiceByReferenceWithRetry(reference);
+    if (existing) {
       console.info(
-        "[moneybird] factuur verstuurd per e-mail",
+        "[moneybird] factuur bestaat al (lock) voor",
+        reference,
+        "— skip create",
+        existing.id
+      );
+      return existing;
+    }
+    console.warn(
+      "[moneybird] invoice lock bestaat maar geen factuur gevonden voor",
+      reference,
+      "— skip create"
+    );
+    return null;
+  }
+
+  let created: MoneybirdSalesInvoice | null = null;
+  try {
+    const existing = await findSalesInvoiceByReference(reference);
+    if (existing) {
+      console.info(
+        "[moneybird] factuur bestaat al voor",
+        reference,
+        "— skip create",
+        existing.id
+      );
+      created = existing;
+      return existing;
+    }
+
+    const taxRateId = process.env.MONEYBIRD_TAX_RATE_ID!.trim();
+    const ledgerAccountId = process.env.MONEYBIRD_LEDGER_ACCOUNT_ID!.trim();
+
+    const contact = await findOrCreateContactForShopifyOrder(order);
+    const orderName = String(order.name ?? shopifyOrderId).trim();
+
+    const details = (order.line_items ?? [])
+      .map((li) => {
+        const description = String(li.name ?? "").trim() || "Product";
+        const amount = Math.max(1, Math.floor(Number(li.quantity ?? 1)));
+        return {
+          description: `${description} (${orderName})`,
+          price: unitPriceExclApprox(li.price),
+          amount: String(amount),
+          tax_rate_id: taxRateId,
+          ledger_account_id: ledgerAccountId,
+        };
+      })
+      .filter((d) => d.description);
+
+    if (details.length === 0) {
+      console.warn("[moneybird] geen line items voor order", shopifyOrderId);
+      return null;
+    }
+
+    const detailsTotalExcl = details.reduce(
+      (sum, d) => sum + (parseFloat(d.price) || 0) * (parseFloat(d.amount) || 0),
+      0
+    );
+    if (detailsTotalExcl < 0.01) {
+      console.info(
+        "[moneybird] factuurregels totaal €0 — geen factuur",
+        shopifyOrderId,
+        order.name ?? ""
+      );
+      return null;
+    }
+
+    const payload = {
+      sales_invoice: {
+        contact_id: contact.id,
+        reference,
+        currency: "EUR",
+        prices_are_incl_tax: false,
+        details_attributes: details,
+      },
+    };
+
+    created = await moneybirdFetch<MoneybirdSalesInvoice>("/sales_invoices.json", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+
+    const isMalyarTest = isMalyarTestOrderNote(order.note);
+    const shouldFinalize =
+      !isMalyarTest &&
+      Number.isFinite(totalIncl) &&
+      totalIncl > 0 &&
+      totalIncl < AUTO_FINALIZE_INVOICE_BELOW_EUR;
+
+    if (shouldFinalize && created.id) {
+      try {
+        const email =
+          String(order.email ?? order.contact_email ?? order.customer?.email ?? "")
+            .trim() || undefined;
+        created = await moneybirdFetch<MoneybirdSalesInvoice>(
+          `/sales_invoices/${created.id}/send_invoice.json`,
+          {
+            method: "PATCH",
+            body: JSON.stringify({
+              sales_invoice_sending: {
+                delivery_method: "Email",
+                ...(email ? { email_address: email } : {}),
+              },
+            }),
+          }
+        );
+        console.info(
+          "[moneybird] factuur verstuurd per e-mail",
+          created.id,
+          "voor Shopify",
+          orderName,
+          `(totaal €${totalIncl.toFixed(2)} < ${AUTO_FINALIZE_INVOICE_BELOW_EUR})`,
+          email ? `→ ${email}` : ""
+        );
+      } catch (sendErr) {
+        console.error(
+          "[moneybird] send_invoice mislukt — factuur blijft draft",
+          created.id,
+          sendErr
+        );
+      }
+    } else {
+      console.info(
+        "[moneybird] draft factuur aangemaakt",
         created.id,
         "voor Shopify",
         orderName,
-        `(totaal €${totalIncl.toFixed(2)} < ${AUTO_FINALIZE_INVOICE_BELOW_EUR})`,
-        email ? `→ ${email}` : ""
-      );
-    } catch (sendErr) {
-      console.error(
-        "[moneybird] send_invoice mislukt — factuur blijft draft",
-        created.id,
-        sendErr
+        Number.isFinite(totalIncl) ? `(totaal €${totalIncl.toFixed(2)})` : "",
+        isMalyarTest ? "(malyar-test → altijd draft)" : ""
       );
     }
-  } else {
-    console.info(
-      "[moneybird] draft factuur aangemaakt",
-      created.id,
-      "voor Shopify",
-      orderName,
-      Number.isFinite(totalIncl) ? `(totaal €${totalIncl.toFixed(2)})` : "",
-      isMalyarTest ? "(malyar-test → altijd draft)" : ""
-    );
-  }
 
-  return created;
+    return created;
+  } finally {
+    if (created?.id) {
+      await storeMoneybirdShopifyInvoiceId(supabase, shopifyOrderId, created.id);
+    } else {
+      await releaseMoneybirdShopifyInvoiceLock(supabase, shopifyOrderId);
+    }
+  }
 }
 
 export type MoneybirdProduct = {
