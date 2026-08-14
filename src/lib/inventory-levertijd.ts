@@ -217,20 +217,139 @@ export async function syncInventoryLevertijdFromShopifyMetafields(
   return { checked: list.length, updated, skipped };
 }
 
-/** Na product-webhook: levertijd voor dit Shopify-product verversen. */
+const DUTCH_MONTH_TO_NUM: Record<string, number> = {
+  januari: 1,
+  februari: 2,
+  maart: 3,
+  april: 4,
+  mei: 5,
+  juni: 6,
+  juli: 7,
+  augustus: 8,
+  september: 9,
+  oktober: 10,
+  november: 11,
+  december: 12,
+};
+
+/** Parse weergave zoals "21 augustus 2026" terug naar YYYY-MM-DD. */
+export function parseDutchLongDateToIso(raw: string | null | undefined): string | null {
+  const s = String(raw ?? "").trim().toLowerCase();
+  const m = s.match(/^(\d{1,2})\s+([a-zë]+)\s+(\d{4})$/i);
+  if (!m) return null;
+  const day = Number(m[1]);
+  const month = DUTCH_MONTH_TO_NUM[m[2]];
+  const year = Number(m[3]);
+  if (!month || !Number.isFinite(day) || !Number.isFinite(year)) return null;
+  if (day < 1 || day > 31 || year < 2000) return null;
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+/**
+ * Na product-webhook: metafields ophalen en levertijd alleen schrijven als die wijzigt.
+ */
 export async function syncInventoryLevertijdForShopifyProduct(
   supabase: SupabaseClient,
   ownerEmail: string,
   shopifyProductId: number
-): Promise<void> {
-  if (!Number.isFinite(shopifyProductId) || shopifyProductId <= 0) return;
+): Promise<{ updated: boolean; skipped: boolean; next: string | null }> {
+  if (!Number.isFinite(shopifyProductId) || shopifyProductId <= 0) {
+    return { updated: false, skipped: true, next: null };
+  }
 
   const meta = await fetchLevertijdMetafieldsForProduct(shopifyProductId);
   const next = resolveInventoryLevertijdFromMetafields(meta.levertijd, meta.restockDatum);
 
-  await supabase
+  const { data: rows, error } = await supabase
     .from("inventory_products")
-    .update({ levertijd: next })
+    .select("id, levertijd")
     .eq("owner_email", ownerEmail)
     .eq("shopify_product_id", shopifyProductId);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const list = rows ?? [];
+  if (list.length === 0) {
+    return { updated: false, skipped: true, next };
+  }
+
+  let updatedAny = false;
+  for (const row of list) {
+    const current = row.levertijd == null ? null : String(row.levertijd);
+    if (current === next) continue;
+
+    const { error: updErr } = await supabase
+      .from("inventory_products")
+      .update({ levertijd: next })
+      .eq("id", row.id)
+      .eq("owner_email", ownerEmail);
+
+    if (updErr) {
+      console.error("[inventory-levertijd] product update failed", row.id, updErr.message);
+      continue;
+    }
+    updatedAny = true;
+  }
+
+  if (!updatedAny) {
+    console.info(
+      "[inventory-levertijd] product update — levertijd al in sync, skip",
+      shopifyProductId
+    );
+  }
+
+  return { updated: updatedAny, skipped: !updatedAny, next };
+}
+
+/**
+ * Lichte ochtendcheck: alleen rijen waarvan de getoonde levertijd een
+ * (inmiddels verstreken) restock-datum is opnieuw resolven via metafields.
+ * Geen bulk-fetch van alle producten.
+ */
+export async function syncInventoryLevertijdPastRestockDates(
+  supabase: SupabaseClient,
+  ownerEmail: string
+): Promise<{ checked: number; updated: number; skipped: number }> {
+  const today = getAmsterdamCalendarDate(0);
+
+  const { data: rows, error } = await supabase
+    .from("inventory_products")
+    .select("id, shopify_product_id, levertijd")
+    .eq("owner_email", ownerEmail)
+    .not("levertijd", "is", null);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  let checked = 0;
+  let updated = 0;
+  let skipped = 0;
+
+  for (const row of rows ?? []) {
+    const iso = parseDutchLongDateToIso(row.levertijd);
+    if (!iso || iso > today) {
+      skipped++;
+      continue;
+    }
+
+    const productId = Number(row.shopify_product_id);
+    if (!Number.isFinite(productId) || productId <= 0) {
+      skipped++;
+      continue;
+    }
+
+    checked++;
+    const result = await syncInventoryLevertijdForShopifyProduct(
+      supabase,
+      ownerEmail,
+      productId
+    );
+    if (result.updated) updated++;
+    else skipped++;
+  }
+
+  return { checked, updated, skipped };
 }

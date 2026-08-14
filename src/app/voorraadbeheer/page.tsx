@@ -383,7 +383,7 @@ export default function VoorraadbeheerPage() {
         <label className="block text-xs font-medium text-stone-500">
           Levertijd{" "}
           <span className="font-normal normal-case text-stone-400">
-            (uit Shopify metafields; dagelijks + bij product-update)
+            (uit Shopify metafields; bij product-update)
           </span>
         </label>
         <input

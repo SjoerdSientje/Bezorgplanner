@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { getInventoryScanOwnerEmail } from "@/lib/account";
 import { pruneInactiveInventoryProducts } from "@/lib/inventory";
-import { syncInventoryLevertijdFromShopifyMetafields } from "@/lib/inventory-levertijd";
+import { syncInventoryLevertijdPastRestockDates } from "@/lib/inventory-levertijd";
 import { getAmsterdamCalendarDate } from "@/lib/planning-date";
 import { isShopifyAdminConfigured } from "@/lib/shopify-admin";
 
@@ -10,12 +10,15 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 /**
- * Dagelijks ~07:00 Amsterdam: levertijd in voorraad syncen vanuit
- * custom.levertijd + custom.restock_datum (geen metafield-webhook).
+ * Dagelijks ~07:00 Amsterdam:
+ * - inactieve Shopify-producten uit voorraad prune’en
+ * - alleen verlopen restock-datums in levertijd herberekenen
+ *
+ * Levertijd zelf sync’t bij products/create|update (alleen schrijven bij wijziging).
+ * Geen ochtend-bulk van alle metafields meer.
  *
  * Auth: Authorization Bearer CRON_SECRET (Vercel Cron), of ?force=1 met secret.
  * Schedule in vercel.json: 05:00 UTC (Hobby: 1× per dag) ≈ 07:00 zomer / 06:00 winter.
- * Handler runt om 6 of 7 uur Amsterdam (tenzij force).
  */
 function isAuthorized(request: NextRequest): boolean {
   const secret = process.env.CRON_SECRET?.trim();
@@ -74,7 +77,10 @@ export async function GET(request: NextRequest) {
 
   try {
     const pruned = await pruneInactiveInventoryProducts(supabase, ownerEmail);
-    const result = await syncInventoryLevertijdFromShopifyMetafields(supabase, ownerEmail);
+    const restockRollover = await syncInventoryLevertijdPastRestockDates(
+      supabase,
+      ownerEmail
+    );
     return NextResponse.json({
       ok: true,
       ownerEmail,
@@ -82,7 +88,7 @@ export async function GET(request: NextRequest) {
       amsterdamHour: hour,
       forced: force,
       pruned,
-      ...result,
+      restockRollover,
     });
   } catch (e) {
     console.error("[cron/inventory-levertijd]", e);

@@ -99,7 +99,18 @@ async function handleProductWebhook(
   const result = await syncInventoryProductFromShopify(supabase, ownerEmail, product);
 
   try {
-    await syncInventoryLevertijdForShopifyProduct(supabase, ownerEmail, Number(product.id));
+    const lever = await syncInventoryLevertijdForShopifyProduct(
+      supabase,
+      ownerEmail,
+      Number(product.id)
+    );
+    if (lever.updated) {
+      console.info(
+        "[webhooks/shopify] levertijd bijgewerkt",
+        product.id,
+        lever.next
+      );
+    }
   } catch (leverErr) {
     console.error("[webhooks/shopify] levertijd metafield sync:", leverErr);
   }
