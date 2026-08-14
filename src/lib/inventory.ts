@@ -542,29 +542,13 @@ export async function syncInventoryFromShopify(
     existingRows
   );
 
-  let removed = 0;
-
-  const inactiveProductIds = allProducts
-    .filter((product) => !isShopifyProductActive(product) || isExcludedFromInventory(product))
-    .map((product) => product.id);
-
-  if (inactiveProductIds.length > 0) {
-    // Chunk .in() to avoid PostgREST URL limits.
-    const chunkSize = 100;
-    for (let i = 0; i < inactiveProductIds.length; i += chunkSize) {
-      const chunk = inactiveProductIds.slice(i, i + chunkSize);
-      const { data: deletedRows, error: deleteErr } = await supabase
-        .from("inventory_products")
-        .delete()
-        .eq("owner_email", ownerEmail)
-        .in("shopify_product_id", chunk)
-        .select("id");
-
-      if (!deleteErr) {
-        removed += deletedRows?.length ?? 0;
-      }
-    }
-  }
+  // Alles wat niet meer in de actieve catalogus-groep zit (draft/archief/verwijderd) eruit.
+  const keepGroupKeys = new Set(groups.keys());
+  const removed = await pruneInventoryProductsOutsideGroupKeys(
+    supabase,
+    ownerEmail,
+    keepGroupKeys
+  );
 
   const { data: excludedByTitle, error: titleDeleteErr } = await supabase
     .from("inventory_products")
@@ -575,11 +559,70 @@ export async function syncInventoryFromShopify(
     )
     .select("id");
 
+  let removedTotal = removed;
   if (!titleDeleteErr) {
-    removed += excludedByTitle?.length ?? 0;
+    removedTotal += excludedByTitle?.length ?? 0;
   }
 
-  return { inserted, updated, removed, total: variantCount };
+  return { inserted, updated, removed: removedTotal, total: variantCount };
+}
+
+/**
+ * Verwijder voorraadrijen waarvan de group_key niet meer in de actieve Shopify-catalogus zit.
+ * Zo verdwijnen draft/archief/verwijderde producten (visueel) uit voorraadbeheer.
+ */
+export async function pruneInventoryProductsOutsideGroupKeys(
+  supabase: SupabaseClient,
+  ownerEmail: string,
+  keepGroupKeys: Set<string>
+): Promise<number> {
+  const { data: rows, error } = await supabase
+    .from("inventory_products")
+    .select("id, group_key")
+    .eq("owner_email", ownerEmail);
+
+  if (error) {
+    console.error("[inventory] prune list error:", error.message);
+    return 0;
+  }
+
+  const orphanIds = (rows ?? [])
+    .filter((row) => !keepGroupKeys.has(String(row.group_key ?? "")))
+    .map((row) => row.id as string);
+
+  if (orphanIds.length === 0) return 0;
+
+  let removed = 0;
+  const chunkSize = 100;
+  for (let i = 0; i < orphanIds.length; i += chunkSize) {
+    const chunk = orphanIds.slice(i, i + chunkSize);
+    const { data: deletedRows, error: deleteErr } = await supabase
+      .from("inventory_products")
+      .delete()
+      .in("id", chunk)
+      .select("id");
+    if (!deleteErr) removed += deletedRows?.length ?? 0;
+  }
+  return removed;
+}
+
+/**
+ * Actieve Shopify-catalogus → group_keys → prune inactieve/ontbrekende voorraadrijen.
+ * Bruikbaar voor dagelijkse cron zonder volledige upsert.
+ */
+export async function pruneInactiveInventoryProducts(
+  supabase: SupabaseClient,
+  ownerEmail: string
+): Promise<number> {
+  const products = (await fetchAllShopifyProducts({ status: "active" })).filter(
+    (product) => !isExcludedFromInventory(product)
+  );
+  const groups = buildInventoryGroups(products);
+  return pruneInventoryProductsOutsideGroupKeys(
+    supabase,
+    ownerEmail,
+    new Set(groups.keys())
+  );
 }
 
 export async function getInventoryStats(

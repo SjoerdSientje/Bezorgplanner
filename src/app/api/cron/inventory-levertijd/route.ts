@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { getInventoryScanOwnerEmail } from "@/lib/account";
+import { pruneInactiveInventoryProducts } from "@/lib/inventory";
 import { syncInventoryLevertijdFromShopifyMetafields } from "@/lib/inventory-levertijd";
 import { getAmsterdamCalendarDate } from "@/lib/planning-date";
 import { isShopifyAdminConfigured } from "@/lib/shopify-admin";
@@ -72,6 +73,7 @@ export async function GET(request: NextRequest) {
   const ownerEmail = getInventoryScanOwnerEmail();
 
   try {
+    const pruned = await pruneInactiveInventoryProducts(supabase, ownerEmail);
     const result = await syncInventoryLevertijdFromShopifyMetafields(supabase, ownerEmail);
     return NextResponse.json({
       ok: true,
@@ -79,6 +81,7 @@ export async function GET(request: NextRequest) {
       amsterdamDate: getAmsterdamCalendarDate(0),
       amsterdamHour: hour,
       forced: force,
+      pruned,
       ...result,
     });
   } catch (e) {
