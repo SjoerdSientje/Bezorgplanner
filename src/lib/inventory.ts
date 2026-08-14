@@ -50,6 +50,8 @@ export type InventoryProductRow = {
   model_name: string | null;
   color_name: string | null;
   shopify_variant_ids: number[];
+  levertijd: string | null;
+  opmerking: string | null;
   last_mutation_source: InventorySource | null;
   created_at: string;
   updated_at: string;

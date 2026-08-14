@@ -50,6 +50,55 @@ export async function GET(request: NextRequest) {
   }
 }
 
+/** Levertijd / opmerking bijwerken (blijft behouden bij Shopify-sync). */
+export async function PATCH(request: NextRequest) {
+  try {
+    requireAccountEmail(request);
+    const ownerEmail = getInventoryOwnerEmail(request);
+    const body = await request.json().catch(() => ({}));
+    const productId = String(body.productId ?? "").trim();
+    if (!productId) {
+      return NextResponse.json({ error: "productId is verplicht." }, { status: 400 });
+    }
+
+    const updates: { levertijd?: string | null; opmerking?: string | null } = {};
+    if ("levertijd" in body) {
+      const v = body.levertijd == null ? "" : String(body.levertijd).trim();
+      updates.levertijd = v || null;
+    }
+    if ("opmerking" in body) {
+      const v = body.opmerking == null ? "" : String(body.opmerking).trim();
+      updates.opmerking = v || null;
+    }
+    if (Object.keys(updates).length === 0) {
+      return NextResponse.json({ error: "Geen velden om bij te werken." }, { status: 400 });
+    }
+
+    const supabase = createServerSupabaseClient();
+    const { data, error } = await supabase
+      .from("inventory_products")
+      .update(updates)
+      .eq("id", productId)
+      .eq("owner_email", ownerEmail)
+      .select("*")
+      .maybeSingle();
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    if (!data) {
+      return NextResponse.json({ error: "Product niet gevonden." }, { status: 404 });
+    }
+
+    return NextResponse.json({ ok: true, product: data });
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "Bijwerken mislukt." },
+      { status: 500 }
+    );
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     requireAccountEmail(request);

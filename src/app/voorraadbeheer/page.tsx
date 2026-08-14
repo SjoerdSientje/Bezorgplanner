@@ -74,7 +74,7 @@ function sourceLabel(source: InventorySource | null): string {
 function matchesInventorySearch(product: InventoryProductRow, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
-  const hay = `${product.title} ${product.model_name ?? ""} ${product.color_name ?? ""} ${product.category}`.toLowerCase();
+  const hay = `${product.title} ${product.model_name ?? ""} ${product.color_name ?? ""} ${product.category} ${product.levertijd ?? ""} ${product.opmerking ?? ""}`.toLowerCase();
   return hay.includes(q);
 }
 
@@ -105,7 +105,10 @@ export default function VoorraadbeheerPage() {
   const [mutationType, setMutationType] = useState<MutationType>("inkomend");
   const [quantity, setQuantity] = useState("1");
   const [note, setNote] = useState("");
+  const [editLevertijd, setEditLevertijd] = useState("");
+  const [editOpmerking, setEditOpmerking] = useState("");
   const [saving, setSaving] = useState(false);
+  const [savingMeta, setSavingMeta] = useState(false);
 
   const load = useCallback(async (runSync = false) => {
     if (runSync) setSyncing(true);
@@ -200,6 +203,8 @@ export default function VoorraadbeheerPage() {
 
   const openEditModal = (product: InventoryProductRow) => {
     setEditProduct(product);
+    setEditLevertijd(product.levertijd ?? "");
+    setEditOpmerking(product.opmerking ?? "");
     resetMutationForm();
     setError(null);
   };
@@ -226,16 +231,49 @@ export default function VoorraadbeheerPage() {
     const found = products.find((p) => p.id === result.inventory_product_id);
     if (found) {
       setManageProduct(found);
+      setEditLevertijd(found.levertijd ?? "");
+      setEditOpmerking(found.opmerking ?? "");
     } else {
       setManageProduct({
         id: result.inventory_product_id,
         title: result.title,
         stock_quantity: result.stock_quantity ?? 0,
+        levertijd: null,
+        opmerking: null,
       } as InventoryProductRow);
+      setEditLevertijd("");
+      setEditOpmerking("");
     }
     setShopifyQuery("");
     setShopifyResults([]);
     resetMutationForm();
+  };
+
+  const saveProductMeta = async (product: InventoryProductRow) => {
+    setSavingMeta(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/inventory", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productId: product.id,
+          levertijd: editLevertijd,
+          opmerking: editOpmerking,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? "Opslaan mislukt");
+      const updated = data.product as InventoryProductRow;
+      setProducts((prev) => prev.map((p) => (p.id === updated.id ? { ...p, ...updated } : p)));
+      if (editProduct?.id === updated.id) setEditProduct({ ...editProduct, ...updated });
+      if (manageProduct?.id === updated.id) setManageProduct({ ...manageProduct, ...updated });
+      setMessage("Levertijd en opmerking opgeslagen.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Opslaan mislukt");
+    } finally {
+      setSavingMeta(false);
+    }
   };
 
   const submitMutation = async (product: InventoryProductRow) => {
@@ -247,6 +285,17 @@ export default function VoorraadbeheerPage() {
     setSaving(true);
     setError(null);
     try {
+      // Bewaar levertijd/opmerking mee als die gewijzigd zijn.
+      await fetch("/api/inventory", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productId: product.id,
+          levertijd: editLevertijd,
+          opmerking: editOpmerking,
+        }),
+      });
+
       const res = await fetch("/api/inventory/mutate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -269,6 +318,40 @@ export default function VoorraadbeheerPage() {
     }
   };
 
+  const metaFields = (product: InventoryProductRow) => (
+    <div className="mt-3 space-y-3 rounded-xl border border-stone-100 bg-stone-50/80 p-3">
+      <p className="text-xs font-medium uppercase tracking-wide text-stone-400">Productinfo</p>
+      <div>
+        <label className="block text-xs font-medium text-stone-500">Levertijd</label>
+        <input
+          type="text"
+          value={editLevertijd}
+          onChange={(e) => setEditLevertijd(e.target.value)}
+          placeholder="bijv. 3–5 werkdagen"
+          className="mt-1 w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm"
+        />
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-stone-500">Opmerking</label>
+        <textarea
+          value={editOpmerking}
+          onChange={(e) => setEditOpmerking(e.target.value)}
+          rows={2}
+          placeholder="Optionele notitie…"
+          className="mt-1 w-full resize-y rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm"
+        />
+      </div>
+      <button
+        type="button"
+        onClick={() => saveProductMeta(product)}
+        disabled={savingMeta}
+        className="w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-xs font-medium text-koopje-black hover:bg-stone-50 disabled:opacity-50"
+      >
+        {savingMeta ? "Opslaan…" : "Alleen info opslaan"}
+      </button>
+    </div>
+  );
+
   const mutationForm = (product: InventoryProductRow, onSubmit: () => void) => (
     <>
       <p className="mt-1 text-sm text-stone-600">{product.title}</p>
@@ -277,7 +360,11 @@ export default function VoorraadbeheerPage() {
         <span className={stockClass(product.stock_quantity)}>{product.stock_quantity}</span>
       </p>
 
-      <div className="mt-4 flex gap-2">
+      {metaFields(product)}
+
+      <p className="mt-4 text-xs font-medium uppercase tracking-wide text-stone-400">Voorraadmutatie</p>
+
+      <div className="mt-2 flex gap-2">
         {(["inkomend", "uitgaand", "correctie"] as const).map((t) => (
           <button
             key={t}
@@ -305,7 +392,7 @@ export default function VoorraadbeheerPage() {
         className="mt-1 w-full rounded-lg border border-stone-200 px-3 py-2 text-sm"
       />
 
-      <label className="mt-3 block text-xs font-medium text-stone-500">Opmerking (optioneel)</label>
+      <label className="mt-3 block text-xs font-medium text-stone-500">Mutatie-opmerking (optioneel)</label>
       <input
         type="text"
         value={note}
@@ -323,7 +410,7 @@ export default function VoorraadbeheerPage() {
           disabled={saving}
           className="rounded-xl bg-koopje-orange px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
         >
-          {saving ? "Opslaan…" : "Opslaan"}
+          {saving ? "Opslaan…" : "Voorraad opslaan"}
         </button>
       </div>
     </>
@@ -475,47 +562,121 @@ export default function VoorraadbeheerPage() {
           {loading ? (
             <p className="text-sm text-stone-500">Laden…</p>
           ) : (
-            <div className="overflow-x-auto rounded-xl border border-stone-200">
-              <table className="min-w-full text-left text-sm">
-                <thead className="bg-stone-50 text-xs uppercase text-stone-500">
-                  <tr>
-                    <th className="px-4 py-3">Product</th>
-                    <th className="px-4 py-3">Categorie</th>
-                    <th className="px-4 py-3">Voorraad</th>
-                    <th className="px-4 py-3">Laatste bron</th>
-                    <th className="px-4 py-3" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {displayedProducts.map((p) => (
-                    <tr key={p.id} className="border-t border-stone-100 hover:bg-stone-50/50">
-                      <td className="px-4 py-3 font-medium text-koopje-black">{p.title}</td>
-                      <td className="px-4 py-3 capitalize text-stone-600">{p.category}</td>
-                      <td className={`px-4 py-3 ${stockClass(p.stock_quantity)}`}>{p.stock_quantity}</td>
-                      <td className="px-4 py-3 text-stone-600">{sourceLabel(p.last_mutation_source)}</td>
-                      <td className="px-4 py-3 text-right">
-                        <button
-                          type="button"
-                          onClick={() => openEditModal(p)}
-                          className="rounded-lg border border-koopje-orange px-3 py-1.5 text-xs font-medium text-koopje-orange hover:bg-koopje-orange-light"
-                        >
-                          Aanpassen
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                  {displayedProducts.length === 0 && (
+            <>
+              {/* Mobiel: kaarten */}
+              <div className="space-y-3 md:hidden">
+                {displayedProducts.map((p) => (
+                  <div
+                    key={p.id}
+                    className="rounded-xl border border-stone-200 bg-white p-4 shadow-sm"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium leading-snug text-koopje-black">{p.title}</p>
+                        <p className="mt-0.5 text-xs capitalize text-stone-500">{p.category}</p>
+                      </div>
+                      <span className={`shrink-0 text-base ${stockClass(p.stock_quantity)}`}>
+                        {p.stock_quantity}
+                      </span>
+                    </div>
+                    <div className="mt-3 grid grid-cols-1 gap-2 text-sm">
+                      <div className="flex gap-2">
+                        <span className="w-20 shrink-0 text-xs font-medium uppercase text-stone-400">
+                          Levertijd
+                        </span>
+                        <span className="min-w-0 text-stone-700">{p.levertijd?.trim() || "—"}</span>
+                      </div>
+                      <div className="flex gap-2">
+                        <span className="w-20 shrink-0 text-xs font-medium uppercase text-stone-400">
+                          Opmerking
+                        </span>
+                        <span className="min-w-0 break-words text-stone-700">
+                          {p.opmerking?.trim() || "—"}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex items-center justify-between gap-2 border-t border-stone-100 pt-3">
+                      <span className="text-xs text-stone-400">
+                        {sourceLabel(p.last_mutation_source)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => openEditModal(p)}
+                        className="rounded-lg border border-koopje-orange px-3 py-1.5 text-xs font-medium text-koopje-orange hover:bg-koopje-orange-light"
+                      >
+                        Aanpassen
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                {displayedProducts.length === 0 && (
+                  <p className="rounded-xl border border-stone-200 px-4 py-8 text-center text-stone-500">
+                    {inventorySearch.trim()
+                      ? "Geen producten gevonden voor deze zoekopdracht."
+                      : "Geen producten gevonden. Klik op \"Opnieuw syncen\"."}
+                  </p>
+                )}
+              </div>
+
+              {/* Desktop: tabel */}
+              <div className="hidden overflow-x-auto rounded-xl border border-stone-200 md:block">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="bg-stone-50 text-xs uppercase text-stone-500">
                     <tr>
-                      <td colSpan={5} className="px-4 py-8 text-center text-stone-500">
-                        {inventorySearch.trim()
-                          ? "Geen producten gevonden voor deze zoekopdracht."
-                          : "Geen producten gevonden. Klik op \"Opnieuw syncen\"."}
-                      </td>
+                      <th className="px-4 py-3">Product</th>
+                      <th className="whitespace-nowrap px-3 py-3">Cat.</th>
+                      <th className="whitespace-nowrap px-3 py-3">Voorraad</th>
+                      <th className="px-3 py-3">Levertijd</th>
+                      <th className="min-w-[10rem] px-3 py-3">Opmerking</th>
+                      <th className="hidden px-3 py-3 lg:table-cell">Bron</th>
+                      <th className="px-4 py-3" />
                     </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {displayedProducts.map((p) => (
+                      <tr key={p.id} className="border-t border-stone-100 hover:bg-stone-50/50">
+                        <td className="max-w-[14rem] px-4 py-3 font-medium text-koopje-black xl:max-w-xs">
+                          <span className="line-clamp-2">{p.title}</span>
+                        </td>
+                        <td className="px-3 py-3 capitalize text-stone-600">{p.category}</td>
+                        <td className={`px-3 py-3 ${stockClass(p.stock_quantity)}`}>
+                          {p.stock_quantity}
+                        </td>
+                        <td className="max-w-[8rem] px-3 py-3 text-stone-700">
+                          <span className="line-clamp-2">{p.levertijd?.trim() || "—"}</span>
+                        </td>
+                        <td className="max-w-[12rem] px-3 py-3 text-stone-600 xl:max-w-[16rem]">
+                          <span className="line-clamp-2" title={p.opmerking ?? undefined}>
+                            {p.opmerking?.trim() || "—"}
+                          </span>
+                        </td>
+                        <td className="hidden px-3 py-3 text-stone-500 lg:table-cell">
+                          {sourceLabel(p.last_mutation_source)}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <button
+                            type="button"
+                            onClick={() => openEditModal(p)}
+                            className="rounded-lg border border-koopje-orange px-3 py-1.5 text-xs font-medium text-koopje-orange hover:bg-koopje-orange-light"
+                          >
+                            Aanpassen
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {displayedProducts.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="px-4 py-8 text-center text-stone-500">
+                          {inventorySearch.trim()
+                            ? "Geen producten gevonden voor deze zoekopdracht."
+                            : "Geen producten gevonden. Klik op \"Opnieuw syncen\"."}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </div>
       </main>
