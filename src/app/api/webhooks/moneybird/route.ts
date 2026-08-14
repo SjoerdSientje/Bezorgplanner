@@ -49,23 +49,20 @@ function shouldDeductForAction(
   return false;
 }
 
+export async function GET() {
+  return NextResponse.json({ ok: true });
+}
+
 export async function POST(request: NextRequest) {
   try {
     const raw = await request.text();
     const signature = request.headers.get("Moneybird-Signature");
 
     if (!verifyMoneybirdWebhookSignature(raw, signature)) {
-      // Moneybird test de URL bij aanmaken van een webhook (vaak zonder geldige signature).
-      // Accepteer probes met 200; echte payloads zonder geldige signature blijven 401.
-      const looksLikeProbe =
-        !raw.trim() ||
-        raw.trim() === "{}" ||
-        (!signature && !raw.includes('"entity"'));
-      if (looksLikeProbe) {
-        return NextResponse.json({ ok: true, skipped: "unsigned_probe" }, { status: 200 });
-      }
-      console.error("[webhooks/moneybird] invalid signature");
-      return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+      // Moneybird POSTet bij webhook-aanmaak een test en eist HTTP 200 (zoals Make).
+      // Payload niet verwerken; 401 blokkeert registratie.
+      console.warn("[webhooks/moneybird] signature ontbreekt/ongeldig — skip");
+      return NextResponse.json({ ok: true, skipped: "invalid_signature" }, { status: 200 });
     }
 
     let payload: MoneybirdWebhookPayload;
