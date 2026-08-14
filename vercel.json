@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/cron/inventory-levertijd",
-      "schedule": "0 5,6 * * *"
+      "schedule": "0 5 * * *"
     }
   ]
 }

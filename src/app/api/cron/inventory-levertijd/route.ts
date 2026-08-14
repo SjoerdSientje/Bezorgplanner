@@ -14,8 +14,8 @@ export const maxDuration = 60;
  * custom.levertijd + custom.restock_datum (geen metafield-webhook).
  *
  * Auth: Authorization Bearer CRON_SECRET (Vercel Cron), of ?force=1 met secret.
- * Schedule in vercel.json: 05:00 en 06:00 UTC; handler runt alleen als Amsterdam-uur = 7
- * (tenzij force).
+ * Schedule in vercel.json: 05:00 UTC (Hobby: 1× per dag) ≈ 07:00 zomer / 06:00 winter.
+ * Handler runt om 6 of 7 uur Amsterdam (tenzij force).
  */
 function isAuthorized(request: NextRequest): boolean {
   const secret = process.env.CRON_SECRET?.trim();
@@ -48,11 +48,11 @@ export async function GET(request: NextRequest) {
     request.nextUrl.searchParams.get("force") === "true";
 
   const hour = amsterdamHourNow();
-  if (!force && hour !== 7) {
+  if (!force && hour !== 6 && hour !== 7) {
     return NextResponse.json({
       ok: true,
       skipped: true,
-      reason: "not_7am_amsterdam",
+      reason: "not_morning_amsterdam",
       amsterdamHour: hour,
       amsterdamDate: getAmsterdamCalendarDate(0),
     });
