@@ -23,6 +23,7 @@ import {
   removeInventoryProductByShopifyId,
   syncInventoryProductFromShopify,
 } from "@/lib/inventory";
+import { syncInventoryLevertijdForShopifyProduct } from "@/lib/inventory-levertijd";
 import {
   isMoneybirdConfigured,
   removeMoneybirdProductForShopifyId,
@@ -94,6 +95,12 @@ async function handleProductWebhook(
   };
 
   const result = await syncInventoryProductFromShopify(supabase, ownerEmail, product);
+
+  try {
+    await syncInventoryLevertijdForShopifyProduct(supabase, ownerEmail, Number(product.id));
+  } catch (leverErr) {
+    console.error("[webhooks/shopify] levertijd metafield sync:", leverErr);
+  }
 
   let moneybird: Record<string, unknown> = { skipped: true };
   if (isMoneybirdConfigured()) {

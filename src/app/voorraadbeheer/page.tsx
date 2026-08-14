@@ -109,6 +109,7 @@ export default function VoorraadbeheerPage() {
   const [editOpmerking, setEditOpmerking] = useState("");
   const [saving, setSaving] = useState(false);
   const [savingMeta, setSavingMeta] = useState(false);
+  const [savingOpmerkingId, setSavingOpmerkingId] = useState<string | null>(null);
 
   const load = useCallback(async (runSync = false) => {
     if (runSync) setSyncing(true);
@@ -249,6 +250,63 @@ export default function VoorraadbeheerPage() {
     resetMutationForm();
   };
 
+  const saveOpmerkingInline = async (productId: string, opmerking: string) => {
+    const current = products.find((p) => p.id === productId);
+    const next = opmerking.trim() || null;
+    const prev = current?.opmerking?.trim() || null;
+    if (next === prev) return;
+
+    setSavingOpmerkingId(productId);
+    setError(null);
+    // Optimistisch
+    setProducts((list) =>
+      list.map((p) => (p.id === productId ? { ...p, opmerking: next } : p))
+    );
+    try {
+      const res = await fetch("/api/inventory", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productId, opmerking: opmerking }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? "Opmerking opslaan mislukt");
+      const updated = data.product as InventoryProductRow;
+      setProducts((list) =>
+        list.map((p) => (p.id === updated.id ? { ...p, opmerking: updated.opmerking } : p))
+      );
+    } catch (e) {
+      // Rollback
+      if (current) {
+        setProducts((list) =>
+          list.map((p) => (p.id === productId ? { ...p, opmerking: current.opmerking } : p))
+        );
+      }
+      setError(e instanceof Error ? e.message : "Opmerking opslaan mislukt");
+    } finally {
+      setSavingOpmerkingId(null);
+    }
+  };
+
+  const opmerkingInput = (product: InventoryProductRow, className: string) => (
+    <input
+      type="text"
+      key={`${product.id}-${product.opmerking ?? ""}`}
+      defaultValue={product.opmerking ?? ""}
+      placeholder="Typ een opmerking…"
+      disabled={savingOpmerkingId === product.id}
+      onBlur={(e) => {
+        void saveOpmerkingInline(product.id, e.target.value);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.currentTarget.blur();
+        }
+      }}
+      className={className}
+      aria-label={`Opmerking voor ${product.title}`}
+    />
+  );
+
   const saveProductMeta = async (product: InventoryProductRow) => {
     setSavingMeta(true);
     setError(null);
@@ -322,12 +380,17 @@ export default function VoorraadbeheerPage() {
     <div className="mt-3 space-y-3 rounded-xl border border-stone-100 bg-stone-50/80 p-3">
       <p className="text-xs font-medium uppercase tracking-wide text-stone-400">Productinfo</p>
       <div>
-        <label className="block text-xs font-medium text-stone-500">Levertijd</label>
+        <label className="block text-xs font-medium text-stone-500">
+          Levertijd{" "}
+          <span className="font-normal normal-case text-stone-400">
+            (uit Shopify metafields; dagelijks + bij product-update)
+          </span>
+        </label>
         <input
           type="text"
           value={editLevertijd}
           onChange={(e) => setEditLevertijd(e.target.value)}
-          placeholder="bijv. 3–5 werkdagen"
+          placeholder="Sync vanuit custom.levertijd / restock_datum"
           className="mt-1 w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm"
         />
       </div>
@@ -586,13 +649,17 @@ export default function VoorraadbeheerPage() {
                         </span>
                         <span className="min-w-0 text-stone-700">{p.levertijd?.trim() || "—"}</span>
                       </div>
-                      <div className="flex gap-2">
-                        <span className="w-20 shrink-0 text-xs font-medium uppercase text-stone-400">
+                      <div className="flex flex-col gap-1">
+                        <span className="text-xs font-medium uppercase text-stone-400">
                           Opmerking
+                          {savingOpmerkingId === p.id ? (
+                            <span className="ml-1 normal-case text-stone-400">opslaan…</span>
+                          ) : null}
                         </span>
-                        <span className="min-w-0 break-words text-stone-700">
-                          {p.opmerking?.trim() || "—"}
-                        </span>
+                        {opmerkingInput(
+                          p,
+                          "w-full rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-sm text-stone-700 placeholder:text-stone-300 focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
+                        )}
                       </div>
                     </div>
                     <div className="mt-3 flex items-center justify-between gap-2 border-t border-stone-100 pt-3">
@@ -645,10 +712,13 @@ export default function VoorraadbeheerPage() {
                         <td className="max-w-[8rem] px-3 py-3 text-stone-700">
                           <span className="line-clamp-2">{p.levertijd?.trim() || "—"}</span>
                         </td>
-                        <td className="max-w-[12rem] px-3 py-3 text-stone-600 xl:max-w-[16rem]">
-                          <span className="line-clamp-2" title={p.opmerking ?? undefined}>
-                            {p.opmerking?.trim() || "—"}
-                          </span>
+                        <td className="min-w-[12rem] max-w-[16rem] px-3 py-2 xl:max-w-[20rem]">
+                          {opmerkingInput(
+                            p,
+                            `w-full rounded-md border border-transparent bg-transparent px-1.5 py-1 text-sm text-stone-700 placeholder:text-stone-300 hover:border-stone-200 focus:border-koopje-orange focus:bg-white focus:outline-none focus:ring-1 focus:ring-koopje-orange ${
+                              savingOpmerkingId === p.id ? "opacity-60" : ""
+                            }`
+                          )}
                         </td>
                         <td className="hidden px-3 py-3 text-stone-500 lg:table-cell">
                           {sourceLabel(p.last_mutation_source)}

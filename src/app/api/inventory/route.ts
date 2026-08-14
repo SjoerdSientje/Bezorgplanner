@@ -6,6 +6,7 @@ import {
   syncInventoryFromShopify,
   type InventoryCategory,
 } from "@/lib/inventory";
+import { syncInventoryLevertijdFromShopifyMetafields } from "@/lib/inventory-levertijd";
 import { ShopifyAdminError } from "@/lib/shopify-admin";
 
 export const dynamic = "force-dynamic";
@@ -105,9 +106,15 @@ export async function POST(request: NextRequest) {
     const ownerEmail = getInventoryOwnerEmail(request);
     const supabase = createServerSupabaseClient();
     const result = await syncInventoryFromShopify(supabase, ownerEmail);
+    let levertijdSync: { checked: number; updated: number; skipped: number } | null = null;
+    try {
+      levertijdSync = await syncInventoryLevertijdFromShopifyMetafields(supabase, ownerEmail);
+    } catch (leverErr) {
+      console.error("[api/inventory] levertijd metafield sync:", leverErr);
+    }
     const stats = await getInventoryStats(supabase, ownerEmail);
 
-    return NextResponse.json({ ok: true, ...result, stats });
+    return NextResponse.json({ ok: true, ...result, levertijdSync, stats });
   } catch (e) {
     const message =
       e instanceof ShopifyAdminError
