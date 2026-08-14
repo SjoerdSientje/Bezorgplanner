@@ -471,8 +471,42 @@ function isDraftMoneybirdInvoice(invoice: MoneybirdSalesInvoice): boolean {
   return String(invoice.state ?? "").toLowerCase() === "draft";
 }
 
+/** Vergelijkbare factuurregels (om irrelevante Shopify-pings te skippen). */
+function invoiceDetailsFingerprint(
+  details: Array<{
+    description?: string | null;
+    amount?: string | null;
+    price?: string | null;
+  }>
+): string {
+  const rows = details
+    .map((d) => ({
+      description: String(d.description ?? "").trim(),
+      amount: String(Math.max(0, Math.floor(parseFloat(String(d.amount ?? "0")) || 0))),
+      price: (parseFloat(String(d.price ?? "0")) || 0).toFixed(2),
+    }))
+    .filter((d) => d.description.length > 0)
+    .sort((a, b) =>
+      a.description.localeCompare(b.description) ||
+      a.amount.localeCompare(b.amount) ||
+      a.price.localeCompare(b.price)
+    );
+  return JSON.stringify(rows);
+}
+
+function invoiceDetailsUnchanged(
+  existing: MoneybirdSalesInvoiceDetail[] | null | undefined,
+  desired: MoneybirdInvoiceDetailPayload[]
+): boolean {
+  return (
+    invoiceDetailsFingerprint(existing ?? []) ===
+    invoiceDetailsFingerprint(desired)
+  );
+}
+
 /**
  * orders/updated: alleen bestaande conceptfactuur bijwerken — nooit een nieuwe aanmaken.
+ * Alleen PATCH als regels/contact echt wijzigen t.o.v. de huidige conceptfactuur.
  */
 export async function updateDraftSalesInvoiceFromShopifyOrder(
   order: ShopifyOrder
@@ -524,6 +558,17 @@ export async function updateDraftSalesInvoiceFromShopifyOrder(
   }
 
   const contact = await findOrCreateContactForShopifyOrder(order);
+  const contactUnchanged =
+    String(full.contact_id ?? "") === String(contact.id ?? "");
+  if (contactUnchanged && invoiceDetailsUnchanged(full.details, details)) {
+    console.info(
+      "[moneybird] order update — conceptfactuur al in sync, skip",
+      full.id,
+      order.name ?? shopifyOrderId
+    );
+    return full;
+  }
+
   const destroyOld = (full.details ?? [])
     .filter((d) => d.id)
     .map((d) => ({ id: d.id, _destroy: "1" }));

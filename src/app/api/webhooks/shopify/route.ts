@@ -8,6 +8,8 @@ import {
   extractPakketjesLineItems,
   shopifyOrderDisplayAdres,
   shopifyOrderCreatedAt,
+  ritjesShopifyRelevantFieldsEqual,
+  pakketjesShopifyRelevantFieldsEqual,
   type ShopifyOrder,
 } from "@/lib/shopify-order";
 import {
@@ -344,7 +346,7 @@ export async function POST(request: NextRequest) {
 
         const { data: existingPakket } = await supabase
           .from("pakketjes_orders")
-          .select("id")
+          .select("id, order_nummer, naam, adres, items, totaal_prijs, fulfillment_status")
           .eq("owner_email", ownerEmail)
           .eq("shopify_order_id", shopifyOrderId)
           .maybeSingle();
@@ -368,7 +370,10 @@ export async function POST(request: NextRequest) {
             });
             if (pErr) console.error("[webhooks/shopify] pakketjes upsert:", pErr.message);
           } else if (existingPakket?.id) {
-            // Update: alleen als de pakketjes-rij al bestaat — nooit nieuw aanmaken.
+            // Update: alleen als de pakketjes-rij al bestaat én Shopify-data wijzigt.
+            if (pakketjesShopifyRelevantFieldsEqual(existingPakket, row)) {
+              continue;
+            }
             const { error: pErr } = await supabase
               .from("pakketjes_orders")
               .update({
@@ -403,7 +408,9 @@ export async function POST(request: NextRequest) {
 
       const { data: existing } = await supabase
         .from("orders")
-        .select("id, status, afgerond_at, mp_tags, order_nummer")
+        .select(
+          "id, status, afgerond_at, mp_tags, order_nummer, type, naam, adres_url, bel_link, bezorgtijd_voorkeur, meenemen_in_planning, datum_opmerking, opmerkingen_klant, producten, bestelling_totaal_prijs, betaald, volledig_adres, telefoon_nummer, datum, aantal_fietsen, email, telefoon_e164, line_items_json"
+        )
         .eq("owner_email", ownerEmail)
         .eq("order_id", row.order_id)
         .eq("source", "shopify")
@@ -468,6 +475,15 @@ export async function POST(request: NextRequest) {
           .neq("status", "afgerond")
           .limit(1)
           .maybeSingle();
+
+        const includePlannerScheduleFields = !activeSlot?.id;
+        if (
+          ritjesShopifyRelevantFieldsEqual(existing, row, {
+            includePlannerScheduleFields,
+          })
+        ) {
+          continue;
+        }
 
         if (activeSlot?.id) {
           const {

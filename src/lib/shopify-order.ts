@@ -900,6 +900,122 @@ export function mapShopifyOrderToRitjesRow(
   };
 }
 
+function strFieldEq(a: unknown, b: unknown): boolean {
+  return String(a ?? "").trim() === String(b ?? "").trim();
+}
+
+function boolFieldEq(a: unknown, b: unknown): boolean {
+  return Boolean(a) === Boolean(b);
+}
+
+function numFieldEq(a: unknown, b: unknown): boolean {
+  if (a == null && b == null) return true;
+  if (a == null || b == null) return false;
+  const na = Number(a);
+  const nb = Number(b);
+  if (!Number.isFinite(na) && !Number.isFinite(nb)) return true;
+  if (!Number.isFinite(na) || !Number.isFinite(nb)) return false;
+  return Math.abs(na - nb) < 0.005;
+}
+
+function jsonFieldEq(a: unknown, b: unknown): boolean {
+  try {
+    return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  } catch {
+    return strFieldEq(a, b);
+  }
+}
+
+/**
+ * Shopify-gedreven ritjesvelden: true als update niets zou veranderen.
+ * Bij actieve planning-slot worden schedule-velden niet overschreven → die tellen niet mee.
+ */
+export function ritjesShopifyRelevantFieldsEqual(
+  existing: {
+    type?: string | null;
+    order_nummer?: string | null;
+    naam?: string | null;
+    adres_url?: string | null;
+    bel_link?: string | null;
+    bezorgtijd_voorkeur?: string | null;
+    meenemen_in_planning?: boolean | null;
+    datum_opmerking?: string | null;
+    opmerkingen_klant?: string | null;
+    producten?: string | null;
+    bestelling_totaal_prijs?: number | null;
+    betaald?: boolean | null;
+    volledig_adres?: string | null;
+    telefoon_nummer?: string | null;
+    datum?: string | null;
+    aantal_fietsen?: number | null;
+    email?: string | null;
+    telefoon_e164?: string | null;
+    mp_tags?: string | null;
+    line_items_json?: string | null;
+    status?: string | null;
+  },
+  next: RitjesOrderRow,
+  opts: { includePlannerScheduleFields: boolean }
+): boolean {
+  const core =
+    strFieldEq(existing.type, next.type) &&
+    strFieldEq(existing.order_nummer, next.order_nummer) &&
+    strFieldEq(existing.naam, next.naam) &&
+    strFieldEq(existing.adres_url, next.adres_url) &&
+    strFieldEq(existing.bel_link, next.bel_link) &&
+    strFieldEq(existing.bezorgtijd_voorkeur, next.bezorgtijd_voorkeur) &&
+    strFieldEq(existing.opmerkingen_klant, next.opmerkingen_klant) &&
+    strFieldEq(existing.producten, next.producten) &&
+    numFieldEq(existing.bestelling_totaal_prijs, next.bestelling_totaal_prijs) &&
+    boolFieldEq(existing.betaald, next.betaald) &&
+    strFieldEq(existing.volledig_adres, next.volledig_adres) &&
+    strFieldEq(existing.telefoon_nummer, next.telefoon_nummer) &&
+    numFieldEq(existing.aantal_fietsen, next.aantal_fietsen) &&
+    strFieldEq(existing.email, next.email) &&
+    strFieldEq(existing.telefoon_e164, next.telefoon_e164) &&
+    strFieldEq(existing.mp_tags, next.mp_tags) &&
+    strFieldEq(existing.line_items_json, next.line_items_json);
+
+  if (!core) return false;
+  if (!opts.includePlannerScheduleFields) return true;
+
+  return (
+    strFieldEq(existing.status, next.status) &&
+    boolFieldEq(existing.meenemen_in_planning, next.meenemen_in_planning) &&
+    strFieldEq(existing.datum_opmerking, next.datum_opmerking) &&
+    strFieldEq(existing.datum, next.datum)
+  );
+}
+
+/** Pakketjesrij: true als Shopify-update niets zou wijzigen. */
+export function pakketjesShopifyRelevantFieldsEqual(
+  existing: {
+    order_nummer?: string | null;
+    naam?: string | null;
+    adres?: string | null;
+    items?: unknown;
+    totaal_prijs?: number | null;
+    fulfillment_status?: string | null;
+  },
+  next: {
+    order_nummer: string;
+    naam: string;
+    adres: string;
+    items: { name: string; quantity: number }[];
+    totaal_prijs: number;
+    fulfillment_status: string | null;
+  }
+): boolean {
+  return (
+    strFieldEq(existing.order_nummer, next.order_nummer) &&
+    strFieldEq(existing.naam, next.naam) &&
+    strFieldEq(existing.adres, next.adres) &&
+    jsonFieldEq(existing.items, next.items) &&
+    numFieldEq(existing.totaal_prijs, next.totaal_prijs) &&
+    strFieldEq(existing.fulfillment_status, next.fulfillment_status)
+  );
+}
+
 function totalPriceNumber(order: ShopifyOrder): number | null {
   const p = order.total_price;
   if (p == null) return null;
