@@ -37,6 +37,7 @@ export function shouldSkipInventoryDeductionLineItem(name: string): boolean {
   if (!n) return true;
   if (n === "volledig rijklaar" || n === "rijklaar" || n === "in doos") return true;
   if (n.includes("onderhoudspakket")) return true;
+  if (n.includes("opladerdoosje") || n.includes("opladerdoos")) return true;
   return false;
 }
 
