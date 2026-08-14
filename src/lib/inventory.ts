@@ -1471,6 +1471,7 @@ type MoneybirdInvoiceDetailInput = {
 
 type MoneybirdInvoiceInput = {
   id?: string | null;
+  invoice_id?: string | null;
   reference?: string | null;
   details?: MoneybirdInvoiceDetailInput[] | null;
 };
@@ -1519,11 +1520,6 @@ export async function deductInventoryForMoneybirdInvoice(
 
   const ownerEmail = moneybirdInvoiceOwnerEmail();
 
-  const isNew = await markOrderDeducted(supabase, ownerEmail, "moneybird", invoiceId);
-  if (!isNew) {
-    return { deducted: false, skippedReason: "already_processed" };
-  }
-
   const shopifyOrderId = parseShopifyOrderIdFromInvoiceReference(invoice.reference);
   if (shopifyOrderId) {
     const alreadyViaShopify = await hasOrderDeduction(
@@ -1533,6 +1529,8 @@ export async function deductInventoryForMoneybirdInvoice(
       shopifyOrderId
     );
     if (alreadyViaShopify) {
+      // Mark moneybird id zodat retries geen tweede poging doen.
+      await markOrderDeducted(supabase, ownerEmail, "moneybird", invoiceId);
       console.info(
         "[inventory] Moneybird factuur",
         invoiceId,
@@ -1549,8 +1547,15 @@ export async function deductInventoryForMoneybirdInvoice(
     return { deducted: false, skippedReason: "no_line_items" };
   }
 
+  const isNew = await markOrderDeducted(supabase, ownerEmail, "moneybird", invoiceId);
+  if (!isNew) {
+    return { deducted: false, skippedReason: "already_processed" };
+  }
+
   const orderReference =
-    String(invoice.reference ?? "").trim() || `moneybird:${invoiceId}`;
+    String(invoice.reference ?? "").trim() ||
+    String(invoice.invoice_id ?? "").trim() ||
+    `moneybird:${invoiceId}`;
 
   await applyOutgoingMutationsForLineItems(supabase, {
     ownerEmail,

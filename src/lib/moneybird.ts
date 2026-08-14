@@ -94,6 +94,7 @@ export type MoneybirdSalesInvoiceDetail = {
 
 export type MoneybirdSalesInvoice = {
   id: string;
+  invoice_id?: string | null;
   reference?: string | null;
   state?: string | null;
   contact_id?: string | null;
@@ -111,6 +112,21 @@ export function parseShopifyOrderIdFromReference(
   const raw = String(reference ?? "").trim();
   const m = raw.match(/^shopify:(\d+)\b/i);
   return m?.[1] ?? null;
+}
+
+/** Volledige factuur ophalen (incl. details) — o.a. als webhook-entity incomplete is. */
+export async function fetchSalesInvoiceById(
+  invoiceId: string
+): Promise<MoneybirdSalesInvoice | null> {
+  const id = String(invoiceId ?? "").trim();
+  if (!id) return null;
+  try {
+    return await moneybirdFetch<MoneybirdSalesInvoice>(`/sales_invoices/${id}.json`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("Moneybird 404")) return null;
+    throw err;
+  }
 }
 
 async function findSalesInvoiceByReference(
