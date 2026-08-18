@@ -678,7 +678,14 @@ async function findProductByTitleContains(
     .limit(1)
     .maybeSingle();
 
-  return (data as InventoryProductRow | null) ?? null;
+  if (!data) return null;
+  return (
+    (await resolveCanonicalInventoryProduct(
+      supabase,
+      ownerEmail,
+      data as InventoryProductRow
+    )) ?? (data as InventoryProductRow)
+  );
 }
 
 async function findProductForLineItem(
@@ -734,10 +741,25 @@ async function findProductForLineItem(
     .limit(5);
 
   const exact = (byTitle ?? []).find((p) => normalizeName(p.title) === name);
-  if (exact) return exact as InventoryProductRow;
-  if (byTitle?.[0]) return byTitle[0] as InventoryProductRow;
+  const found = (exact ?? byTitle?.[0] ?? null) as InventoryProductRow | null;
+  if (!found) return null;
+  return (await resolveCanonicalInventoryProduct(supabase, ownerEmail, found)) ?? found;
+}
 
-  return null;
+async function resolveCanonicalInventoryProduct(
+  supabase: SupabaseClient,
+  ownerEmail: string,
+  row: InventoryProductRow
+): Promise<InventoryProductRow | null> {
+  const canonicalId = await resolveCanonicalInventoryProductId(supabase, ownerEmail, row.id);
+  if (!canonicalId || canonicalId === row.id) return row;
+  const { data } = await supabase
+    .from("inventory_products")
+    .select("*")
+    .eq("owner_email", ownerEmail)
+    .eq("id", canonicalId)
+    .maybeSingle();
+  return (data as InventoryProductRow | null) ?? row;
 }
 
 /** Eén canoniek product per group_key (voorkomt mutaties op dubbele rijen). */
@@ -1351,15 +1373,22 @@ async function netShopifyDeductionsByProduct(
     if (delta === 0) continue;
     netByProduct.set(productId, (netByProduct.get(productId) ?? 0) + delta);
   }
-  return netByProduct;
+  return canonicalizeDeductionMap(supabase, ownerEmail, netByProduct);
 }
 
-function deductionMapsEqual(a: Map<string, number>, b: Map<string, number>): boolean {
-  const keys = new Set([...Array.from(a.keys()), ...Array.from(b.keys())]);
-  for (const key of Array.from(keys)) {
-    if ((a.get(key) ?? 0) !== (b.get(key) ?? 0)) return false;
+async function canonicalizeDeductionMap(
+  supabase: SupabaseClient,
+  ownerEmail: string,
+  input: Map<string, number>
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  for (const [productId, qty] of Array.from(input.entries())) {
+    if (qty === 0) continue;
+    const canonicalId =
+      (await resolveCanonicalInventoryProductId(supabase, ownerEmail, productId)) ?? productId;
+    out.set(canonicalId, (out.get(canonicalId) ?? 0) + qty);
   }
-  return true;
+  return out;
 }
 
 async function desiredDeductionByProduct(
@@ -1377,7 +1406,9 @@ async function desiredDeductionByProduct(
         bundle.targetTitleContains
       );
       if (product) {
-        desired.set(product.id, (desired.get(product.id) ?? 0) + bundle.quantity);
+        const canonical =
+          (await resolveCanonicalInventoryProduct(supabase, ownerEmail, product)) ?? product;
+        desired.set(canonical.id, (desired.get(canonical.id) ?? 0) + bundle.quantity);
       }
       continue;
     }
@@ -1387,6 +1418,79 @@ async function desiredDeductionByProduct(
     desired.set(product.id, (desired.get(product.id) ?? 0) + qty);
   }
   return desired;
+}
+
+/**
+ * Alleen het verschil toepassen. Nooit alles terugboeken + opnieuw aftrekken:
+ * extra's met voorraad 0 zitten wél in "gewenst" maar krijgen geen mutatie,
+ * waardoor reverse+her-aftrek de fiets eindeloos 7→8→7 zette.
+ */
+async function applyShopifyInventoryDeltas(
+  supabase: SupabaseClient,
+  params: {
+    ownerEmail: string;
+    orderReference: string;
+    lineItems: LineItemForDeduction[];
+    currentNet: Map<string, number>;
+    desired: Map<string, number>;
+  }
+): Promise<{ applied: number; skipped: boolean }> {
+  const { ownerEmail, orderReference, lineItems, currentNet, desired } = params;
+  const orderProducten = formatLineItemsForSnapshot(lineItems);
+  const productIds = new Set([...Array.from(currentNet.keys()), ...Array.from(desired.keys())]);
+
+  type Planned = { productId: string; mutationType: "uitgaand" | "inkomend"; quantity: number };
+  const planned: Planned[] = [];
+
+  for (const productId of Array.from(productIds)) {
+    const want = desired.get(productId) ?? 0;
+    const have = currentNet.get(productId) ?? 0;
+    const delta = want - have;
+    if (delta > 0) planned.push({ productId, mutationType: "uitgaand", quantity: delta });
+    else if (delta < 0) planned.push({ productId, mutationType: "inkomend", quantity: -delta });
+  }
+
+  if (planned.length === 0) {
+    return { applied: 0, skipped: true };
+  }
+
+  const actionable: Planned[] = [];
+  for (const step of planned) {
+    if (step.mutationType === "inkomend") {
+      actionable.push(step);
+      continue;
+    }
+    const { data: row } = await supabase
+      .from("inventory_products")
+      .select("stock_quantity")
+      .eq("owner_email", ownerEmail)
+      .eq("id", step.productId)
+      .maybeSingle();
+    if ((row?.stock_quantity ?? 0) <= 0) continue;
+    actionable.push(step);
+  }
+
+  if (actionable.length === 0) {
+    return { applied: 0, skipped: true };
+  }
+
+  for (const step of actionable) {
+    await applyInventoryMutation(supabase, {
+      ownerEmail,
+      productId: step.productId,
+      mutationType: step.mutationType,
+      quantity: step.quantity,
+      source: "shopify",
+      note:
+        step.mutationType === "uitgaand"
+          ? `Automatische aftrek order ${orderReference}`
+          : `Correctie na orderwijziging ${orderReference}`,
+      orderReference,
+      orderProducten,
+    });
+  }
+
+  return { applied: actionable.length, skipped: false };
 }
 
 /**
@@ -1440,8 +1544,7 @@ async function reverseNetShopifyDeductionsForOrder(
 
 /**
  * orders/updated: voorraad in sync brengen met huidige line items.
- * — Eerdere aftrek voor deze order terugboeken
- * — Opnieuw aftrekken met de huidige producten/aantallen
+ * Alleen het verschil toepassen (geen terugboeking + her-aftrek).
  * Alleen als er al een shopify-aftrek was, of de order al in de planner staat.
  */
 export async function syncInventoryForShopifyOrderUpdate(
@@ -1509,22 +1612,30 @@ export async function syncInventoryForShopifyOrderUpdate(
         ownerEmail,
         lineItems
       );
-      if (deductionMapsEqual(currentNet, desired)) {
+      const result = await applyShopifyInventoryDeltas(supabase, {
+        ownerEmail,
+        orderReference,
+        lineItems,
+        currentNet,
+        desired,
+      });
+      if (result.skipped) {
         console.info(
           "[inventory] Shopify update — voorraad al in sync, skip",
           orderReference,
           ownerEmail
         );
-        continue;
+      } else {
+        console.info(
+          "[inventory] Shopify update — delta toegepast",
+          orderReference,
+          "stappen",
+          result.applied,
+          "owner",
+          ownerEmail
+        );
       }
-
-      await reverseNetShopifyDeductionsForOrder(
-        supabase,
-        ownerEmail,
-        orderReference,
-        "Terugboeking vóór her-aftrek (order update)"
-      );
-      await clearOrderDeduction(supabase, ownerEmail, "shopify", shopifyOrderId);
+      continue;
     }
 
     await deductInventoryForLineItems(supabase, {
@@ -1536,7 +1647,7 @@ export async function syncInventoryForShopifyOrderUpdate(
     });
 
     console.info(
-      "[inventory] Shopify update — voorraad hersynchroniseerd",
+      "[inventory] Shopify update — eerste aftrek",
       orderReference,
       "owner",
       ownerEmail
