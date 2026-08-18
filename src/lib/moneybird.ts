@@ -5,7 +5,6 @@
 
 import { createHmac, timingSafeEqual } from "crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { isMalyarTestOrderNote } from "@/lib/account";
 import type { ShopifyLineItem, ShopifyOrder, ShopifyShippingLine } from "@/lib/shopify-order";
 import {
   isShopifyProductActive,
@@ -14,7 +13,10 @@ import {
 
 const MONEYBIRD_API_BASE = "https://moneybird.com/api/v2";
 
-/** Shopify-ordertotaal (incl. BTW) onder dit bedrag → factuur direct permanent (open). */
+/**
+ * Drempel voor later opnieuw auto-versturen onder dit bedrag (incl. BTW).
+ * Voor nu uit: alles blijft concept — auto-mail gaf dubbele facturen bij klanten.
+ */
 export const AUTO_FINALIZE_INVOICE_BELOW_EUR = 498;
 
 export function isMoneybirdConfigured(): boolean {
@@ -652,10 +654,8 @@ export async function deleteSalesInvoiceForShopifyOrderId(
  * Maakt een sales invoice in Moneybird voor een Shopify-order.
  * Reference = shopify:{id} zodat de Moneybird-webhook dubbele voorraadaftrek kan skippen.
  *
- * Orders onder €498: factuur wordt direct verstuurd per e-mail (status open).
- * Orders vanaf €498: blijven draft (handmatig controleren/versturen).
- * Testorders met "malyar" in de note: altijd draft, ongeacht prijs.
- * Totaal €0: geen factuur.
+ * Voor nu altijd draft (handmatig controleren/versturen), ook onder €498.
+ * Auto-mail onder die drempel gaf dubbele facturen. Totaal €0: geen factuur.
  */
 export async function createSalesInvoiceFromShopifyOrder(
   supabase: SupabaseClient,
@@ -740,55 +740,13 @@ export async function createSalesInvoiceFromShopifyOrder(
       body: JSON.stringify(payload),
     });
 
-    const isMalyarTest = isMalyarTestOrderNote(order.note);
-    const shouldFinalize =
-      !isMalyarTest &&
-      Number.isFinite(totalIncl) &&
-      totalIncl > 0 &&
-      totalIncl < AUTO_FINALIZE_INVOICE_BELOW_EUR;
-
-    if (shouldFinalize && created.id) {
-      try {
-        const email =
-          String(order.email ?? order.contact_email ?? order.customer?.email ?? "")
-            .trim() || undefined;
-        created = await moneybirdFetch<MoneybirdSalesInvoice>(
-          `/sales_invoices/${created.id}/send_invoice.json`,
-          {
-            method: "PATCH",
-            body: JSON.stringify({
-              sales_invoice_sending: {
-                delivery_method: "Email",
-                ...(email ? { email_address: email } : {}),
-              },
-            }),
-          }
-        );
-        console.info(
-          "[moneybird] factuur verstuurd per e-mail",
-          created.id,
-          "voor Shopify",
-          orderName,
-          `(totaal €${totalIncl.toFixed(2)} < ${AUTO_FINALIZE_INVOICE_BELOW_EUR})`,
-          email ? `→ ${email}` : ""
-        );
-      } catch (sendErr) {
-        console.error(
-          "[moneybird] send_invoice mislukt — factuur blijft draft",
-          created.id,
-          sendErr
-        );
-      }
-    } else {
-      console.info(
-        "[moneybird] draft factuur aangemaakt",
-        created.id,
-        "voor Shopify",
-        orderName,
-        Number.isFinite(totalIncl) ? `(totaal €${totalIncl.toFixed(2)})` : "",
-        isMalyarTest ? "(malyar-test → altijd draft)" : ""
-      );
-    }
+    console.info(
+      "[moneybird] draft factuur aangemaakt",
+      created.id,
+      "voor Shopify",
+      orderName,
+      Number.isFinite(totalIncl) ? `(totaal €${totalIncl.toFixed(2)})` : ""
+    );
 
     return created;
   } finally {
