@@ -1,10 +1,13 @@
 /**
  * Tijdsloten uit Routific-oplossing: stopvolgorde behouden + 20 min uitladen afdwingen.
- * Geen post-processing die volgorde of aankomsttijden verandert — dat veroorzaakte verzonnen slots.
+ * Bij meerdere ritten: na elk deel terug naar depot + herladen meenemen in de tijden.
  */
 
 import { parseRoutificArrivalTime } from "@/lib/routific-arrival";
+import { getPointToPointTravelMinutes } from "@/lib/google-travel-times";
 import {
+  DEPOT_ADDRESS,
+  DEPOT_RELOAD_MINUTES,
   orderRouteLoad,
   SERVICE_TIME_MINUTES,
   type OrderForRoute,
@@ -24,6 +27,8 @@ export type BuiltRouteSlot = {
   arrivalTime: string;
   rit_nummer: number;
   route_nummer: number | null;
+  /** Deel binnen dezelfde route (1, 2, …) bij terug naar depot. */
+  leg_nummer: number;
 };
 
 function toMinutes(hhmm: string): number {
@@ -43,17 +48,19 @@ function isDepotLikeStop(locId: string): boolean {
 }
 
 /**
- * Zet één Routific-voertuig om naar tijdsloten in Routific-stopvolgorde.
+ * Zet één Routific-voertuig/leg om naar tijdsloten in Routific-stopvolgorde.
  * Aankomst[i] >= finish[i-1] (finish = aankomst + SERVICE_TIME_MINUTES of Routific finish_time).
  */
 export function buildRouteSlotsFromRoutificStops(
   stops: RoutificSolutionStop[],
   orderByVisitId: Map<string, OrderForRoute>,
-  routeNummer: number | null
+  routeNummer: number | null,
+  options?: { legNummer?: number; ritNummerOffset?: number }
 ): BuiltRouteSlot[] {
   const results: BuiltRouteSlot[] = [];
   let prevFinishMin: number | null = null;
-  let stopIndex = 0;
+  let stopIndex = options?.ritNummerOffset ?? 0;
+  const legNummer = Math.max(1, options?.legNummer ?? 1);
 
   for (const stop of stops) {
     const locId = stop.location_id ?? "";
@@ -85,10 +92,106 @@ export function buildRouteSlotsFromRoutificStops(
       arrivalTime,
       rit_nummer: stopIndex,
       route_nummer: routeNummer,
+      leg_nummer: legNummer,
     });
   }
 
   return results;
+}
+
+/**
+ * Meerdere Routific-legs van één route → één tijdlijn.
+ * Tussen delen: rijtijd laatste stop → depot + DEPOT_RELOAD_MINUTES + rijtijd depot → eerste stop deel 2.
+ * (Routific plant legs als losse voertuigen die parallel mogen lopen; zonder deze stap
+ * plakken stops aan elkaar met alleen 20 min uitladen.)
+ */
+export async function buildRouteSlotsFromMultiLegSolution(
+  legStopsList: RoutificSolutionStop[][],
+  orderByVisitId: Map<string, OrderForRoute>,
+  routeNummer: number | null
+): Promise<BuiltRouteSlot[]> {
+  const nonEmptyLegs = legStopsList.filter((stops) =>
+    stops.some((s) => {
+      const locId = s.location_id ?? "";
+      return !isDepotLikeStop(locId) && orderByVisitId.has(locId);
+    })
+  );
+
+  if (nonEmptyLegs.length <= 1) {
+    return buildRouteSlotsFromRoutificStops(nonEmptyLegs[0] ?? [], orderByVisitId, routeNummer, {
+      legNummer: 1,
+    });
+  }
+
+  const out: BuiltRouteSlot[] = [];
+  let prevFinishMin: number | null = null;
+  let prevAddress: string | null = null;
+  let ritOffset = 0;
+
+  for (let legIdx = 0; legIdx < nonEmptyLegs.length; legIdx++) {
+    const legNummer = legIdx + 1;
+    let legSlots = buildRouteSlotsFromRoutificStops(
+      nonEmptyLegs[legIdx]!,
+      orderByVisitId,
+      routeNummer,
+      { legNummer, ritNummerOffset: ritOffset }
+    );
+    if (legSlots.length === 0) continue;
+
+    if (prevFinishMin != null && prevAddress) {
+      const firstOrder = orderByVisitId.get(legSlots[0]!.order_id);
+      const firstAddress = String(firstOrder?.volledig_adres ?? "").trim();
+      let shift = 0;
+      if (firstAddress) {
+        try {
+          const toDepot = await getPointToPointTravelMinutes(prevAddress, DEPOT_ADDRESS);
+          const fromDepot = await getPointToPointTravelMinutes(DEPOT_ADDRESS, firstAddress);
+          const earliestFirst =
+            prevFinishMin + toDepot + DEPOT_RELOAD_MINUTES + fromDepot;
+          const firstArrival = toMinutes(legSlots[0]!.arrivalTime);
+          if (firstArrival < earliestFirst) {
+            shift = earliestFirst - firstArrival;
+          }
+        } catch (err) {
+          console.warn(
+            "[routific-slots] depot-reistijd mislukt — schatting 25+30+25 min",
+            err
+          );
+          const earliestFirst = prevFinishMin + 25 + DEPOT_RELOAD_MINUTES + 25;
+          const firstArrival = toMinutes(legSlots[0]!.arrivalTime);
+          if (firstArrival < earliestFirst) {
+            shift = earliestFirst - firstArrival;
+          }
+        }
+      }
+
+      if (shift > 0) {
+        legSlots = legSlots.map((slot) => {
+          const order = orderByVisitId.get(slot.order_id);
+          const arrivalMin = toMinutes(slot.arrivalTime) + shift;
+          const arrivalTime = fromMinutes(arrivalMin);
+          return {
+            ...slot,
+            arrivalTime,
+            aankomsttijd: maakTijdslot(
+              arrivalTime,
+              order?.bezorgtijd_voorkeur ?? null
+            ),
+          };
+        });
+      }
+    }
+
+    for (const slot of legSlots) {
+      out.push(slot);
+      prevFinishMin = toMinutes(slot.arrivalTime) + SERVICE_TIME_MINUTES;
+      const addr = String(orderByVisitId.get(slot.order_id)?.volledig_adres ?? "").trim();
+      if (addr) prevAddress = addr;
+    }
+    ritOffset = out.length;
+  }
+
+  return out.map((slot, i) => ({ ...slot, rit_nummer: i + 1 }));
 }
 
 export function extractOrderIdsFromRoutificStops(

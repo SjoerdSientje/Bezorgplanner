@@ -14,10 +14,10 @@ import {
 import { geocodeOrdersForRouting } from "@/lib/pdok-geocode";
 import {
   buildRouteOrderListsFromSolution,
-  buildRouteSlotsFromRoutificStops,
+  buildRouteSlotsFromMultiLegSolution,
   getRouteCapacityWarnings,
 } from "@/lib/routific-slots";
-import { SERVICE_TIME_MINUTES } from "@/lib/routific-payload";
+import { DEPOT_RELOAD_MINUTES, SERVICE_TIME_MINUTES } from "@/lib/routific-payload";
 import { supabaseMissingOrdersRouteNummerColumn } from "@/lib/orders-route-nummer-supabase";
 import { filterOutPausedMpOrders, isMpPausedForOwner } from "@/lib/mp-pause";
 import { rollForwardPastPlanningSlots } from "@/lib/planning-promote";
@@ -280,16 +280,18 @@ export async function POST(request: NextRequest) {
       rit_nummer: number | null;
       route_nummer: number | null;
       route_naam: string | null;
+      leg_nummer: number | null;
     }[] = [];
     let volgorde = 0;
 
-    /** Schrijf order-update; zonder route_nummer/route_naam-kolom opnieuw proberen. */
+    /** Schrijf order-update; zonder route_nummer/route_naam/leg_nummer-kolom opnieuw proberen. */
     const patchOrder = async (
       orderId: string,
       payload: {
         rit_nummer: number | null;
         route_nummer: number | null;
         route_naam?: string | null;
+        leg_nummer?: number | null;
         aankomsttijd_slot?: string | null;
       }
     ) => {
@@ -302,6 +304,11 @@ export async function POST(request: NextRequest) {
         const { route_nummer: _r, route_naam: _n, ...rest } = payload;
         const r2 = await supabase.from("orders").update(rest).eq("owner_email", ownerEmail).eq("id", orderId);
         error = r2.error;
+      }
+      if (error && /leg_nummer/i.test(error.message ?? "")) {
+        const { leg_nummer: _l, ...rest } = payload;
+        const r3 = await supabase.from("orders").update(rest).eq("owner_email", ownerEmail).eq("id", orderId);
+        error = r3.error;
       }
       return error;
     };
@@ -332,13 +339,11 @@ export async function POST(request: NextRequest) {
       const routeNaamDb =
         customNaam || (routeNummerDb != null ? defaultLabel : null);
 
-      // Bij "meerdere ritten" de stops van alle legs van deze route (in ritvolgorde) achter
-      // elkaar plakken, zodat rit_nummer doorloopt en het één logische route blijft.
+      // Bij "meerdere ritten": legs apart houden, daarna tijdlijn met depot-return + herladen.
       const keys = routeVehicleKeys.get(routeNum) ?? [`vehicle_${routeNum}`];
-      const combinedStops = keys.flatMap((k) => solution?.[k] ?? []);
-
-      const built = buildRouteSlotsFromRoutificStops(
-        combinedStops,
+      const legStopsList = keys.map((k) => solution?.[k] ?? []);
+      const built = await buildRouteSlotsFromMultiLegSolution(
+        legStopsList,
         orderByVisitId,
         routeNummerDb
       );
@@ -352,6 +357,7 @@ export async function POST(request: NextRequest) {
           rit_nummer: slot.rit_nummer,
           route_nummer: slot.route_nummer,
           route_naam: routeNaamDb,
+          leg_nummer: slot.leg_nummer > 1 || legStopsList.length > 1 ? slot.leg_nummer : null,
         });
       }
     }
@@ -382,6 +388,7 @@ export async function POST(request: NextRequest) {
         rit_nummer: null,
         route_nummer: null,
         route_naam: null,
+        leg_nummer: null,
       });
       if (err) clearErrors.push(`${o.id}: ${err.message}`);
     }
@@ -404,6 +411,7 @@ export async function POST(request: NextRequest) {
           rit_nummer: s.rit_nummer,
           route_nummer: s.route_nummer,
           route_naam: s.route_naam,
+          leg_nummer: s.leg_nummer,
         });
         if (err) writeErrors.push(`${s.order_id}: ${err.message}`);
       }
@@ -490,9 +498,15 @@ export async function POST(request: NextRequest) {
     }
     const combinedWarning = warningParts.length > 0 ? warningParts.join("\n\n") : undefined;
 
+    const maxLeg = Math.max(0, ...slotsToInsert.map((s) => Number(s.leg_nummer ?? 1)));
+    const depotNote =
+      maxLeg > 1
+        ? ` Incl. terug naar depot + ${DEPOT_RELOAD_MINUTES} min herladen tussen delen.`
+        : "";
+
     return NextResponse.json({
       ok: true,
-      message: `Route berekend: ${slotsToInsert.length} van ${rowsForRouting.length} orders ingepland (${SERVICE_TIME_MINUTES} min uitladen per stop).`,
+      message: `Route berekend: ${slotsToInsert.length} van ${rowsForRouting.length} orders ingepland (${SERVICE_TIME_MINUTES} min uitladen per stop).${depotNote}`,
       planningDate,
       vertrektijd,
       visitCount: rows.length,

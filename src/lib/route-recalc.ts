@@ -2,10 +2,17 @@
  * Herbereken aankomsttijden en tijdsloten langs een route (na handmatig herschikken).
  */
 
-import { DEPOT_ADDRESS, SERVICE_TIME_MINUTES } from "@/lib/routific-payload";
+import {
+  DEPOT_ADDRESS,
+  DEPOT_RELOAD_MINUTES,
+  SERVICE_TIME_MINUTES,
+} from "@/lib/routific-payload";
 import { parseBezorgtijdRestriction } from "@/lib/bezorgtijd-window";
 import { maakTijdslot } from "@/lib/tijdslot";
-import { getChainTravelMinutes } from "@/lib/google-travel-times";
+import {
+  getChainTravelMinutes,
+  getPointToPointTravelMinutes,
+} from "@/lib/google-travel-times";
 
 /** Uitladen per stop (zelfde als Routific duration). */
 export { SERVICE_TIME_MINUTES };
@@ -14,12 +21,15 @@ export type RouteStop = {
   id: string;
   volledig_adres: string;
   bezorgtijd_voorkeur: string | null;
+  /** Load-eenheden (fietsen; grote fietsen kunnen 2 zijn). */
+  load?: number;
 };
 
 export type RecalculatedStop = {
   id: string;
   arrivalTime: string;
   aankomsttijd_slot: string;
+  leg_nummer?: number;
 };
 
 function toMinutes(hhmm: string): number {
@@ -128,4 +138,71 @@ export async function recalculateRouteStops(
   const startAddress = options?.fromAddress ?? options?.depot ?? DEPOT_ADDRESS;
   const legMinutes = await getChainTravelMinutes(addresses, startAddress);
   return recalculateStopsFromLegMinutes(stops, vertrektijd, legMinutes);
+}
+
+/** Splits stops in delen zodra voertuigcapaciteit vol is (voor terug naar depot). */
+export function splitStopsByVehicleCapacity(
+  stops: RouteStop[],
+  capacity: number
+): RouteStop[][] {
+  const cap = Math.max(1, Math.floor(Number(capacity) || 1));
+  const legs: RouteStop[][] = [];
+  let current: RouteStop[] = [];
+  let load = 0;
+  for (const s of stops) {
+    const l = Math.max(1, Math.floor(Number(s.load ?? 1)));
+    if (current.length > 0 && load + l > cap) {
+      legs.push(current);
+      current = [];
+      load = 0;
+    }
+    current.push(s);
+    load += l;
+  }
+  if (current.length > 0) legs.push(current);
+  return legs;
+}
+
+/**
+ * Herberekent een route met terug naar depot + herladen tussen capaciteitsdelen.
+ * Elk deel start vanaf het depot; tussen delen: rij terug + DEPOT_RELOAD_MINUTES.
+ */
+export async function recalculateRouteStopsWithDepotReturns(
+  stops: RouteStop[],
+  vertrektijd: string,
+  capacity: number,
+  options?: { depot?: string }
+): Promise<RecalculatedStop[]> {
+  const depot = options?.depot ?? DEPOT_ADDRESS;
+  const legs = splitStopsByVehicleCapacity(stops, capacity);
+  if (legs.length <= 1) {
+    const single = await recalculateRouteStops(stops, vertrektijd, { depot });
+    return single.map((s) => ({ ...s, leg_nummer: 1 }));
+  }
+
+  const out: RecalculatedStop[] = [];
+  let nextDepart = vertrektijd;
+
+  for (let i = 0; i < legs.length; i++) {
+    const leg = legs[i]!;
+    const calc = await recalculateRouteStops(leg, nextDepart, { depot });
+    for (const s of calc) {
+      out.push({ ...s, leg_nummer: i + 1 });
+    }
+    if (i < legs.length - 1) {
+      const last = calc[calc.length - 1]!;
+      const lastAddr = String(leg[leg.length - 1]?.volledig_adres ?? "").trim();
+      let toDepot = 25;
+      try {
+        toDepot = await getPointToPointTravelMinutes(lastAddr, depot);
+      } catch {
+        // fallback schatting
+      }
+      nextDepart = fromMinutes(
+        toMinutes(last.arrivalTime) + SERVICE_TIME_MINUTES + toDepot + DEPOT_RELOAD_MINUTES
+      );
+    }
+  }
+
+  return out;
 }

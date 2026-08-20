@@ -6,9 +6,11 @@ import {
   firstOrderDivergenceIndex,
   parseSlotArrivalHhmm,
   recalculateRouteStops,
+  recalculateRouteStopsWithDepotReturns,
   type RecalculatedStop,
   type RouteStop,
 } from "@/lib/route-recalc";
+import { orderRouteLoad, type OrderForRoute } from "@/lib/routific-payload";
 import { supabaseMissingOrdersRouteNummerColumn } from "@/lib/orders-route-nummer-supabase";
 import { findPausedMpOrderIds } from "@/lib/mp-pause";
 
@@ -17,6 +19,9 @@ type RouteInput = {
   orderIds: string[];
   previousOrderIds: string[];
   vertrektijd: string;
+  /** Max. fietsen per rit; bij meerdereRitten → terug naar depot tussen delen. */
+  maxFietsen?: number;
+  meerdereRitten?: boolean;
 };
 
 type OrderUpdate = {
@@ -25,6 +30,7 @@ type OrderUpdate = {
   rit_nummer: number | null;
   aankomsttijd_slot: string;
   arrivalTime: string;
+  leg_nummer?: number | null;
 };
 
 /** Vertrektijd voor Overig-herschikking als er geen route 1-vertrektijd bekend is. */
@@ -124,7 +130,21 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
-      routes.push({ routeNummer, orderIds, previousOrderIds, vertrektijd });
+      const maxFietsenRaw = r.maxFietsen ?? r.max_fietsen;
+      const maxFietsen =
+        maxFietsenRaw == null || maxFietsenRaw === ""
+          ? undefined
+          : Number(maxFietsenRaw);
+      const meerdereRitten = Boolean(r.meerdereRitten ?? r.meerdere_ritten ?? false);
+      routes.push({
+        routeNummer,
+        orderIds,
+        previousOrderIds,
+        vertrektijd,
+        maxFietsen:
+          maxFietsen != null && Number.isFinite(maxFietsen) ? maxFietsen : undefined,
+        meerdereRitten,
+      });
     }
 
     const allIdsRaw = routes.flatMap((r) => r.orderIds);
@@ -153,7 +173,9 @@ export async function POST(request: NextRequest) {
     }
     const { data: ordersData, error: ordersErr } = await supabase
       .from("orders")
-      .select("id, volledig_adres, bezorgtijd_voorkeur, naam, route_nummer, rit_nummer, aankomsttijd_slot")
+      .select(
+        "id, volledig_adres, bezorgtijd_voorkeur, naam, route_nummer, rit_nummer, aankomsttijd_slot, aantal_fietsen, producten, leg_nummer"
+      )
       .eq("owner_email", ownerEmail)
       .in("id", allIds);
 
@@ -179,6 +201,7 @@ export async function POST(request: NextRequest) {
         route_nummer: number | null;
         rit_nummer: number | null;
         aankomsttijd_slot: string | null;
+        leg_nummer?: number | null;
       }
     ) => {
       let { error } = await supabase
@@ -190,6 +213,11 @@ export async function POST(request: NextRequest) {
         const { route_nummer: _r, ...rest } = payload;
         const r2 = await supabase.from("orders").update(rest).eq("owner_email", ownerEmail).eq("id", orderId);
         error = r2.error;
+      }
+      if (error && /leg_nummer/i.test(error.message ?? "")) {
+        const { leg_nummer: _l, ...rest } = payload;
+        const r3 = await supabase.from("orders").update(rest).eq("owner_email", ownerEmail).eq("id", orderId);
+        error = r3.error;
       }
       return error;
     };
@@ -304,16 +332,50 @@ export async function POST(request: NextRequest) {
           ? route.routeNummer
           : null;
 
-      const recalculated = await recalculateFromDivergence(
-        route.orderIds,
-        route.previousOrderIds,
-        route.vertrektijd,
-        orderById
-      );
+      const useDepotReturns =
+        Boolean(route.meerdereRitten) &&
+        Number.isFinite(route.maxFietsen) &&
+        Number(route.maxFietsen) >= 1;
+
+      let recalculated: RecalculatedStop[];
+      if (useDepotReturns) {
+        const stops: RouteStop[] = route.orderIds.map((id) => {
+          const o = orderById.get(id)!;
+          const load = orderRouteLoad({
+            id,
+            naam: o.naam ? String(o.naam) : null,
+            volledig_adres: String(o.volledig_adres ?? ""),
+            aantal_fietsen:
+              o.aantal_fietsen == null ? null : Number(o.aantal_fietsen),
+            bezorgtijd_voorkeur: o.bezorgtijd_voorkeur
+              ? String(o.bezorgtijd_voorkeur)
+              : null,
+            producten: o.producten ? String(o.producten) : null,
+          } as OrderForRoute);
+          return {
+            id,
+            volledig_adres: String(o.volledig_adres ?? ""),
+            bezorgtijd_voorkeur: o.bezorgtijd_voorkeur
+              ? String(o.bezorgtijd_voorkeur)
+              : null,
+            load,
+          };
+        });
+        recalculated = await recalculateRouteStopsWithDepotReturns(
+          stops,
+          route.vertrektijd,
+          Number(route.maxFietsen)
+        );
+      } else {
+        recalculated = await recalculateFromDivergence(
+          route.orderIds,
+          route.previousOrderIds,
+          route.vertrektijd,
+          orderById
+        );
+      }
       const recalculatedById = new Map(recalculated.map((s) => [s.id, s]));
 
-      // Alleen stops vanaf de eerste wijziging krijgen nieuwe tijdsloten.
-      // Prefix blijft onaangeroerd (zelfde aankomst), tenzij rit_nummer/route moet syncen.
       for (let i = 0; i < route.orderIds.length; i++) {
         const id = route.orderIds[i]!;
         const ritNummer = i + 1;
@@ -325,9 +387,11 @@ export async function POST(request: NextRequest) {
             rit_nummer: ritNummer,
             aankomsttijd_slot: recalc.aankomsttijd_slot,
             arrivalTime: recalc.arrivalTime,
+            leg_nummer: useDepotReturns ? (recalc.leg_nummer ?? 1) : null,
           });
           continue;
         }
+        if (useDepotReturns) continue;
         const existing = orderById.get(id);
         const existingSlot = String(existing?.aankomsttijd_slot ?? "").trim();
         const existingRit = Number(existing?.rit_nummer ?? 0);
@@ -342,6 +406,7 @@ export async function POST(request: NextRequest) {
             rit_nummer: ritNummer,
             aankomsttijd_slot: existingSlot,
             arrivalTime: parseSlotArrivalHhmm(existingSlot) ?? "",
+            leg_nummer: null,
           });
         }
       }
@@ -352,6 +417,7 @@ export async function POST(request: NextRequest) {
         route_nummer: u.route_nummer,
         rit_nummer: u.rit_nummer,
         aankomsttijd_slot: u.aankomsttijd_slot,
+        leg_nummer: u.leg_nummer ?? null,
       });
       if (err) {
         console.error("[route/reorder] patch order:", err);
@@ -393,6 +459,7 @@ export async function POST(request: NextRequest) {
         route_nummer: u.route_nummer,
         rit_nummer: u.rit_nummer,
         aankomsttijd_slot: u.aankomsttijd_slot,
+        leg_nummer: u.leg_nummer ?? null,
       })),
     });
   } catch (e) {

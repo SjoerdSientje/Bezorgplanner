@@ -29,7 +29,10 @@ import type { AlleRittenOrder } from "@/components/AlleRittenTabel";
 import { compareOrdersOnRoute } from "@/lib/ritjes-mapping";
 import { isOrderReadyForSjoerdLijst } from "@/lib/planning-date";
 import { routeStyleForIndex, routeDisplayLabel, routeNaamFromOrders } from "@/lib/route-colors";
-import { getVertrektijdForRoute } from "@/lib/route-vertrektijden";
+import { getVertrektijdForRoute, readSavedRoutesFromStorage } from "@/lib/route-vertrektijden";
+
+/** Zelfde als server-side DEPOT_RELOAD_MINUTES — herladen op Kapelweg 2. */
+const DEPOT_RELOAD_UI_MINUTES = 30;
 import { orderRouteLoad, type OrderForRoute } from "@/lib/routific-payload";
 
 /** Totaal aantal load-eenheden voor een lijst orders (grote fietsen tellen dubbel). */
@@ -219,6 +222,33 @@ type RouteGroup = {
 
 function sortRouteOrders(orders: AlleRittenOrder[]): AlleRittenOrder[] {
   return [...orders].sort((a, b) => compareOrdersOnRoute(a, b));
+}
+
+function orderLegNummer(order: AlleRittenOrder | undefined): number {
+  const n = Number(order?.leg_nummer ?? 1);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
+}
+
+function DepotReturnBanner({
+  legNummer,
+  gridClass,
+  colSpanClass,
+}: {
+  legNummer: number;
+  gridClass: string;
+  colSpanClass: string;
+}) {
+  return (
+    <div className={`grid ${gridClass} border-b border-amber-200 bg-amber-50`}>
+      <div className={`${colSpanClass} px-3 py-2.5 text-sm text-amber-950`}>
+        <span className="font-semibold">Terug naar depot</span>
+        <span className="text-amber-800">
+          {" "}
+          · Kapelweg 2, De Bilt · herladen {DEPOT_RELOAD_UI_MINUTES} min · daarna deel {legNummer}
+        </span>
+      </div>
+    </div>
+  );
 }
 
 function groupByRoute(orders: AlleRittenOrder[]): RouteGroup[] {
@@ -725,11 +755,14 @@ export default function LijstSjoerd({
           );
           return;
         }
+        const saved = readSavedRoutesFromStorage()[entry.rn - 1];
         routes.push({
           routeNummer: entry.routeNummer,
           orderIds: entry.orderIds,
           previousOrderIds: entry.previousOrderIds,
           vertrektijd,
+          maxFietsen: saved?.maxFietsen,
+          meerdereRitten: saved?.meerdereRitten,
         });
       }
 
@@ -998,44 +1031,55 @@ export default function LijstSjoerd({
               {orderIds.map((orderId, i) => {
                 const order = orderById.get(orderId);
                 if (!order) return null;
+                const leg = orderLegNummer(order);
+                const prevLeg = i > 0 ? orderLegNummer(orderById.get(orderIds[i - 1]!)) : leg;
+                const showDepotBreak = i > 0 && leg > prevLeg;
                 return (
-                  <TouchOrderRow
-                    key={`${orderId}-${order.aankomsttijd_slot ?? ""}-${(order as { rit_nummer?: number }).rit_nummer ?? ""}`}
-                    order={order}
-                    rowNum={i + 1}
-                    rowClassName={style?.bg}
-                    reorderEnabled={buttonReorderEnabled}
-                    routeOptions={routeOptions}
-                    currentContainerId={containerId}
-                    busy={recalculating}
-                    onPatch={onPatch}
-                    canMoveUp={i > 0}
-                    canMoveDown={i < orderIds.length - 1}
-                    onMoveUp={() => {
-                      const prev = {
-                        ...Object.fromEntries(
-                          Object.entries(containersRef.current).map(([k, v]) => [k, [...v]])
-                        ),
-                      };
-                      applyReorder(moveWithinContainer(containersRef.current, orderId, "up"), prev);
-                    }}
-                    onMoveDown={() => {
-                      const prev = {
-                        ...Object.fromEntries(
-                          Object.entries(containersRef.current).map(([k, v]) => [k, [...v]])
-                        ),
-                      };
-                      applyReorder(moveWithinContainer(containersRef.current, orderId, "down"), prev);
-                    }}
-                    onChangeRoute={(targetId) => {
-                      const prev = {
-                        ...Object.fromEntries(
-                          Object.entries(containersRef.current).map(([k, v]) => [k, [...v]])
-                        ),
-                      };
-                      applyReorder(moveToContainer(containersRef.current, orderId, targetId), prev);
-                    }}
-                  />
+                  <div key={`${orderId}-${order.aankomsttijd_slot ?? ""}-${(order as { rit_nummer?: number }).rit_nummer ?? ""}-${leg}`}>
+                    {showDepotBreak && (
+                      <DepotReturnBanner
+                        legNummer={leg}
+                        gridClass={GRID_COLS_TOUCH}
+                        colSpanClass="col-span-9"
+                      />
+                    )}
+                    <TouchOrderRow
+                      order={order}
+                      rowNum={i + 1}
+                      rowClassName={style?.bg}
+                      reorderEnabled={buttonReorderEnabled}
+                      routeOptions={routeOptions}
+                      currentContainerId={containerId}
+                      busy={recalculating}
+                      onPatch={onPatch}
+                      canMoveUp={i > 0}
+                      canMoveDown={i < orderIds.length - 1}
+                      onMoveUp={() => {
+                        const prev = {
+                          ...Object.fromEntries(
+                            Object.entries(containersRef.current).map(([k, v]) => [k, [...v]])
+                          ),
+                        };
+                        applyReorder(moveWithinContainer(containersRef.current, orderId, "up"), prev);
+                      }}
+                      onMoveDown={() => {
+                        const prev = {
+                          ...Object.fromEntries(
+                            Object.entries(containersRef.current).map(([k, v]) => [k, [...v]])
+                          ),
+                        };
+                        applyReorder(moveWithinContainer(containersRef.current, orderId, "down"), prev);
+                      }}
+                      onChangeRoute={(targetId) => {
+                        const prev = {
+                          ...Object.fromEntries(
+                            Object.entries(containersRef.current).map(([k, v]) => [k, [...v]])
+                          ),
+                        };
+                        applyReorder(moveToContainer(containersRef.current, orderId, targetId), prev);
+                      }}
+                    />
+                  </div>
                 );
               })}
             </div>
@@ -1160,16 +1204,27 @@ function RouteGroupRows({
         {orderIds.map((id, i) => {
           const order = orderById.get(id);
           if (!order) return null;
+          const leg = orderLegNummer(order);
+          const prevLeg = i > 0 ? orderLegNummer(orderById.get(orderIds[i - 1]!)) : leg;
+          const showDepotBreak = i > 0 && leg > prevLeg;
           return (
-            <SortableOrderRow
-              key={`${id}-${order.aankomsttijd_slot ?? ""}-${(order as { rit_nummer?: number }).rit_nummer ?? ""}`}
-              id={id}
-              order={order}
-              rowNum={i + 1}
-              rowClassName={style?.bg}
-              dragEnabled={dragEnabled}
-              onPatch={onPatch}
-            />
+            <div key={`${id}-${order.aankomsttijd_slot ?? ""}-${(order as { rit_nummer?: number }).rit_nummer ?? ""}-${leg}`}>
+              {showDepotBreak && (
+                <DepotReturnBanner
+                  legNummer={leg}
+                  gridClass={GRID_COLS}
+                  colSpanClass="col-span-7"
+                />
+              )}
+              <SortableOrderRow
+                id={id}
+                order={order}
+                rowNum={i + 1}
+                rowClassName={style?.bg}
+                dragEnabled={dragEnabled}
+                onPatch={onPatch}
+              />
+            </div>
           );
         })}
       </SortableContext>

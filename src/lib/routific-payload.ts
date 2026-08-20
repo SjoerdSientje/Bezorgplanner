@@ -10,9 +10,10 @@ export const DEPOT_ADDRESS = "Kapelweg 2, 3732 GS, De Bilt, Netherlands";
 export const SERVICE_TIME_MINUTES = 20;
 const DEFAULT_DURATION = SERVICE_TIME_MINUTES;
 const DEFAULT_SHIFT_END = "23:59";
-/** Minuten op het depot tussen twee ritten (laden/lossen); gebruikt om de vertrektijd van
- * een volgende rit te schatten bij "meerdere ritten". */
-const RELOAD_TIME_MINUTEN = 30;
+/** Minuten op het depot tussen twee ritten (laden/lossen). */
+export const DEPOT_RELOAD_MINUTES = 30;
+/** @deprecated gebruik DEPOT_RELOAD_MINUTES */
+const RELOAD_TIME_MINUTEN = DEPOT_RELOAD_MINUTES;
 /** Ruwe schatting gemiddelde reistijd tussen twee opeenvolgende stops (minuten), alleen
  * gebruikt om de vertrektijd van rit 2/3/... te schatten. Routific bepaalt de daadwerkelijke
  * aankomsttijden zelf op basis van de echte reisafstanden — deze schatting is enkel een
