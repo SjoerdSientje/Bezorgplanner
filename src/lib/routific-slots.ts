@@ -4,15 +4,18 @@
  */
 
 import { parseRoutificArrivalTime } from "@/lib/routific-arrival";
-import { getPointToPointTravelMinutes } from "@/lib/google-travel-times";
 import {
-  DEPOT_ADDRESS,
   DEPOT_RELOAD_MINUTES,
   orderRouteLoad,
   SERVICE_TIME_MINUTES,
   type OrderForRoute,
   type ParallelRouteSpec,
 } from "@/lib/routific-payload";
+import {
+  recalculateRouteStopsWithDepotReturns,
+  splitStopsByVehicleCapacity,
+  type RouteStop,
+} from "@/lib/route-recalc";
 import { maakTijdslot } from "@/lib/tijdslot";
 
 export type RoutificSolutionStop = {
@@ -101,94 +104,153 @@ export function buildRouteSlotsFromRoutificStops(
 
 /**
  * Meerdere Routific-legs van één route → één tijdlijn.
- * Tussen delen: rijtijd laatste stop → depot + DEPOT_RELOAD_MINUTES + rijtijd depot → eerste stop deel 2.
- * (Routific plant legs als losse voertuigen die parallel mogen lopen; zonder deze stap
- * plakken stops aan elkaar met alleen 20 min uitladen.)
+ *
+ * Belangrijk: Routific plant legs als losse voertuigen en kan stops dun verdelen
+ * (bijv. 2+3+3 i.p.v. 4+4). Wij herpakken altijd tot zo weinig mogelijk ritten:
+ * bus vol tot capaciteit → pas dan terug naar depot + herladen.
  */
 export async function buildRouteSlotsFromMultiLegSolution(
   legStopsList: RoutificSolutionStop[][],
   orderByVisitId: Map<string, OrderForRoute>,
-  routeNummer: number | null
+  routeNummer: number | null,
+  options?: { capacity?: number; vertrektijd?: string }
 ): Promise<BuiltRouteSlot[]> {
-  const nonEmptyLegs = legStopsList.filter((stops) =>
-    stops.some((s) => {
-      const locId = s.location_id ?? "";
-      return !isDepotLikeStop(locId) && orderByVisitId.has(locId);
-    })
-  );
+  type TimedVisit = { order: OrderForRoute; arrivalMin: number };
+  const visits: TimedVisit[] = [];
+  const seen = new Set<string>();
 
-  if (nonEmptyLegs.length <= 1) {
-    return buildRouteSlotsFromRoutificStops(nonEmptyLegs[0] ?? [], orderByVisitId, routeNummer, {
-      legNummer: 1,
-    });
+  for (const stops of legStopsList) {
+    for (const stop of stops) {
+      const locId = stop.location_id ?? "";
+      if (isDepotLikeStop(locId)) continue;
+      const order = orderByVisitId.get(locId);
+      if (!order || seen.has(order.id)) continue;
+      const rawArrival = parseRoutificArrivalTime(stop.arrival_time);
+      if (!rawArrival) continue;
+      seen.add(order.id);
+      visits.push({ order, arrivalMin: toMinutes(rawArrival) });
+    }
   }
+
+  if (visits.length === 0) return [];
+
+  visits.sort((a, b) => a.arrivalMin - b.arrivalMin);
+
+  const rawCap = options?.capacity;
+  const capacity =
+    rawCap == null || !Number.isFinite(Number(rawCap)) || Number(rawCap) < 1
+      ? 0
+      : Math.max(1, Math.floor(Number(rawCap)));
+  const vertrektijd =
+    String(options?.vertrektijd ?? "").trim() ||
+    fromMinutes(Math.max(0, visits[0]!.arrivalMin - 30));
+
+  // Zonder capaciteit (geen "terug naar depot"): één doorlopende rit.
+  if (capacity < 1) {
+    return buildRouteSlotsFromRoutificStops(
+      visits.map((v) => ({
+        location_id: v.order.id,
+        arrival_time: fromMinutes(v.arrivalMin),
+      })),
+      orderByVisitId,
+      routeNummer,
+      { legNummer: 1 }
+    );
+  }
+
+  const routeStops: RouteStop[] = visits.map(({ order }) => ({
+    id: order.id,
+    volledig_adres: String(order.volledig_adres ?? "").trim(),
+    bezorgtijd_voorkeur: order.bezorgtijd_voorkeur,
+    load: orderRouteLoad(order),
+  }));
+
+  if (routeStops.some((s) => !s.volledig_adres)) {
+    // Geen Google-herberekening mogelijk → pak alleen op capaciteit met Routific-tijden + depot-gap.
+    return buildPackedSlotsFromRoutificTimes(
+      visits,
+      orderByVisitId,
+      routeNummer,
+      capacity
+    );
+  }
+
+  try {
+    const recalculated = await recalculateRouteStopsWithDepotReturns(
+      routeStops,
+      vertrektijd,
+      capacity
+    );
+    return recalculated.map((s, i) => ({
+      order_id: s.id,
+      aankomsttijd: s.aankomsttijd_slot,
+      arrivalTime: s.arrivalTime,
+      rit_nummer: i + 1,
+      route_nummer: routeNummer,
+      leg_nummer: Math.max(1, s.leg_nummer ?? 1),
+    }));
+  } catch (err) {
+    console.warn(
+      "[routific-slots] capaciteit-herberekening mislukt — fallback Routific-tijden",
+      err
+    );
+    return buildPackedSlotsFromRoutificTimes(
+      visits,
+      orderByVisitId,
+      routeNummer,
+      capacity
+    );
+  }
+}
+
+/** Pack op capaciteit; behoud relatieve Routific-aankomstvolgorde en schuif tijden met depot-gap. */
+function buildPackedSlotsFromRoutificTimes(
+  visits: { order: OrderForRoute; arrivalMin: number }[],
+  orderByVisitId: Map<string, OrderForRoute>,
+  routeNummer: number | null,
+  capacity: number
+): BuiltRouteSlot[] {
+  const routeStops: RouteStop[] = visits.map(({ order }) => ({
+    id: order.id,
+    volledig_adres: String(order.volledig_adres ?? "").trim(),
+    bezorgtijd_voorkeur: order.bezorgtijd_voorkeur,
+    load: orderRouteLoad(order),
+  }));
+  const legs = splitStopsByVehicleCapacity(routeStops, capacity);
+  const arrivalById = new Map(visits.map((v) => [v.order.id, v.arrivalMin]));
 
   const out: BuiltRouteSlot[] = [];
   let prevFinishMin: number | null = null;
-  let prevAddress: string | null = null;
-  let ritOffset = 0;
 
-  for (let legIdx = 0; legIdx < nonEmptyLegs.length; legIdx++) {
+  for (let legIdx = 0; legIdx < legs.length; legIdx++) {
+    const leg = legs[legIdx]!;
     const legNummer = legIdx + 1;
-    let legSlots = buildRouteSlotsFromRoutificStops(
-      nonEmptyLegs[legIdx]!,
-      orderByVisitId,
-      routeNummer,
-      { legNummer, ritNummerOffset: ritOffset }
-    );
-    if (legSlots.length === 0) continue;
+    let shift = 0;
 
-    if (prevFinishMin != null && prevAddress) {
-      const firstOrder = orderByVisitId.get(legSlots[0]!.order_id);
-      const firstAddress = String(firstOrder?.volledig_adres ?? "").trim();
-      let shift = 0;
-      if (firstAddress) {
-        try {
-          const toDepot = await getPointToPointTravelMinutes(prevAddress, DEPOT_ADDRESS);
-          const fromDepot = await getPointToPointTravelMinutes(DEPOT_ADDRESS, firstAddress);
-          const earliestFirst =
-            prevFinishMin + toDepot + DEPOT_RELOAD_MINUTES + fromDepot;
-          const firstArrival = toMinutes(legSlots[0]!.arrivalTime);
-          if (firstArrival < earliestFirst) {
-            shift = earliestFirst - firstArrival;
-          }
-        } catch (err) {
-          console.warn(
-            "[routific-slots] depot-reistijd mislukt — schatting 25+30+25 min",
-            err
-          );
-          const earliestFirst = prevFinishMin + 25 + DEPOT_RELOAD_MINUTES + 25;
-          const firstArrival = toMinutes(legSlots[0]!.arrivalTime);
-          if (firstArrival < earliestFirst) {
-            shift = earliestFirst - firstArrival;
-          }
-        }
-      }
-
-      if (shift > 0) {
-        legSlots = legSlots.map((slot) => {
-          const order = orderByVisitId.get(slot.order_id);
-          const arrivalMin = toMinutes(slot.arrivalTime) + shift;
-          const arrivalTime = fromMinutes(arrivalMin);
-          return {
-            ...slot,
-            arrivalTime,
-            aankomsttijd: maakTijdslot(
-              arrivalTime,
-              order?.bezorgtijd_voorkeur ?? null
-            ),
-          };
-        });
+    if (prevFinishMin != null && leg.length > 0) {
+      const firstArrival = arrivalById.get(leg[0]!.id) ?? prevFinishMin;
+      const earliestFirst = prevFinishMin + 25 + DEPOT_RELOAD_MINUTES + 25;
+      if (firstArrival + shift < earliestFirst) {
+        shift = earliestFirst - firstArrival;
       }
     }
 
-    for (const slot of legSlots) {
-      out.push(slot);
-      prevFinishMin = toMinutes(slot.arrivalTime) + SERVICE_TIME_MINUTES;
-      const addr = String(orderByVisitId.get(slot.order_id)?.volledig_adres ?? "").trim();
-      if (addr) prevAddress = addr;
+    for (const stop of leg) {
+      const order = orderByVisitId.get(stop.id) ?? visits.find((v) => v.order.id === stop.id)?.order;
+      if (!order) continue;
+      const base = arrivalById.get(stop.id) ?? 0;
+      const arrivalMin = base + shift;
+      const arrivalTime = fromMinutes(arrivalMin);
+      out.push({
+        order_id: order.id,
+        arrivalTime,
+        aankomsttijd: maakTijdslot(arrivalTime, order.bezorgtijd_voorkeur),
+        rit_nummer: out.length + 1,
+        route_nummer: routeNummer,
+        leg_nummer: legNummer,
+      });
+      prevFinishMin = arrivalMin + SERVICE_TIME_MINUTES;
     }
-    ritOffset = out.length;
   }
 
   return out.map((slot, i) => ({ ...slot, rit_nummer: i + 1 }));

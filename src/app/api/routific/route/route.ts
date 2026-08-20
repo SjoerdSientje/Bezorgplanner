@@ -345,8 +345,16 @@ export async function POST(request: NextRequest) {
       const built = await buildRouteSlotsFromMultiLegSolution(
         legStopsList,
         orderByVisitId,
-        routeNummerDb
+        routeNummerDb,
+        {
+          // Alleen herpakken op capaciteit als terug-naar-depot aan staat.
+          capacity: parallelRoutes[vi]?.meerdereRitten
+            ? parallelRoutes[vi]?.capacity
+            : undefined,
+          vertrektijd: parallelRoutes[vi]?.shift_start,
+        }
       );
+      const maxLeg = Math.max(1, ...built.map((s) => s.leg_nummer));
       for (const slot of built) {
         volgorde += 1;
         slotsToInsert.push({
@@ -357,7 +365,7 @@ export async function POST(request: NextRequest) {
           rit_nummer: slot.rit_nummer,
           route_nummer: slot.route_nummer,
           route_naam: routeNaamDb,
-          leg_nummer: slot.leg_nummer > 1 || legStopsList.length > 1 ? slot.leg_nummer : null,
+          leg_nummer: maxLeg > 1 ? slot.leg_nummer : null,
         });
       }
     }
