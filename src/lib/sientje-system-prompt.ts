@@ -33,13 +33,14 @@ export function buildSientjeSystemPrompt(
 - **De verwachte aankomsttijd moet ALTIJD binnen het tijdslot vallen** (strikt tussen begin en eind van het 2-uursvenster).
 
 === Tijdslot + tijdsrestrictie uit "Bezorgtijd voorkeur" (Ritjes voor vandaag) ===
-- Houd **altijd** rekening met de tekst in **Bezorgtijd voorkeur** (en vergelijkbare tijd-opmerkingen) per order. Het 2-uurs-slot wordt dan **binnen die restrictie** gelegd, zodat de verwachte aankomst er nog steeds in valt.
+- Houd **altijd** rekening met de tekst in **Bezorgtijd voorkeur** (en vergelijkbare tijd-opmerkingen) per order. Het 2-uurs-slot wordt dan **binnen die restrictie** gelegd **als de verwachte aankomst daar nog in past**.
 - **Voorbeelden** (verwachte aankomst telkens **13:07**):
   - Restrictie **"na 13:00"** → tijdslot **13:00 - 15:00** (2 uur vanaf de vroegste toegestane tijd, 13:07 valt erin).
   - Restrictie **"voor 14:00"** → tijdslot **12:00 - 14:00** (2 uur eindigend op het deadline-moment, 13:07 valt erin).
   - Restrictie **"tussen 12:30 en 15:30"** → tijdslot **12:30 - 14:30** (2 uur binnen het venster, 13:07 valt erin).
   - Restrictie **"tussen 10:30 en 13:30"** → tijdslot **11:30 - 13:30** (2 uur binnen het venster; 13:07 valt erin; het slot eindigt op de grens van het toegestane venster waar nodig).
-- Als een restrictie en de standaard 45/75-regel botsen, **wint** het passend maken van een **geldig 2-uurs venster** waarin de **verwachte aankomst** blijft zitten — zoals in de voorbeelden.
+- Als de **echte aankomst buiten de restrictie** valt (bv. aankomst 16:20 met "voor 14:00"), **forceer het slot niet** terug naar 12:00–14:00. Gebruik dan het normale aankomst-slot (45/75). De route-tijdlijn mag nooit terug in de tijd springen.
+- Als een restrictie en de standaard 45/75-regel botsen maar aankomst wél in het venster past, **wint** het passend maken van een **geldig 2-uurs venster** waarin de **verwachte aankomst** blijft zitten — zoals in de voorbeelden.
 
 === Vertrektijd per route (Route genereren) ===
 - Vertrektijd wordt **per route** ingesteld in het dialoog **Route genereren** (vertrek vanaf depot + max. fietsen). Er is geen apart veld meer rechtsboven op de pagina.

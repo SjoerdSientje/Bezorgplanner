@@ -1,12 +1,16 @@
 /**
  * Berekent een tijdslot (2 uur) rond een verwachte aankomsttijd.
+ *
+ * Belangrijk: de **echte aankomst** uit de route is leidend. Restricties mogen het
+ * 2-uursvenster alleen verschuiven als de aankomst daar nog in past. Nooit een
+ * vroeg/laat slot verzinnen dat de aankomst buiten het venster zet (dat gaf
+ * bv. "12:00-14:00" terwijl de bus pas na depot-return om 16:xx aankomt).
  */
 
 import { parseBezorgtijdRestriction } from "@/lib/bezorgtijd-window";
 
 const SLOT_DURATION_MIN = 120;
 const DEFAULT_BEFORE_MIN = 45;
-const DEFAULT_AFTER_MIN = 75;
 
 function toMinutes(hhmm: string): number {
   const [h, m] = hhmm.split(":").map((x) => parseInt(x, 10));
@@ -24,6 +28,14 @@ function formatSlotRange(slotStart: number): string {
   return `${fromMinutes(slotStart)} - ${fromMinutes(slotStart + SLOT_DURATION_MIN)}`;
 }
 
+function defaultSlotAroundArrival(arrival: number): string {
+  return formatSlotRange(arrival - DEFAULT_BEFORE_MIN);
+}
+
+function arrivalInside(arrival: number, slotStart: number): boolean {
+  return arrival >= slotStart && arrival <= slotStart + SLOT_DURATION_MIN;
+}
+
 /**
  * Maakt een tijdslot "HH:mm - HH:mm" (2 uur) rond de verwachte aankomsttijd.
  */
@@ -35,24 +47,50 @@ export function maakTijdslot(
   const res = parseBezorgtijdRestriction(tijdsrestrictieOpmerking);
 
   if (!res) {
-    return formatSlotRange(arrival - DEFAULT_BEFORE_MIN);
+    return defaultSlotAroundArrival(arrival);
   }
 
   if (res.kind === "na") {
     const minStart = toMinutes(res.minStart);
+    // Aankomst vóór toegestaan venster → toon eerlijk aankomst-slot, forceer niet later.
+    if (arrival < minStart) {
+      return defaultSlotAroundArrival(arrival);
+    }
     const slotStart = Math.max(minStart, arrival - DEFAULT_BEFORE_MIN);
+    if (!arrivalInside(arrival, slotStart)) {
+      return defaultSlotAroundArrival(arrival);
+    }
     return formatSlotRange(slotStart);
   }
 
   if (res.kind === "voor") {
     const maxEnd = toMinutes(res.maxEnd);
-    const slotEnd = Math.min(maxEnd, arrival + DEFAULT_AFTER_MIN);
-    const slotStart = slotEnd - SLOT_DURATION_MIN;
+    // Aankomst ná deadline → toon eerlijk aankomst-slot (niet terugspoelen naar 12:00–14:00).
+    if (arrival > maxEnd) {
+      return defaultSlotAroundArrival(arrival);
+    }
+    // Liever slot dat eindigt op de deadline, als aankomst daar nog in valt.
+    const preferredStart = maxEnd - SLOT_DURATION_MIN;
+    if (arrivalInside(arrival, preferredStart)) {
+      return formatSlotRange(preferredStart);
+    }
+    let slotStart = arrival - DEFAULT_BEFORE_MIN;
+    if (slotStart + SLOT_DURATION_MIN > maxEnd) {
+      slotStart = maxEnd - SLOT_DURATION_MIN;
+    }
+    if (!arrivalInside(arrival, slotStart)) {
+      return defaultSlotAroundArrival(arrival);
+    }
     return formatSlotRange(slotStart);
   }
 
   const minStart = toMinutes(res.minStart);
   const maxEnd = toMinutes(res.maxEnd);
+  // Aankomst buiten "tussen … en …" → eerlijk aankomst-slot.
+  if (arrival < minStart || arrival > maxEnd) {
+    return defaultSlotAroundArrival(arrival);
+  }
+
   let slotStart: number;
   if (arrival >= maxEnd - SLOT_DURATION_MIN) {
     slotStart = maxEnd - SLOT_DURATION_MIN;
@@ -61,6 +99,9 @@ export function maakTijdslot(
     if (slotStart + SLOT_DURATION_MIN > maxEnd) {
       slotStart = maxEnd - SLOT_DURATION_MIN;
     }
+  }
+  if (!arrivalInside(arrival, slotStart)) {
+    return defaultSlotAroundArrival(arrival);
   }
   return formatSlotRange(slotStart);
 }
