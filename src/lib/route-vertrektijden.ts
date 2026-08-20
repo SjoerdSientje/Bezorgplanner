@@ -54,6 +54,43 @@ export function readSavedRoutesFromStorage(): SavedRouteRow[] {
   return parseSavedRoutes(raw);
 }
 
+/** Schrijf route-rijen naar localStorage (zelfde key als Route genereren). */
+export function writeSavedRoutesToStorage(rows: SavedRouteRow[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(ROUTES_LS, JSON.stringify(rows));
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Verwijder handmatig gekozen order-IDs die niet meer in Lijst Sjoerd staan
+ * (bv. na planning goedkeuren / nieuwe dag).
+ */
+export function pruneRouteOrderIdsToAvailable(
+  rows: SavedRouteRow[],
+  availableOrderIds: Iterable<string>
+): { rows: SavedRouteRow[]; changed: boolean } {
+  const available = new Set(
+    Array.from(availableOrderIds).map((id) => String(id).trim()).filter(Boolean)
+  );
+  let changed = false;
+  const next = rows.map((row) => {
+    const pruned = row.orderIds.filter((id) => available.has(id));
+    if (pruned.length !== row.orderIds.length) changed = true;
+    return pruned.length === row.orderIds.length ? row : { ...row, orderIds: pruned };
+  });
+  return { rows: next, changed };
+}
+
+/** Wis alle handmatig gekozen adressen (na goedkeuren nieuwe planning). */
+export function clearAllRouteOrderIds(rows: SavedRouteRow[]): SavedRouteRow[] {
+  return rows.map((row) =>
+    row.orderIds.length === 0 ? row : { ...row, orderIds: [] }
+  );
+}
+
 export function defaultRouteRowsForDialog(): SavedRouteRow[] {
   return [
     {

@@ -4,9 +4,11 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import RouteOrderPicker, { type RoutePickOrder } from "@/components/RouteOrderPicker";
 import { routeStyleForIndex } from "@/lib/route-colors";
 import {
-  ROUTES_LS,
+  clearAllRouteOrderIds,
   defaultRouteRowsForDialog,
+  pruneRouteOrderIdsToAvailable,
   readSavedRoutesFromStorage,
+  writeSavedRoutesToStorage,
   type SavedRouteRow,
 } from "@/lib/route-vertrektijden";
 
@@ -172,13 +174,20 @@ export default function RitjesRouteControls({
     setRoutes(loadRoutesDefault());
   }, []);
 
+  /** Verwijder gisteren/oude pins die niet meer in Lijst Sjoerd staan. */
+  useEffect(() => {
+    const availableIds = sjoerdOrders.map((o) => o.id);
+    setRoutes((prev) => {
+      const { rows, changed } = pruneRouteOrderIdsToAvailable(prev, availableIds);
+      if (!changed) return prev;
+      writeSavedRoutesToStorage(rows);
+      return rows;
+    });
+  }, [sjoerdOrders]);
+
   const persistRoutes = useCallback((rows: RouteRow[]) => {
     setRoutes(rows);
-    try {
-      localStorage.setItem(ROUTES_LS, JSON.stringify(rows));
-    } catch {
-      // ignore
-    }
+    writeSavedRoutesToStorage(rows);
   }, []);
 
   const assignedElsewhereForPicker = useMemo(() => {
@@ -274,6 +283,12 @@ export default function RitjesRouteControls({
       } else {
         setGoedkeurenMessage({ type: "ok", text: data.message || "Planning goedgekeurd." });
       }
+      // Na goedkeuren: handmatige adreskeuze wissen, zodat morgen niet gisteren's pins blijven hangen.
+      setRoutes((prev) => {
+        const cleared = clearAllRouteOrderIds(prev);
+        writeSavedRoutesToStorage(cleared);
+        return cleared;
+      });
     } catch {
       setGoedkeurenMessage({ type: "error", text: "Er ging iets mis. Probeer het opnieuw." });
     } finally {
@@ -288,6 +303,9 @@ export default function RitjesRouteControls({
           <button
             type="button"
             onClick={() => {
+              const availableIds = sjoerdOrders.map((o) => o.id);
+              const { rows } = pruneRouteOrderIdsToAvailable(loadRoutesDefault(), availableIds);
+              persistRoutes(rows);
               setShowDialog(true);
               setMessage(null);
             }}
