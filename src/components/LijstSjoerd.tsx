@@ -120,6 +120,10 @@ function EditableCell({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
 
+  useEffect(() => {
+    if (!editing) setDraft(value);
+  }, [value, editing]);
+
   const commit = () => {
     setEditing(false);
     if (draft.trim() !== value) onSave(draft.trim());

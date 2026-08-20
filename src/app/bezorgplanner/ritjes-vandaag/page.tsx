@@ -84,6 +84,42 @@ export default function RitjesVandaagPage() {
     }
   }, []);
 
+  /** Na Route genereren: slots meteen in state, daarna server-fetch ter bevestiging. */
+  const handleRouteGenerated = useCallback(
+    async (payload?: {
+      orderUpdates?: Array<{
+        id: string;
+        aankomsttijd_slot: string | null;
+        rit_nummer: number | null;
+        route_nummer: number | null;
+        route_naam?: string | null;
+        leg_nummer: number | null;
+      }>;
+    }) => {
+      const updates = payload?.orderUpdates;
+      if (updates && updates.length > 0) {
+        const byId = new Map(updates.map((u) => [u.id, u]));
+        setOrders((prev) =>
+          prev.map((o) => {
+            const u = byId.get(String(o.id ?? ""));
+            if (!u) return o;
+            return {
+              ...o,
+              aankomsttijd_slot: u.aankomsttijd_slot,
+              rit_nummer: u.rit_nummer,
+              route_nummer: u.route_nummer,
+              route_naam: u.route_naam ?? null,
+              leg_nummer: u.leg_nummer,
+            };
+          })
+        );
+        setTableResetKey((k) => k + 1);
+      }
+      await fetchRitjes();
+    },
+    [fetchRitjes]
+  );
+
   /** Pas één order in de lokale state aan zonder een server-fetch te triggeren. */
   const patchOrderInState = useCallback(
     (rowIndex: number, fields: Record<string, unknown>) => {
@@ -497,7 +533,7 @@ export default function RitjesVandaagPage() {
               </h1>
             </div>
             <RitjesRouteControls
-              onRouteGenerated={fetchRitjes}
+              onRouteGenerated={handleRouteGenerated}
               sjoerdOrders={sjoerdOrders}
             />
           </div>

@@ -85,6 +85,24 @@ function isDepotLikeStop(locId: string): boolean {
   return locId === "depot" || /_(start|end)$/i.test(locId);
 }
 
+/** Zoek order bij Routific location_id (visit-key of ruwe order-id). */
+export function resolveOrderFromLocationId(
+  locId: string,
+  orderByVisitId: Map<string, OrderForRoute>
+): OrderForRoute | undefined {
+  const raw = String(locId ?? "").trim();
+  if (!raw || isDepotLikeStop(raw)) return undefined;
+  const direct = orderByVisitId.get(raw);
+  if (direct) return direct;
+  const sanitized = raw.replace(/[.$]/g, "_");
+  const viaSanitize = orderByVisitId.get(sanitized);
+  if (viaSanitize) return viaSanitize;
+  for (const order of Array.from(orderByVisitId.values())) {
+    if (order.id === raw || order.id.replace(/[.$]/g, "_") === sanitized) return order;
+  }
+  return undefined;
+}
+
 /**
  * Zet één Routific-voertuig/leg om naar tijdsloten in Routific-stopvolgorde.
  * Aankomst[i] >= finish[i-1] (finish = aankomst + SERVICE_TIME_MINUTES of Routific finish_time).
@@ -104,7 +122,7 @@ export function buildRouteSlotsFromRoutificStops(
     const locId = stop.location_id ?? "";
     if (isDepotLikeStop(locId)) continue;
 
-    const order = orderByVisitId.get(locId);
+    const order = resolveOrderFromLocationId(locId, orderByVisitId);
     if (!order) continue;
 
     const rawArrival = parseRoutificArrivalTime(stop.arrival_time);
@@ -162,7 +180,7 @@ export async function buildRouteSlotsFromMultiLegSolution(
     for (const stop of stops) {
       const locId = stop.location_id ?? "";
       if (isDepotLikeStop(locId)) continue;
-      const order = orderByVisitId.get(locId);
+      const order = resolveOrderFromLocationId(locId, orderByVisitId);
       if (!order || seen.has(order.id)) continue;
       const rawArrival = parseRoutificArrivalTime(stop.arrival_time);
       if (!rawArrival) continue;
@@ -374,7 +392,7 @@ export function extractOrderIdsFromRoutificStops(
   for (const stop of stops) {
     const locId = stop.location_id ?? "";
     if (isDepotLikeStop(locId)) continue;
-    const order = orderByVisitId.get(locId);
+    const order = resolveOrderFromLocationId(locId, orderByVisitId);
     if (order) ids.push(order.id);
   }
   return ids;

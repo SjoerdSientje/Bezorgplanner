@@ -259,17 +259,30 @@ export async function POST(request: NextRequest) {
     }
 
     // Bij "meerdere ritten" bestaat één route uit meerdere voertuigen/legs (vehicle_N,
-    // vehicle_N_leg2, ...) — zie routific-payload.ts. Bereken per route hoeveel legs er
-    // zijn opgevraagd (zelfde berekening als bij het bouwen van de payload) zodat we de
-    // stops van alle legs van diezelfde route achter elkaar kunnen verwerken.
+    // vehicle_N_leg2, ...) — zie routific-payload.ts. Combineer geschatte keys met wat
+    // Routific écht teruggeeft, zodat we geen stops missen of lege legs krijgen.
     const legsPerRoute = new Map<number, number>();
     const routeVehicleKeys = new Map<number, string[]>();
+    const solutionKeys = Object.keys(solution ?? {});
     for (let i = 0; i < parallelRoutes.length; i++) {
-      const legs = parallelRoutes[i]?.meerdereRitten
+      const routeNum = i + 1;
+      const estimatedLegs = parallelRoutes[i]?.meerdereRitten
         ? estimateLegsForRoute(i, parallelRoutes, rowsGeocoded)
         : 1;
-      legsPerRoute.set(i + 1, legs);
-      routeVehicleKeys.set(i + 1, getRouteLegVehicleKeys(i, legs));
+      const estimatedKeys = getRouteLegVehicleKeys(i, estimatedLegs);
+      const prefix = `vehicle_${routeNum}`;
+      const fromSolution = solutionKeys
+        .filter((k) => k === prefix || k.startsWith(`${prefix}_leg`))
+        .sort((a, b) => {
+          if (a === prefix) return -1;
+          if (b === prefix) return 1;
+          const na = parseInt(a.replace(`${prefix}_leg`, ""), 10);
+          const nb = parseInt(b.replace(`${prefix}_leg`, ""), 10);
+          return (Number.isFinite(na) ? na : 99) - (Number.isFinite(nb) ? nb : 99);
+        });
+      const keys = fromSolution.length > 0 ? fromSolution : estimatedKeys;
+      legsPerRoute.set(routeNum, Math.max(1, keys.length));
+      routeVehicleKeys.set(routeNum, keys);
     }
 
     const slotsToInsert: {
@@ -359,7 +372,10 @@ export async function POST(request: NextRequest) {
           vertrektijd: parallelRoutes[vi]?.shift_start,
         }
       );
-      const maxLeg = Math.max(1, ...built.slots.map((s) => s.leg_nummer));
+      const maxLeg =
+        built.slots.length > 0
+          ? Math.max(1, ...built.slots.map((s) => Number(s.leg_nummer ?? 1)))
+          : 1;
       for (const slot of built.slots) {
         volgorde += 1;
         slotsToInsert.push({
@@ -381,18 +397,35 @@ export async function POST(request: NextRequest) {
     if (slotsToInsert.length === 0 && rowsForRouting.length > 0) {
       const unservedRaw = output?.unserved as Record<string, unknown> | null | undefined;
       const unservedIds = unservedRaw ? Object.keys(unservedRaw) : [];
-      return NextResponse.json({
-        ok: true,
-        warning:
-          `Routific heeft geen stops ingepland. ${unservedIds.length > 0 ? `${unservedIds.length} order(s) staan als onbereikbaar: ${unservedIds.join(", ")}` : "Controleer adressen in Routific."}`,
-        planningDate,
-        vertrektijd,
+      const solutionStopCount = Object.values(solution ?? {}).reduce(
+        (n, stops) => n + (Array.isArray(stops) ? stops.length : 0),
+        0
+      );
+      console.error("[api/routific/route] geen slots uit oplossing", {
         visitCount: rowsForRouting.length,
-        slotsWritten: 0,
-        job_id,
-        solution: output?.solution ?? null,
-        unserved: unservedRaw ?? null,
+        unserved: unservedIds.length,
+        solutionKeys: Object.keys(solution ?? {}),
+        solutionStopCount,
       });
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            "Route-job klaar maar er konden geen tijdsloten uit de Routific-oplossing worden gelezen. Oude tijdsloten zijn níet overschreven.",
+          detail:
+            unservedIds.length > 0
+              ? `${unservedIds.length} order(s) unserved; solution stops=${solutionStopCount}`
+              : `Geen herkenbare stops in solution (keys: ${Object.keys(solution ?? {}).join(", ") || "geen"}).`,
+          planningDate,
+          vertrektijd,
+          visitCount: rowsForRouting.length,
+          slotsWritten: 0,
+          job_id,
+          solution: output?.solution ?? null,
+          unserved: unservedRaw ?? null,
+        },
+        { status: 502 }
+      );
     }
 
     // Altijd alle orders in de batch resetten (ook aankomsttijd_slot), zodat geen
@@ -430,6 +463,13 @@ export async function POST(request: NextRequest) {
           leg_nummer: s.leg_nummer,
         });
         if (err) writeErrors.push(`${s.order_id}: ${err.message}`);
+        // Als er al een actieve planning_slot is (zeldzaam in Lijst Sjoerd), houd die in sync.
+        await supabase
+          .from("planning_slots")
+          .update({ aankomsttijd: s.aankomsttijd })
+          .eq("owner_email", ownerEmail)
+          .eq("order_id", s.order_id)
+          .neq("status", "afgerond");
       }
       if (writeErrors.length > 0) {
         console.error("[api/routific/route] slot writes:", writeErrors.slice(0, 5));
@@ -542,6 +582,27 @@ export async function POST(request: NextRequest) {
       unserved: unserved ?? null,
       warning: combinedWarning,
       excludedByActiveSlot: excludedByActiveSlot.map((o) => ({ id: o.id, naam: o.naam })),
+      // Direct toepasbaar in de UI zodat opnieuw genereren meteen zichtbaar is.
+      orderUpdates: [
+        ...rowsForRouting
+          .filter((o) => !servedIds.has(o.id))
+          .map((o) => ({
+            id: o.id,
+            aankomsttijd_slot: null as string | null,
+            rit_nummer: null as number | null,
+            route_nummer: null as number | null,
+            route_naam: null as string | null,
+            leg_nummer: null as number | null,
+          })),
+        ...slotsToInsert.map((s) => ({
+          id: s.order_id,
+          aankomsttijd_slot: s.aankomsttijd,
+          rit_nummer: s.rit_nummer,
+          route_nummer: s.route_nummer,
+          route_naam: s.route_naam,
+          leg_nummer: s.leg_nummer,
+        })),
+      ],
     });
   } catch (e) {
     console.error("[api/routific/route]", e);

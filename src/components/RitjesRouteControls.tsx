@@ -153,7 +153,16 @@ function FietsenStepper({
 }
 
 interface Props {
-  onRouteGenerated?: () => void;
+  onRouteGenerated?: (payload?: {
+    orderUpdates?: Array<{
+      id: string;
+      aankomsttijd_slot: string | null;
+      rit_nummer: number | null;
+      route_nummer: number | null;
+      route_naam?: string | null;
+      leg_nummer: number | null;
+    }>;
+  }) => void | Promise<void>;
   sjoerdOrders: RoutePickOrder[];
 }
 
@@ -240,12 +249,32 @@ export default function RitjesRouteControls({
         setMessage({ type: "error", text: errText || "Route kon niet worden gegenereerd." });
         return;
       }
+      const slotsWritten = Number(data.slotsWritten ?? 0);
+      if (slotsWritten <= 0) {
+        setMessage({
+          type: "error",
+          text:
+            data.error ||
+            data.warning ||
+            "Geen tijdsloten geschreven — oude slots zijn niet overschreven.",
+        });
+        return;
+      }
       const warn = typeof data.warning === "string" ? data.warning.trim() : "";
+      const excluded = Array.isArray(data.excludedByActiveSlot)
+        ? data.excludedByActiveSlot.length
+        : 0;
+      const excludedNote =
+        excluded > 0
+          ? `\n\n${excluded} order(s) overgeslagen (staan al in actieve planning / Routes-tab).`
+          : "";
       setMessage({
         type: warn ? "warning" : "ok",
-        text: (data.message || "Route berekend.") + (warn ? `\n\n${warn}` : ""),
+        text: (data.message || "Route berekend.") + (warn ? `\n\n${warn}` : "") + excludedNote,
       });
-      onRouteGenerated?.();
+      await onRouteGenerated?.({
+        orderUpdates: Array.isArray(data.orderUpdates) ? data.orderUpdates : undefined,
+      });
     } catch {
       setMessage({ type: "error", text: "Er ging iets mis. Probeer het opnieuw." });
     } finally {

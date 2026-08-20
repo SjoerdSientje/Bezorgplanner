@@ -1,7 +1,6 @@
 /**
  * Normaliseert Routific arrival_time naar HH:MM (24u).
  */
-
 export function parseRoutificArrivalTime(raw: string | null | undefined): string | null {
   const s = String(raw ?? "").trim().toLowerCase();
   if (!s) return null;
@@ -19,7 +18,17 @@ export function parseRoutificArrivalTime(raw: string | null | undefined): string
     return null;
   }
 
-  const hhmm = s.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  // ISO-achtig: 2024-01-15T10:30:00 of ...10:30
+  const iso = s.match(/(?:t|\s)(\d{1,2}):(\d{2})(?::\d{2})?(?:\.\d+)?(?:z|[+-]\d{2}:?\d{2})?$/i);
+  if (iso) {
+    const h = parseInt(iso[1]!, 10);
+    const m = parseInt(iso[2]!, 10);
+    if (h >= 0 && h <= 23 && m >= 0 && m <= 59) {
+      return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+    }
+  }
+
+  const hhmm = s.match(/^(\d{1,2})[:.](\d{2})(?::\d{2})?$/);
   if (hhmm) {
     const h = parseInt(hhmm[1]!, 10);
     const m = parseInt(hhmm[2]!, 10);
