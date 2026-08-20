@@ -13,7 +13,7 @@ import {
 } from "@/lib/routific-payload";
 import {
   recalculateRouteStopsWithDepotReturns,
-  splitStopsByVehicleCapacity,
+  splitStopsBalancedByCapacity,
   type RouteStop,
 } from "@/lib/route-recalc";
 import { maakTijdslot } from "@/lib/tijdslot";
@@ -105,9 +105,10 @@ export function buildRouteSlotsFromRoutificStops(
 /**
  * Meerdere Routific-legs van één route → één tijdlijn.
  *
- * Belangrijk: Routific plant legs als losse voertuigen en kan stops dun verdelen
- * (bijv. 2+3+3 i.p.v. 4+4). Wij herpakken altijd tot zo weinig mogelijk ritten:
- * bus vol tot capaciteit → pas dan terug naar depot + herladen.
+ * Nooit meer ritten dan ceil(load/capaciteit). Binnen dat minimum kiezen we de
+ * verdeling met de kortste totale rijtijd: volle bus (4+4+1), gebalanceerd (3+3+3),
+ * of Routific's eigen split — zodat we niet onnodig terugrijden, maar ook niet
+ * blind 4+4+1 forceren als 3+3+3 geografisch beter is.
  */
 export async function buildRouteSlotsFromMultiLegSolution(
   legStopsList: RoutificSolutionStop[][],
@@ -118,8 +119,10 @@ export async function buildRouteSlotsFromMultiLegSolution(
   type TimedVisit = { order: OrderForRoute; arrivalMin: number };
   const visits: TimedVisit[] = [];
   const seen = new Set<string>();
+  const routificLegOrders: OrderForRoute[][] = [];
 
   for (const stops of legStopsList) {
+    const legOrders: OrderForRoute[] = [];
     for (const stop of stops) {
       const locId = stop.location_id ?? "";
       if (isDepotLikeStop(locId)) continue;
@@ -129,7 +132,9 @@ export async function buildRouteSlotsFromMultiLegSolution(
       if (!rawArrival) continue;
       seen.add(order.id);
       visits.push({ order, arrivalMin: toMinutes(rawArrival) });
+      legOrders.push(order);
     }
+    if (legOrders.length > 0) routificLegOrders.push(legOrders);
   }
 
   if (visits.length === 0) return [];
@@ -165,8 +170,16 @@ export async function buildRouteSlotsFromMultiLegSolution(
     load: orderRouteLoad(order),
   }));
 
+  const routificLegs: RouteStop[][] = routificLegOrders.map((orders) =>
+    orders.map((order) => ({
+      id: order.id,
+      volledig_adres: String(order.volledig_adres ?? "").trim(),
+      bezorgtijd_voorkeur: order.bezorgtijd_voorkeur,
+      load: orderRouteLoad(order),
+    }))
+  );
+
   if (routeStops.some((s) => !s.volledig_adres)) {
-    // Geen Google-herberekening mogelijk → pak alleen op capaciteit met Routific-tijden + depot-gap.
     return buildPackedSlotsFromRoutificTimes(
       visits,
       orderByVisitId,
@@ -179,7 +192,8 @@ export async function buildRouteSlotsFromMultiLegSolution(
     const recalculated = await recalculateRouteStopsWithDepotReturns(
       routeStops,
       vertrektijd,
-      capacity
+      capacity,
+      { routificLegs }
     );
     return recalculated.map((s, i) => ({
       order_id: s.id,
@@ -216,7 +230,7 @@ function buildPackedSlotsFromRoutificTimes(
     bezorgtijd_voorkeur: order.bezorgtijd_voorkeur,
     load: orderRouteLoad(order),
   }));
-  const legs = splitStopsByVehicleCapacity(routeStops, capacity);
+  const legs = splitStopsBalancedByCapacity(routeStops, capacity);
   const arrivalById = new Map(visits.map((v) => [v.order.id, v.arrivalMin]));
 
   const out: BuiltRouteSlot[] = [];
