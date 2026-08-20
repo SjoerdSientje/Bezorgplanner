@@ -76,3 +76,44 @@ export function legNummerByOrderId(legs: string[][]): Map<string, number> {
   });
   return map;
 }
+
+export type OrderOrDepotSegment =
+  | { kind: "orders"; orderIndices: number[] }
+  | { kind: "depot"; partAfter: number };
+
+/**
+ * Deel een gesorteerde orderlijst in segmenten met depot-breaks op leg_nummer.
+ * `orderIndices` verwijst naar indices in de aangeleverde `orderIds`-array.
+ */
+export function segmentsFromOrderLegs(
+  orderIds: string[],
+  legOf: (orderId: string) => number,
+  routeKey: string | number | null
+): OrderOrDepotSegment[] {
+  const seq = stopSequenceFromOrderLegs(orderIds, legOf, routeKey);
+  const idToIdx = new Map(orderIds.map((id, i) => [id, i]));
+  const segments: OrderOrDepotSegment[] = [];
+  let current: number[] = [];
+  let depotCount = 0;
+
+  for (const sid of seq) {
+    if (isDepotStopId(sid)) {
+      if (current.length > 0) {
+        segments.push({ kind: "orders", orderIndices: current });
+        current = [];
+      }
+      depotCount += 1;
+      segments.push({ kind: "depot", partAfter: depotCount + 1 });
+      continue;
+    }
+    const idx = idToIdx.get(sid);
+    if (idx != null) current.push(idx);
+  }
+  if (current.length > 0) segments.push({ kind: "orders", orderIndices: current });
+  return segments;
+}
+
+export function orderLegNummerValue(raw: unknown): number {
+  const n = Number(raw ?? 1);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
+}

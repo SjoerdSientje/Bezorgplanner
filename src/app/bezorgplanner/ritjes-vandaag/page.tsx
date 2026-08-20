@@ -27,8 +27,13 @@ import {
 } from "@/lib/planning-date";
 import StuurAppjesButton from "@/components/StuurAppjesButton";
 import EditableRouteName from "@/components/EditableRouteName";
+import DepotReturnBanner from "@/components/DepotReturnBanner";
 import { routeDisplayLabel, routeNaamFromOrders } from "@/lib/route-colors";
 import { updateSavedRouteNaam } from "@/lib/route-vertrektijden";
+import {
+  orderLegNummerValue,
+  segmentsFromOrderLegs,
+} from "@/lib/depot-stops";
 
 function normalizeToE164(input: string): string | null {
   const s = String(input ?? "").trim();
@@ -673,16 +678,15 @@ export default function RitjesVandaagPage() {
                   <div className="space-y-6">
                     {group.routeSubGroups.map((sub) => {
                       const subOrders = sub.positions.map((pos) => visibleRows.orders[pos]);
-                      const subTableRows = ordersToTableRows(subOrders);
-                      const subSize = sub.positions.length;
-                      const subRenderers = Object.fromEntries(
-                        Object.entries(cellRenderers).map(([key, fn]) => [
-                          key,
-                          (ri: number, v: string, os: (val: string) => void) => {
-                            if (ri >= subSize) return null;
-                            return fn(sub.positions[ri]!, v, os);
-                          },
-                        ])
+                      const orderIds = subOrders.map((o) => String(o.id ?? ""));
+                      const segments = segmentsFromOrderLegs(
+                        orderIds,
+                        (id) =>
+                          orderLegNummerValue(
+                            (subOrders.find((o) => String(o.id ?? "") === id) as { leg_nummer?: unknown })
+                              ?.leg_nummer
+                          ),
+                        sub.routeNum
                       );
                       const routeLabelColor =
                         sub.routeNum != null
@@ -703,19 +707,58 @@ export default function RitjesVandaagPage() {
                               />
                             </h3>
                           )}
-                          <EditableSheetTable
-                            headers={RITJES_HEADERS}
-                            initialData={subTableRows}
-                            onCellBlur={(ri, header, value) =>
-                              handleCellBlur(sub.positions[ri]!, header, value)
-                            }
-                            dataRowCount={subSize}
-                            rowAction={(ri) => deleteOrder(sub.positions[ri]!)}
-                            cellRenderers={subRenderers}
-                            resetKey={tableResetKey}
-                            showRowNumbers
-                            rowColorClass={(ri) => rowColorClass(sub.positions[ri]!)}
-                          />
+                          <div className="space-y-0 overflow-hidden rounded-xl border-2 border-stone-200 bg-white shadow-sm">
+                            {(() => {
+                              let rowOffset = 0;
+                              return segments.map((seg, segIdx) => {
+                              if (seg.kind === "depot") {
+                                return (
+                                  <DepotReturnBanner
+                                    key={`depot-${sub.routeNum ?? "x"}-${segIdx}`}
+                                    partAfter={seg.partAfter}
+                                  />
+                                );
+                              }
+                              const legPositions = seg.orderIndices.map((i) => sub.positions[i]!);
+                              const legOrders = seg.orderIndices.map((i) => subOrders[i]!);
+                              const legTableRows = ordersToTableRows(legOrders);
+                              const legSize = legPositions.length;
+                              const thisOffset = rowOffset;
+                              rowOffset += legSize;
+                              const legRenderers = Object.fromEntries(
+                                Object.entries(cellRenderers).map(([key, fn]) => [
+                                  key,
+                                  (ri: number, v: string, os: (val: string) => void) => {
+                                    if (ri >= legSize) return null;
+                                    return fn(legPositions[ri]!, v, os);
+                                  },
+                                ])
+                              );
+                              const isFirstOrderSeg =
+                                segments.findIndex((s) => s.kind === "orders") === segIdx;
+                              return (
+                                <EditableSheetTable
+                                  key={`leg-${sub.routeNum ?? "x"}-${segIdx}-${tableResetKey}`}
+                                  headers={RITJES_HEADERS}
+                                  initialData={legTableRows}
+                                  onCellBlur={(ri, header, value) =>
+                                    handleCellBlur(legPositions[ri]!, header, value)
+                                  }
+                                  dataRowCount={legSize}
+                                  rowAction={(ri) => deleteOrder(legPositions[ri]!)}
+                                  cellRenderers={legRenderers}
+                                  resetKey={tableResetKey}
+                                  showRowNumbers
+                                  rowColorClass={(ri) => rowColorClass(legPositions[ri]!)}
+                                  hideHeader={!isFirstOrderSeg}
+                                  minRows={0}
+                                  embedded
+                                  rowNumberOffset={thisOffset}
+                                />
+                              );
+                            });
+                            })()}
+                          </div>
                         </div>
                       );
                     })}

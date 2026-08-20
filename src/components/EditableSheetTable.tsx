@@ -24,6 +24,14 @@ interface EditableSheetTableProps {
    * (bijv. na een echte server-fetch). Celwijzigingen mogen deze NIET verhogen.
    */
   resetKey?: number;
+  /** Verberg de headerrij (bijv. tweede+ segment onder een gedeelde header). */
+  hideHeader?: boolean;
+  /** Minimum aantal rijen (default 50; zet 0 voor compacte segment-tabellen). */
+  minRows?: number;
+  /** Geen eigen border/shadow (segment in een gedeelde wrapper). */
+  embedded?: boolean;
+  /** Offset voor rijnummers (bijv. vervolg na depot-segment). */
+  rowNumberOffset?: number;
 }
 
 function createEmptyGrid(headers: readonly string[], rowCount: number): string[][] {
@@ -55,10 +63,15 @@ export default function EditableSheetTable({
   showRowNumbers = false,
   resetKey = 0,
   rowColorClass,
+  hideHeader = false,
+  minRows,
+  embedded = false,
+  rowNumberOffset = 0,
 }: EditableSheetTableProps) {
   const colCount = (headers as string[]).length;
   const totalDataRows = dataRowCount ?? initialData?.length ?? 0;
-  const effectiveMinRows = readOnly ? 0 : MIN_ROWS;
+  const effectiveMinRows =
+    minRows != null ? Math.max(0, minRows) : readOnly ? 0 : MIN_ROWS;
   const rowCount = Math.max(effectiveMinRows, totalDataRows);
   const isWideAddressColumn = (header: string) =>
     header === "Volledig adress" || header === "Adres";
@@ -161,7 +174,11 @@ export default function EditableSheetTable({
   return (
     <div
       ref={wrapperRef}
-      className="overflow-x-auto pb-3 rounded-xl border-2 border-stone-300 bg-white shadow-sm"
+      className={
+        embedded
+          ? "overflow-x-auto bg-white"
+          : "overflow-x-auto pb-3 rounded-xl border-2 border-stone-300 bg-white shadow-sm"
+      }
       style={{ scrollbarGutter: "stable both-edges" }}
       onKeyDownCapture={(e) => {
         if (!showRowNumbers) return;
@@ -179,6 +196,7 @@ export default function EditableSheetTable({
     >
       <div className="mobile-table-scale">
         <table ref={tableRef} className="w-full min-w-max border-collapse text-left text-sm">
+          {!hideHeader && (
           <thead>
             <tr className="bg-stone-100">
               {showRowNumbers && (
@@ -207,6 +225,7 @@ export default function EditableSheetTable({
               ))}
             </tr>
           </thead>
+          )}
           <tbody>
             {values.map((row, i) => {
               const isDataRow = i < totalDataRows;
@@ -215,7 +234,7 @@ export default function EditableSheetTable({
                 <tr key={i} className={colorCls}>
                   {showRowNumbers && (
                     <td className={`sticky left-0 z-30 w-8 border border-stone-300 px-1 py-1 text-center text-xs text-stone-700 ${colorCls || "bg-white"}`}>
-                      {isDataRow ? i + 1 : ""}
+                      {isDataRow ? i + 1 + rowNumberOffset : ""}
                     </td>
                   )}
                   {hasActionCol && (

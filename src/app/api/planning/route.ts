@@ -88,6 +88,7 @@ export async function GET(request: NextRequest) {
           /** Parallelle routes (1, 2, …) of null bij één bus / grote bus */
           route_nummer: o.route_nummer != null ? Number(o.route_nummer) : null,
           route_naam: o.route_naam != null ? String(o.route_naam) : null,
+          leg_nummer: o.leg_nummer != null ? Number(o.leg_nummer) : null,
           rit_nummer: o.rit_nummer,
           tijd_opmerking: tijdOpmerking,
           order_nummer: o.order_nummer ?? "",

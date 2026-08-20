@@ -8,6 +8,12 @@ import OpmerkingKlantCell from "@/components/OpmerkingKlantCell";
 import { compareOrdersOnRoute } from "@/lib/ritjes-mapping";
 import { comparePlanningDatumKeys, planningDatumGroupLabel } from "@/lib/planning-date";
 import { routeDisplayLabel, routeNaamFromOrders } from "@/lib/route-colors";
+import { DepotReturnTableRow } from "@/components/DepotReturnBanner";
+import {
+  orderLegNummerValue,
+  segmentsFromOrderLegs,
+} from "@/lib/depot-stops";
+
 const PLANNING_HEADERS = [
   "Order nummer",
   "Naam",
@@ -35,6 +41,7 @@ type PlanningRow = {
   route_nummer?: number | null;
   route_naam?: string | null;
   rit_nummer?: number | null;
+  leg_nummer?: number | null;
   order_nummer: string;
   naam: string;
   aankomsttijd: string;
@@ -215,7 +222,33 @@ function PlanningTabel({
                   </td>
                 </tr>
               ) : (
-                rows.map((row, rowIndex) => (
+                (() => {
+                  const orderIds = rows.map((r) => r.order_id);
+                  const segments = segmentsFromOrderLegs(
+                    orderIds,
+                    (id) =>
+                      orderLegNummerValue(
+                        rows.find((r) => r.order_id === id)?.leg_nummer
+                      ),
+                    rows[0]?.route_nummer ?? "planning"
+                  );
+                  const fillerSpan = PLANNING_HEADERS.length + 2 + fillerCols;
+                  let orderRowNum = 0;
+                  return segments.flatMap((seg, segIdx) => {
+                    if (seg.kind === "depot") {
+                      return [
+                        <DepotReturnTableRow
+                          key={`depot-${segIdx}-${seg.partAfter}`}
+                          partAfter={seg.partAfter}
+                          colSpan={fillerSpan}
+                        />,
+                      ];
+                    }
+                    return seg.orderIndices.map((oi) => {
+                      const row = rows[oi]!;
+                      const rowIndex = orderRowNum;
+                      orderRowNum += 1;
+                      return (
                   <tr key={row.slot_id}>
                     <td className="sticky left-0 z-30 w-8 border border-stone-300 bg-white px-1 py-1 text-center text-xs text-stone-700">
                       {rowIndex + 1}
@@ -358,7 +391,10 @@ function PlanningTabel({
                       />
                     ))}
                   </tr>
-                ))
+                      );
+                    });
+                  });
+                })()
               )}
             </tbody>
           </table>

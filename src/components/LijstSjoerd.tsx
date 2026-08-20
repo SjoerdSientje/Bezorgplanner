@@ -33,12 +33,10 @@ import { getVertrektijdForRoute, readSavedRoutesFromStorage } from "@/lib/route-
 import { DEPOT_RELOAD_MINUTES, orderRouteLoad, type OrderForRoute } from "@/lib/routific-payload";
 import {
   isDepotStopId,
-  makeDepotStopId,
   orderIdsFromStopSequence,
   stopSequenceFromOrderLegs,
 } from "@/lib/depot-stops";
-
-const DEPOT_ADDRESS_SHORT = "Kapelweg 2, De Bilt";
+import { DEPOT_ADDRESS_SHORT } from "@/components/DepotReturnBanner";
 
 /** Totaal aantal load-eenheden voor een lijst stops (depot-IDs tellen niet). */
 function totalLoadForOrders(
@@ -50,16 +48,6 @@ function totalLoadForOrders(
     if (!o) return sum;
     return sum + orderRouteLoad(o as unknown as OrderForRoute);
   }, 0);
-}
-
-function nextDepotStopId(stopIds: string[], routeKey: string | number | null): string {
-  let max = 0;
-  for (const id of stopIds) {
-    if (!isDepotStopId(id)) continue;
-    const m = String(id).match(/:(\d+)$/);
-    if (m) max = Math.max(max, parseInt(m[1]!, 10));
-  }
-  return makeDepotStopId(routeKey, max + 1);
 }
 
 /** Visueel order-nummer (#) — depot-rijen tellen niet mee. */
@@ -1098,29 +1086,6 @@ export default function LijstSjoerd({
     setContainers(groupsToContainers(groups));
   };
 
-  const addDepotToContainer = useCallback(
-    async (containerId: string, routeNum: number | null) => {
-      const prev = {
-        ...Object.fromEntries(
-          Object.entries(containersRef.current).map(([k, v]) => [k, [...v]])
-        ),
-      };
-      const items = [...(containersRef.current[containerId] ?? [])];
-      if (orderIdsFromStopSequence(items).length < 2) {
-        setReorderError("Minstens twee orders nodig om een depot-retour tussen te zetten.");
-        return;
-      }
-      const depotId = nextDepotStopId(items, routeNum);
-      const insertAt = Math.max(1, Math.floor(items.length / 2));
-      items.splice(insertAt, 0, depotId);
-      const next = { ...containersRef.current, [containerId]: items };
-      setContainers(next);
-      containersRef.current = next;
-      await submitReorder(next, prev);
-    },
-    [submitReorder]
-  );
-
   const removeDepotFromContainer = useCallback(
     async (containerId: string, depotId: string) => {
       const prev = {
@@ -1190,7 +1155,6 @@ export default function LijstSjoerd({
               dragEnabled={dragEnabled}
               canEditDepot={reorderEnabled && !recalculating}
               onPatch={onPatch}
-              onAddDepot={() => addDepotToContainer(containerId, routeNum)}
               onRemoveDepot={(depotId) => removeDepotFromContainer(containerId, depotId)}
             />
           );
@@ -1240,15 +1204,6 @@ export default function LijstSjoerd({
                     ({orderOnly.length} order{orderOnly.length === 1 ? "" : "s"} ·{" "}
                     {totalLoadForOrders(stopIds, orderById)} load-eenh.)
                   </span>
-                  {buttonReorderEnabled && (
-                    <button
-                      type="button"
-                      onClick={() => addDepotToContainer(containerId, routeNum)}
-                      className="ml-3 rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs text-amber-900"
-                    >
-                      + Depot
-                    </button>
-                  )}
                 </div>
               )}
               {showRouteHeaders && routeNum == null && orderOnly.length > 0 && (
@@ -1257,15 +1212,6 @@ export default function LijstSjoerd({
                   <span className="ml-2 text-xs font-normal text-stone-500">
                     ({orderOnly.length} order{orderOnly.length === 1 ? "" : "s"})
                   </span>
-                  {buttonReorderEnabled && (
-                    <button
-                      type="button"
-                      onClick={() => addDepotToContainer(containerId, routeNum)}
-                      className="ml-3 rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs text-amber-900"
-                    >
-                      + Depot
-                    </button>
-                  )}
                 </div>
               )}
               {stopIds.map((stopId, i) => {
@@ -1403,8 +1349,8 @@ export default function LijstSjoerd({
           ) : (
             <>
               <strong>Vasthouden op een rij of adres</strong> en slepen om volgorde of route te
-              wijzigen. Sleep ook de amber <strong>Terug naar depot</strong>-rij, of voeg er een toe
-              via <strong>+ Depot</strong>. Tijdsloten via Google Maps.
+              wijzigen. Sleep ook de amber <strong>Terug naar depot</strong>-rij. Tijdsloten via
+              Google Maps.
             </>
           )}
           {recalculating && (
@@ -1471,7 +1417,6 @@ function RouteGroupRows({
   dragEnabled,
   canEditDepot,
   onPatch,
-  onAddDepot,
   onRemoveDepot,
 }: {
   containerId: string;
@@ -1483,7 +1428,6 @@ function RouteGroupRows({
   dragEnabled: boolean;
   canEditDepot: boolean;
   onPatch: (id: string, fields: Record<string, unknown>) => void;
-  onAddDepot: () => void;
   onRemoveDepot: (depotId: string) => void;
 }) {
   const orderOnly = orderIdsFromStopSequence(stopIds);
@@ -1507,15 +1451,6 @@ function RouteGroupRows({
             ({orderOnly.length} order{orderOnly.length === 1 ? "" : "s"} ·{" "}
             {totalLoadForOrders(stopIds, orderById)} load-eenh.)
           </span>
-          {canEditDepot && (
-            <button
-              type="button"
-              onClick={onAddDepot}
-              className="ml-3 rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs text-amber-900 hover:bg-amber-100"
-            >
-              + Depot
-            </button>
-          )}
         </DroppableRouteHeader>
       )}
       {showRouteHeader && routeNum == null && orderOnly.length > 0 && (
@@ -1524,27 +1459,7 @@ function RouteGroupRows({
           <span className="ml-2 text-xs font-normal text-stone-500">
             ({orderOnly.length} order{orderOnly.length === 1 ? "" : "s"})
           </span>
-          {canEditDepot && (
-            <button
-              type="button"
-              onClick={onAddDepot}
-              className="ml-3 rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs text-amber-900 hover:bg-amber-100"
-            >
-              + Depot
-            </button>
-          )}
         </DroppableRouteHeader>
-      )}
-      {!showRouteHeader && canEditDepot && orderOnly.length >= 2 && (
-        <div className="border-b border-stone-100 px-3 py-1.5">
-          <button
-            type="button"
-            onClick={onAddDepot}
-            className="rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs text-amber-900 hover:bg-amber-100"
-          >
-            + Depot
-          </button>
-        </div>
       )}
       <SortableContext items={stopIds} strategy={verticalListSortingStrategy}>
         {stopIds.map((id, i) => {
