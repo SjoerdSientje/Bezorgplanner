@@ -432,7 +432,7 @@ export async function POST(request: NextRequest) {
             stops,
             vertrektijd,
             packing.capacity,
-            { packMode: "full" }
+            { packMode: "best" }
           );
           recalculated = depotResult.stops;
         } else {
@@ -510,7 +510,7 @@ export async function POST(request: NextRequest) {
           stops,
           route.vertrektijd,
           packing.capacity,
-          { packMode: "full" }
+          { packMode: "best" }
         );
         recalculated = depotResult.stops;
       } else {

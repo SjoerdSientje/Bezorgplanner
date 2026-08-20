@@ -276,19 +276,21 @@ function buildPackedSlotsFromRoutificTimes(
     preferred.every((leg) => totalRouteStopLoad(leg) <= cap) &&
     new Set(preferred.flatMap((leg) => leg.map((s) => s.id))).size === routeStops.length;
 
-  // Zonder Google: prefer Routific-split als die al minimaal #ritten heeft, anders
-  // kies tussen pack-full en balanced op minste bezorgtijd-schendingen (Routific-tijden).
-  const legs = preferredOk
-    ? preferred
-    : minLegs <= 1
+  // Kandidaten vergelijken op restricties + waar depot-retour geografisch/tijdelijk past.
+  // Geen vaste voorkeur voor 3+3+3 of 4+4+1.
+  const candidates: { name: string; legs: RouteStop[][] }[] = [];
+  if (minLegs <= 1) {
+    candidates.push({ name: "single", legs: [routeStops] });
+  } else {
+    if (preferredOk) candidates.push({ name: "routific", legs: preferred! });
+    candidates.push({ name: "pack_full", legs: splitStopsByVehicleCapacity(routeStops, cap) });
+    candidates.push({ name: "balanced", legs: splitStopsBalancedByCapacity(routeStops, cap) });
+  }
+
+  const legs =
+    minLegs <= 1
       ? [routeStops]
-      : pickLegsFewestWindowViolations(
-          [
-            splitStopsByVehicleCapacity(routeStops, cap),
-            splitStopsBalancedByCapacity(routeStops, cap),
-          ],
-          visits
-        );
+      : pickBestCapacityLegs(candidates, visits);
 
   const arrivalById = new Map(visits.map((v) => [v.order.id, v.arrivalMin]));
 
@@ -367,17 +369,112 @@ function countWindowViolationsForLegs(
   return violations;
 }
 
-function pickLegsFewestWindowViolations(
-  candidates: RouteStop[][][],
+/** Eindtijd na depot-gaps (lager = efficiënter t.o.v. Routific-geografie). */
+function simulateFinishMinForLegs(
+  legs: RouteStop[][],
+  visits: { order: OrderForRoute; arrivalMin: number }[]
+): number {
+  const arrivalById = new Map(visits.map((v) => [v.order.id, v.arrivalMin]));
+  let prevFinishMin: number | null = null;
+
+  for (const leg of legs) {
+    let shift = 0;
+    if (prevFinishMin != null && leg.length > 0) {
+      const firstArrival = arrivalById.get(leg[0]!.id) ?? prevFinishMin;
+      const earliestFirst = prevFinishMin + 25 + DEPOT_RELOAD_MINUTES + 25;
+      if (firstArrival + shift < earliestFirst) {
+        shift = earliestFirst - firstArrival;
+      }
+    }
+    for (const stop of leg) {
+      const base = arrivalById.get(stop.id) ?? 0;
+      prevFinishMin = base + shift + SERVICE_TIME_MINUTES;
+    }
+  }
+  return prevFinishMin ?? 0;
+}
+
+/**
+ * Som van Routific-tijdgaps op snijpunten: hogere score = snijden tussen clusters
+ * (adressen die geografisch/tijdelijk verder uit elkaar liggen).
+ */
+function cutGapScore(
+  legs: RouteStop[][],
+  visits: { order: OrderForRoute; arrivalMin: number }[]
+): number {
+  const arrivalById = new Map(visits.map((v) => [v.order.id, v.arrivalMin]));
+  let score = 0;
+  for (let i = 0; i < legs.length - 1; i++) {
+    const prevLeg = legs[i]!;
+    const nextLeg = legs[i + 1]!;
+    if (prevLeg.length === 0 || nextLeg.length === 0) continue;
+    const lastArr = arrivalById.get(prevLeg[prevLeg.length - 1]!.id) ?? 0;
+    const nextArr = arrivalById.get(nextLeg[0]!.id) ?? 0;
+    score += Math.max(0, nextArr - lastArr);
+  }
+  return score;
+}
+
+function legLoadImbalance(legs: RouteStop[][]): number {
+  const loads = legs.map((leg) => totalRouteStopLoad(leg));
+  if (loads.length === 0) return 0;
+  return Math.max(...loads) - Math.min(...loads);
+}
+
+/**
+ * Kies pack-variant:
+ * 1) minste bezorgtijd-schendingen
+ * 2) vroegste eindtijd (depot-retour past beter op Routific-tijden/geografie)
+ * 3) snijden op grotere tijdgaps tussen clusters
+ * 4) voorkeur voor Routific-eigen delen
+ * 5) pas daarna load-balans
+ */
+function pickBestCapacityLegs(
+  candidates: { name: string; legs: RouteStop[][] }[],
   visits: { order: OrderForRoute; arrivalMin: number }[]
 ): RouteStop[][] {
-  let best = candidates[0] ?? [];
-  let bestScore = Number.POSITIVE_INFINITY;
-  for (const legs of candidates) {
+  let best: RouteStop[][] = candidates[0]?.legs ?? [];
+  let bestViolations = Number.POSITIVE_INFINITY;
+  let bestFinish = Number.POSITIVE_INFINITY;
+  let bestGap = Number.NEGATIVE_INFINITY;
+  let bestRoutific = false;
+  let bestImbalance = Number.POSITIVE_INFINITY;
+
+  const seen = new Set<string>();
+  for (const c of candidates) {
+    const legs = c.legs;
     if (!legs || legs.length === 0) continue;
-    const score = countWindowViolationsForLegs(legs, visits);
-    if (score < bestScore) {
-      bestScore = score;
+    const fp = legs.map((leg) => leg.map((s) => s.id).join(",")).join("|");
+    if (seen.has(fp)) continue;
+    seen.add(fp);
+
+    const violations = countWindowViolationsForLegs(legs, visits);
+    const finish = simulateFinishMinForLegs(legs, visits);
+    const gap = cutGapScore(legs, visits);
+    const isRoutific = c.name === "routific";
+    const imbalance = legLoadImbalance(legs);
+
+    const better =
+      violations < bestViolations ||
+      (violations === bestViolations && finish < bestFinish) ||
+      (violations === bestViolations && finish === bestFinish && gap > bestGap) ||
+      (violations === bestViolations &&
+        finish === bestFinish &&
+        gap === bestGap &&
+        isRoutific &&
+        !bestRoutific) ||
+      (violations === bestViolations &&
+        finish === bestFinish &&
+        gap === bestGap &&
+        isRoutific === bestRoutific &&
+        imbalance < bestImbalance);
+
+    if (better) {
+      bestViolations = violations;
+      bestFinish = finish;
+      bestGap = gap;
+      bestRoutific = isRoutific;
+      bestImbalance = imbalance;
       best = legs;
     }
   }

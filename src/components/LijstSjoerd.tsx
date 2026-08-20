@@ -275,26 +275,12 @@ function depotCapacityForRoute(
   return capacity;
 }
 
-/** Deelnummers in huidige stopvolgorde (pack-full op capaciteit), voor depot-banners. */
+/** Deelnummers uit opgeslagen leg_nummer (zelfde als berekende depot-splits). */
 function assignDisplayLegs(
   orderIds: string[],
   orderById: Map<string, AlleRittenOrder>,
-  capacity: number | null
+  _capacity: number | null
 ): number[] {
-  if (capacity != null && capacity >= 1) {
-    let leg = 1;
-    let load = 0;
-    return orderIds.map((id) => {
-      const o = orderById.get(id);
-      const l = o ? orderRouteLoad(o as unknown as OrderForRoute) : 1;
-      if (load > 0 && load + l > capacity) {
-        leg += 1;
-        load = 0;
-      }
-      load += l;
-      return leg;
-    });
-  }
   return orderIds.map((id) => orderLegNummer(orderById.get(id)));
 }
 
