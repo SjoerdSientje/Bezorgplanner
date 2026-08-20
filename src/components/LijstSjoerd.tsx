@@ -30,21 +30,53 @@ import { compareOrdersOnRoute } from "@/lib/ritjes-mapping";
 import { isOrderReadyForSjoerdLijst } from "@/lib/planning-date";
 import { routeStyleForIndex, routeDisplayLabel, routeNaamFromOrders } from "@/lib/route-colors";
 import { getVertrektijdForRoute, readSavedRoutesFromStorage } from "@/lib/route-vertrektijden";
+import { DEPOT_RELOAD_MINUTES, orderRouteLoad, type OrderForRoute } from "@/lib/routific-payload";
+import {
+  isDepotStopId,
+  makeDepotStopId,
+  orderIdsFromStopSequence,
+  stopSequenceFromOrderLegs,
+} from "@/lib/depot-stops";
 
-/** Zelfde als server-side DEPOT_RELOAD_MINUTES — herladen op Kapelweg 2. */
-const DEPOT_RELOAD_UI_MINUTES = 30;
-import { orderRouteLoad, type OrderForRoute } from "@/lib/routific-payload";
+const DEPOT_ADDRESS_SHORT = "Kapelweg 2, De Bilt";
 
-/** Totaal aantal load-eenheden voor een lijst orders (grote fietsen tellen dubbel). */
+/** Totaal aantal load-eenheden voor een lijst stops (depot-IDs tellen niet). */
 function totalLoadForOrders(
-  orderIds: string[],
+  stopIds: string[],
   orderById: Map<string, AlleRittenOrder>
 ): number {
-  return orderIds.reduce((sum, id) => {
+  return orderIdsFromStopSequence(stopIds).reduce((sum, id) => {
     const o = orderById.get(id);
     if (!o) return sum;
     return sum + orderRouteLoad(o as unknown as OrderForRoute);
   }, 0);
+}
+
+function nextDepotStopId(stopIds: string[], routeKey: string | number | null): string {
+  let max = 0;
+  for (const id of stopIds) {
+    if (!isDepotStopId(id)) continue;
+    const m = String(id).match(/:(\d+)$/);
+    if (m) max = Math.max(max, parseInt(m[1]!, 10));
+  }
+  return makeDepotStopId(routeKey, max + 1);
+}
+
+/** Visueel order-nummer (#) — depot-rijen tellen niet mee. */
+function orderRowNumber(stopIds: string[], index: number): number {
+  let n = 0;
+  for (let i = 0; i <= index; i++) {
+    if (!isDepotStopId(stopIds[i]!)) n += 1;
+  }
+  return n;
+}
+
+function depotPartAfter(stopIds: string[], depotIndex: number): number {
+  let depots = 0;
+  for (let i = 0; i <= depotIndex; i++) {
+    if (isDepotStopId(stopIds[i]!)) depots += 1;
+  }
+  return depots + 1;
 }
 
 const GRID_COLS =
@@ -275,26 +307,81 @@ function depotCapacityForRoute(
   return capacity;
 }
 
-/** Deelnummers uit opgeslagen leg_nummer (zelfde als berekende depot-splits). */
-function assignDisplayLegs(
-  orderIds: string[],
-  orderById: Map<string, AlleRittenOrder>,
-  _capacity: number | null
-): number[] {
-  return orderIds.map((id) => orderLegNummer(orderById.get(id)));
-}
-
-function DepotReturnBanner({ legNummer }: { legNummer: number }) {
-  // Geen multi-kolom grid: bij horizontaal scrollen bleef alleen een lege gele strook zichtbaar.
+function DepotRowContent({
+  legNummer,
+  dragHandleProps,
+  onRemove,
+}: {
+  legNummer: number;
+  dragHandleProps?: React.HTMLAttributes<HTMLElement>;
+  onRemove?: () => void;
+}) {
   return (
     <div className="border-b border-amber-200 bg-amber-50">
-      <div className="sticky left-0 z-[1] w-max max-w-[min(100vw,42rem)] px-3 py-2.5 text-sm text-amber-950">
-        <span className="font-semibold">Terug naar depot</span>
-        <span className="text-amber-800">
-          {" "}
-          · Kapelweg 2, De Bilt · herladen {DEPOT_RELOAD_UI_MINUTES} min · daarna deel {legNummer}
-        </span>
+      <div className="sticky left-0 z-[1] flex w-max max-w-[min(100vw,48rem)] items-center gap-3 px-3 py-2.5 text-sm text-amber-950">
+        {dragHandleProps && (
+          <span
+            className="cursor-grab text-amber-700/70 active:cursor-grabbing"
+            aria-hidden
+            {...dragHandleProps}
+          >
+            ⠿
+          </span>
+        )}
+        <div>
+          <span className="font-semibold">Terug naar depot</span>
+          <span className="text-amber-800">
+            {" "}
+            · {DEPOT_ADDRESS_SHORT} · herladen {DEPOT_RELOAD_MINUTES} min · daarna deel{" "}
+            {legNummer}
+          </span>
+        </div>
+        {onRemove && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove();
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="ml-1 rounded border border-amber-300 bg-white/80 px-2 py-0.5 text-xs text-amber-900 hover:bg-amber-100"
+          >
+            Verwijderen
+          </button>
+        )}
       </div>
+    </div>
+  );
+}
+
+function SortableDepotRow({
+  id,
+  legNummer,
+  dragEnabled,
+  onRemove,
+}: {
+  id: string;
+  legNummer: number;
+  dragEnabled: boolean;
+  onRemove?: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id,
+    disabled: !dragEnabled,
+  });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <div ref={setNodeRef} style={style}>
+      <DepotRowContent
+        legNummer={legNummer}
+        dragHandleProps={dragEnabled ? { ...attributes, ...listeners } : undefined}
+        onRemove={onRemove}
+      />
     </div>
   );
 }
@@ -337,7 +424,15 @@ function groupByRoute(orders: AlleRittenOrder[]): RouteGroup[] {
 function groupsToContainers(groups: RouteGroup[]): Record<string, string[]> {
   const out: Record<string, string[]> = {};
   for (const g of groups) {
-    out[routeContainerId(g.routeNum)] = g.orders.map((o) => String(o.id));
+    const orderIds = g.orders.map((o) => String(o.id));
+    out[routeContainerId(g.routeNum)] = stopSequenceFromOrderLegs(
+      orderIds,
+      (id) => {
+        const o = g.orders.find((x) => String(x.id) === id);
+        return orderLegNummer(o);
+      },
+      g.routeNum
+    );
   }
   return out;
 }
@@ -724,6 +819,7 @@ export default function LijstSjoerd({
   const [activeId, setActiveId] = useState<string | null>(null);
   const [recalculating, setRecalculating] = useState(false);
   const [reorderError, setReorderError] = useState<string | null>(null);
+  const [capacityWarning, setCapacityWarning] = useState<string | null>(null);
   const isDraggingRef = useRef(false);
   const containersAtDragStartRef = useRef<Record<string, string[]> | null>(null);
 
@@ -763,14 +859,15 @@ export default function LijstSjoerd({
 
       const routeEntries = Object.entries(nextContainers)
         .filter(([containerId, ids]) => ids.length > 0 && changedContainerIds.has(containerId))
-        .map(([containerId, orderIds]) => {
+        .map(([containerId, stopIds]) => {
           const routeNummer = parseContainerRoute(containerId);
           const rn = routeNummer ?? 1;
           return {
             routeNummer,
             rn,
-            orderIds,
-            previousOrderIds: prevContainers[containerId] ?? [],
+            stopIds,
+            orderIds: orderIdsFromStopSequence(stopIds),
+            previousOrderIds: orderIdsFromStopSequence(prevContainers[containerId] ?? []),
           };
         })
         .sort((a, b) => {
@@ -783,6 +880,7 @@ export default function LijstSjoerd({
 
       const routes = [];
       for (const entry of routeEntries) {
+        if (entry.orderIds.length === 0) continue;
         // Overig (routeNummer null): herberekent via Google Maps in de nieuwe volgorde.
         // Vertrektijd = altijd die uit Route genereren (route 1). Niet ankeren op bestaande
         // tijdsloten: als een lange route over middernacht heen is gewikkeld (bijv. 00:45),
@@ -792,17 +890,17 @@ export default function LijstSjoerd({
           const orderByIdLocal = new Map(
             groups.flatMap((g) => g.orders).map((o) => [String(o.id), o])
           );
-          const hadDepotLegs = entry.orderIds.some(
-            (id) => orderLegNummer(orderByIdLocal.get(id)) > 1
-          );
+          const hadDepotLegs =
+            entry.stopIds.some(isDepotStopId) ||
+            entry.orderIds.some((id) => orderLegNummer(orderByIdLocal.get(id)) > 1);
           const saved = readSavedRoutesFromStorage()[0];
           const capFromOrders = depotCapacityForRoute(null, entry.orderIds, orderByIdLocal);
           routes.push({
             routeNummer: null,
+            stopIds: entry.stopIds,
             orderIds: entry.orderIds,
             previousOrderIds: entry.previousOrderIds,
             vertrektijd,
-            // Eén bus zonder route_nummer: toch depot-pack meenemen als er legs/settings zijn.
             maxFietsen: saved?.maxFietsen ?? capFromOrders ?? undefined,
             meerdereRitten: Boolean(saved?.meerdereRitten) || hadDepotLegs,
           });
@@ -819,9 +917,9 @@ export default function LijstSjoerd({
         const orderByIdLocal = new Map(
           groups.flatMap((g) => g.orders).map((o) => [String(o.id), o])
         );
-        const hadDepotLegs = entry.orderIds.some(
-          (id) => orderLegNummer(orderByIdLocal.get(id)) > 1
-        );
+        const hadDepotLegs =
+          entry.stopIds.some(isDepotStopId) ||
+          entry.orderIds.some((id) => orderLegNummer(orderByIdLocal.get(id)) > 1);
         const capFromOrders = depotCapacityForRoute(
           entry.routeNummer,
           entry.orderIds,
@@ -829,6 +927,7 @@ export default function LijstSjoerd({
         );
         routes.push({
           routeNummer: entry.routeNummer,
+          stopIds: entry.stopIds,
           orderIds: entry.orderIds,
           previousOrderIds: entry.previousOrderIds,
           vertrektijd,
@@ -837,8 +936,11 @@ export default function LijstSjoerd({
         });
       }
 
+      if (routes.length === 0) return;
+
       setRecalculating(true);
       setReorderError(null);
+      setCapacityWarning(null);
       try {
         const res = await fetch("/api/route/reorder", {
           method: "POST",
@@ -853,6 +955,9 @@ export default function LijstSjoerd({
         }
         setContainers(nextContainers);
         containersRef.current = nextContainers;
+        if (Array.isArray(data.warnings) && data.warnings.length > 0) {
+          setCapacityWarning(data.warnings.join(" "));
+        }
         const updates = (data.updates ?? []) as ReorderUpdate[];
         await Promise.resolve(onReorderComplete?.(updates));
       } catch (e) {
@@ -993,7 +1098,49 @@ export default function LijstSjoerd({
     setContainers(groupsToContainers(groups));
   };
 
-  const totalCount = Object.values(containers).reduce((n, ids) => n + ids.length, 0);
+  const addDepotToContainer = useCallback(
+    async (containerId: string, routeNum: number | null) => {
+      const prev = {
+        ...Object.fromEntries(
+          Object.entries(containersRef.current).map(([k, v]) => [k, [...v]])
+        ),
+      };
+      const items = [...(containersRef.current[containerId] ?? [])];
+      if (orderIdsFromStopSequence(items).length < 2) {
+        setReorderError("Minstens twee orders nodig om een depot-retour tussen te zetten.");
+        return;
+      }
+      const depotId = nextDepotStopId(items, routeNum);
+      const insertAt = Math.max(1, Math.floor(items.length / 2));
+      items.splice(insertAt, 0, depotId);
+      const next = { ...containersRef.current, [containerId]: items };
+      setContainers(next);
+      containersRef.current = next;
+      await submitReorder(next, prev);
+    },
+    [submitReorder]
+  );
+
+  const removeDepotFromContainer = useCallback(
+    async (containerId: string, depotId: string) => {
+      const prev = {
+        ...Object.fromEntries(
+          Object.entries(containersRef.current).map(([k, v]) => [k, [...v]])
+        ),
+      };
+      const items = (containersRef.current[containerId] ?? []).filter((id) => id !== depotId);
+      const next = { ...containersRef.current, [containerId]: items };
+      setContainers(next);
+      containersRef.current = next;
+      await submitReorder(next, prev);
+    },
+    [submitReorder]
+  );
+
+  const totalCount = Object.values(containers).reduce(
+    (n, ids) => n + orderIdsFromStopSequence(ids).length,
+    0
+  );
   const showRouteHeaders = groups.some((g) => g.routeNum != null);
 
   const containerEntries = useMemo(() => {
@@ -1036,12 +1183,15 @@ export default function LijstSjoerd({
               key={containerId}
               containerId={containerId}
               routeNum={routeNum}
-              orderIds={orderIds}
+              stopIds={orderIds}
               style={style}
               showRouteHeader={showRouteHeaders}
               orderById={orderById}
               dragEnabled={dragEnabled}
+              canEditDepot={reorderEnabled && !recalculating}
               onPatch={onPatch}
+              onAddDepot={() => addDepotToContainer(containerId, routeNum)}
+              onRemoveDepot={(depotId) => removeDepotFromContainer(containerId, depotId)}
             />
           );
         })
@@ -1069,9 +1219,10 @@ export default function LijstSjoerd({
           Geen orders met meenemen = ja. Genereer eerst een route.
         </p>
       ) : (
-        containerEntries.map(({ containerId, routeNum, orderIds }) => {
+        containerEntries.map(({ containerId, routeNum, orderIds: stopIds }) => {
           const style = routeNum != null ? routeStyleForIndex(routeNum - 1) : null;
-          const routeOrders = orderIds
+          const orderOnly = orderIdsFromStopSequence(stopIds);
+          const routeOrders = orderOnly
             .map((id) => orderById.get(id))
             .filter((o): o is AlleRittenOrder => Boolean(o));
           const headerLabel =
@@ -1086,34 +1237,107 @@ export default function LijstSjoerd({
                 >
                   <span className={`text-sm font-semibold ${style.header}`}>{headerLabel}</span>
                   <span className="ml-2 text-xs text-stone-500">
-                    ({orderIds.length} order{orderIds.length === 1 ? "" : "s"} ·{" "}
-                    {totalLoadForOrders(orderIds, orderById)} load-eenh.)
+                    ({orderOnly.length} order{orderOnly.length === 1 ? "" : "s"} ·{" "}
+                    {totalLoadForOrders(stopIds, orderById)} load-eenh.)
                   </span>
+                  {buttonReorderEnabled && (
+                    <button
+                      type="button"
+                      onClick={() => addDepotToContainer(containerId, routeNum)}
+                      className="ml-3 rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs text-amber-900"
+                    >
+                      + Depot
+                    </button>
+                  )}
                 </div>
               )}
-              {showRouteHeaders && routeNum == null && orderIds.length > 0 && (
+              {showRouteHeaders && routeNum == null && orderOnly.length > 0 && (
                 <div className="border border-stone-200 bg-stone-50 px-3 py-2">
                   <span className="text-sm font-semibold text-stone-600">Overig</span>
                   <span className="ml-2 text-xs font-normal text-stone-500">
-                    ({orderIds.length} order{orderIds.length === 1 ? "" : "s"})
+                    ({orderOnly.length} order{orderOnly.length === 1 ? "" : "s"})
                   </span>
+                  {buttonReorderEnabled && (
+                    <button
+                      type="button"
+                      onClick={() => addDepotToContainer(containerId, routeNum)}
+                      className="ml-3 rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs text-amber-900"
+                    >
+                      + Depot
+                    </button>
+                  )}
                 </div>
               )}
-              {(() => {
-                const capacity = depotCapacityForRoute(routeNum, orderIds, orderById);
-                const displayLegs = assignDisplayLegs(orderIds, orderById, capacity);
-                return orderIds.map((orderId, i) => {
-                const order = orderById.get(orderId);
+              {stopIds.map((stopId, i) => {
+                if (isDepotStopId(stopId)) {
+                  return (
+                    <div key={stopId}>
+                      <DepotRowContent
+                        legNummer={depotPartAfter(stopIds, i)}
+                        onRemove={
+                          buttonReorderEnabled
+                            ? () => removeDepotFromContainer(containerId, stopId)
+                            : undefined
+                        }
+                      />
+                      {buttonReorderEnabled && (
+                        <div className="flex gap-1 border-b border-amber-100 bg-amber-50/50 px-3 py-1">
+                          <button
+                            type="button"
+                            disabled={i <= 0 || recalculating}
+                            onClick={() => {
+                              const prev = {
+                                ...Object.fromEntries(
+                                  Object.entries(containersRef.current).map(([k, v]) => [
+                                    k,
+                                    [...v],
+                                  ])
+                                ),
+                              };
+                              applyReorder(
+                                moveWithinContainer(containersRef.current, stopId, "up"),
+                                prev
+                              );
+                            }}
+                            className="rounded border border-amber-300 px-2 py-0.5 text-xs disabled:opacity-40"
+                          >
+                            ↑
+                          </button>
+                          <button
+                            type="button"
+                            disabled={i >= stopIds.length - 1 || recalculating}
+                            onClick={() => {
+                              const prev = {
+                                ...Object.fromEntries(
+                                  Object.entries(containersRef.current).map(([k, v]) => [
+                                    k,
+                                    [...v],
+                                  ])
+                                ),
+                              };
+                              applyReorder(
+                                moveWithinContainer(containersRef.current, stopId, "down"),
+                                prev
+                              );
+                            }}
+                            className="rounded border border-amber-300 px-2 py-0.5 text-xs disabled:opacity-40"
+                          >
+                            ↓
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+                const order = orderById.get(stopId);
                 if (!order) return null;
-                const leg = displayLegs[i] ?? 1;
-                const prevLeg = i > 0 ? (displayLegs[i - 1] ?? leg) : leg;
-                const showDepotBreak = i > 0 && leg > prevLeg;
                 return (
-                  <div key={`${orderId}-${order.aankomsttijd_slot ?? ""}-${(order as { rit_nummer?: number }).rit_nummer ?? ""}-${leg}`}>
-                    {showDepotBreak && <DepotReturnBanner legNummer={leg} />}
+                  <div
+                    key={`${stopId}-${order.aankomsttijd_slot ?? ""}-${(order as { rit_nummer?: number }).rit_nummer ?? ""}`}
+                  >
                     <TouchOrderRow
                       order={order}
-                      rowNum={i + 1}
+                      rowNum={orderRowNumber(stopIds, i)}
                       rowClassName={style?.bg}
                       reorderEnabled={buttonReorderEnabled}
                       routeOptions={routeOptions}
@@ -1121,14 +1345,17 @@ export default function LijstSjoerd({
                       busy={recalculating}
                       onPatch={onPatch}
                       canMoveUp={i > 0}
-                      canMoveDown={i < orderIds.length - 1}
+                      canMoveDown={i < stopIds.length - 1}
                       onMoveUp={() => {
                         const prev = {
                           ...Object.fromEntries(
                             Object.entries(containersRef.current).map(([k, v]) => [k, [...v]])
                           ),
                         };
-                        applyReorder(moveWithinContainer(containersRef.current, orderId, "up"), prev);
+                        applyReorder(
+                          moveWithinContainer(containersRef.current, stopId, "up"),
+                          prev
+                        );
                       }}
                       onMoveDown={() => {
                         const prev = {
@@ -1136,7 +1363,10 @@ export default function LijstSjoerd({
                             Object.entries(containersRef.current).map(([k, v]) => [k, [...v]])
                           ),
                         };
-                        applyReorder(moveWithinContainer(containersRef.current, orderId, "down"), prev);
+                        applyReorder(
+                          moveWithinContainer(containersRef.current, stopId, "down"),
+                          prev
+                        );
                       }}
                       onChangeRoute={(targetId) => {
                         const prev = {
@@ -1144,13 +1374,15 @@ export default function LijstSjoerd({
                             Object.entries(containersRef.current).map(([k, v]) => [k, [...v]])
                           ),
                         };
-                        applyReorder(moveToContainer(containersRef.current, orderId, targetId), prev);
+                        applyReorder(
+                          moveToContainer(containersRef.current, stopId, targetId),
+                          prev
+                        );
                       }}
                     />
                   </div>
                 );
-              });
-              })()}
+              })}
             </div>
           );
         })
@@ -1171,7 +1403,8 @@ export default function LijstSjoerd({
           ) : (
             <>
               <strong>Vasthouden op een rij of adres</strong> en slepen om volgorde of route te
-              wijzigen. Tijdsloten worden herberekend via Google Maps.
+              wijzigen. Sleep ook de amber <strong>Terug naar depot</strong>-rij, of voeg er een toe
+              via <strong>+ Depot</strong>. Tijdsloten via Google Maps.
             </>
           )}
           {recalculating && (
@@ -1181,6 +1414,9 @@ export default function LijstSjoerd({
       )}
       {reorderError && (
         <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{reorderError}</p>
+      )}
+      {capacityWarning && (
+        <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-950">{capacityWarning}</p>
       )}
 
       <div
@@ -1209,6 +1445,11 @@ export default function LijstSjoerd({
                     {String(activeOrder.aankomsttijd_slot ?? "")}
                   </p>
                 </div>
+              ) : activeId && isDepotStopId(activeId) ? (
+                <div className="max-w-sm rounded-lg border-2 border-amber-400 bg-amber-50 px-4 py-3 text-sm shadow-xl text-amber-950">
+                  <p className="font-semibold">Terug naar depot</p>
+                  <p className="mt-1">{DEPOT_ADDRESS_SHORT}</p>
+                </div>
               ) : null}
             </DragOverlay>
           </DndContext>
@@ -1223,23 +1464,30 @@ export default function LijstSjoerd({
 function RouteGroupRows({
   containerId,
   routeNum,
-  orderIds,
+  stopIds,
   style,
   showRouteHeader,
   orderById,
   dragEnabled,
+  canEditDepot,
   onPatch,
+  onAddDepot,
+  onRemoveDepot,
 }: {
   containerId: string;
   routeNum: number | null;
-  orderIds: string[];
+  stopIds: string[];
   style: ReturnType<typeof routeStyleForIndex> | null;
   showRouteHeader: boolean;
   orderById: Map<string, AlleRittenOrder>;
   dragEnabled: boolean;
+  canEditDepot: boolean;
   onPatch: (id: string, fields: Record<string, unknown>) => void;
+  onAddDepot: () => void;
+  onRemoveDepot: (depotId: string) => void;
 }) {
-  const routeOrders = orderIds
+  const orderOnly = orderIdsFromStopSequence(stopIds);
+  const routeOrders = orderOnly
     .map((id) => orderById.get(id))
     .filter((o): o is AlleRittenOrder => Boolean(o));
   const headerLabel =
@@ -1256,44 +1504,75 @@ function RouteGroupRows({
         >
           <span className={`text-sm font-semibold ${style.header}`}>{headerLabel}</span>
           <span className="ml-2 text-xs text-stone-500">
-            ({orderIds.length} order{orderIds.length === 1 ? "" : "s"} ·{" "}
-            {totalLoadForOrders(orderIds, orderById)} load-eenh.)
+            ({orderOnly.length} order{orderOnly.length === 1 ? "" : "s"} ·{" "}
+            {totalLoadForOrders(stopIds, orderById)} load-eenh.)
           </span>
+          {canEditDepot && (
+            <button
+              type="button"
+              onClick={onAddDepot}
+              className="ml-3 rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs text-amber-900 hover:bg-amber-100"
+            >
+              + Depot
+            </button>
+          )}
         </DroppableRouteHeader>
       )}
-      {showRouteHeader && routeNum == null && orderIds.length > 0 && (
+      {showRouteHeader && routeNum == null && orderOnly.length > 0 && (
         <DroppableRouteHeader containerId={containerId} className="bg-stone-50">
           <span className="text-sm font-semibold text-stone-600">Overig</span>
           <span className="ml-2 text-xs font-normal text-stone-500">
-            ({orderIds.length} order{orderIds.length === 1 ? "" : "s"})
+            ({orderOnly.length} order{orderOnly.length === 1 ? "" : "s"})
           </span>
+          {canEditDepot && (
+            <button
+              type="button"
+              onClick={onAddDepot}
+              className="ml-3 rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs text-amber-900 hover:bg-amber-100"
+            >
+              + Depot
+            </button>
+          )}
         </DroppableRouteHeader>
       )}
-      <SortableContext items={orderIds} strategy={verticalListSortingStrategy}>
-        {(() => {
-          const capacity = depotCapacityForRoute(routeNum, orderIds, orderById);
-          const displayLegs = assignDisplayLegs(orderIds, orderById, capacity);
-          return orderIds.map((id, i) => {
+      {!showRouteHeader && canEditDepot && orderOnly.length >= 2 && (
+        <div className="border-b border-stone-100 px-3 py-1.5">
+          <button
+            type="button"
+            onClick={onAddDepot}
+            className="rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs text-amber-900 hover:bg-amber-100"
+          >
+            + Depot
+          </button>
+        </div>
+      )}
+      <SortableContext items={stopIds} strategy={verticalListSortingStrategy}>
+        {stopIds.map((id, i) => {
+          if (isDepotStopId(id)) {
+            return (
+              <SortableDepotRow
+                key={id}
+                id={id}
+                legNummer={depotPartAfter(stopIds, i)}
+                dragEnabled={dragEnabled}
+                onRemove={canEditDepot ? () => onRemoveDepot(id) : undefined}
+              />
+            );
+          }
           const order = orderById.get(id);
           if (!order) return null;
-          const leg = displayLegs[i] ?? 1;
-          const prevLeg = i > 0 ? (displayLegs[i - 1] ?? leg) : leg;
-          const showDepotBreak = i > 0 && leg > prevLeg;
           return (
-            <div key={`${id}-${order.aankomsttijd_slot ?? ""}-${(order as { rit_nummer?: number }).rit_nummer ?? ""}-${leg}`}>
-              {showDepotBreak && <DepotReturnBanner legNummer={leg} />}
-              <SortableOrderRow
-                id={id}
-                order={order}
-                rowNum={i + 1}
-                rowClassName={style?.bg}
-                dragEnabled={dragEnabled}
-                onPatch={onPatch}
-              />
-            </div>
+            <SortableOrderRow
+              key={`${id}-${order.aankomsttijd_slot ?? ""}-${(order as { rit_nummer?: number }).rit_nummer ?? ""}`}
+              id={id}
+              order={order}
+              rowNum={orderRowNumber(stopIds, i)}
+              rowClassName={style?.bg}
+              dragEnabled={dragEnabled}
+              onPatch={onPatch}
+            />
           );
-        });
-        })()}
+        })}
       </SortableContext>
     </div>
   );

@@ -394,3 +394,23 @@ export async function recalculateRouteStopsWithDepotReturns(
   }
   return chooseBestCapacityLegs(stops, capacity, vertrektijd, options);
 }
+
+/**
+ * Herberekent langs expliciete depot-breakpoints (gebruikers-markers), zonder capaciteitspack.
+ * Elk deel: depot → stops; tussen delen: last stop → depot + herladen.
+ */
+export async function recalculateRouteStopsWithExplicitDepotBreaks(
+  legs: RouteStop[][],
+  vertrektijd: string,
+  options?: { depot?: string }
+): Promise<DepotRecalcResult> {
+  const depot = options?.depot ?? DEPOT_ADDRESS;
+  const nonEmpty = legs.filter((leg) => leg.length > 0);
+  if (nonEmpty.length === 0) return { stops: [], violations: [] };
+  const stopsById = new Map(nonEmpty.flat().map((s) => [s.id, s]));
+  const timed = await timeLegsWithDepotReturns(nonEmpty, vertrektijd, depot);
+  return {
+    stops: timed,
+    violations: collectBezorgtijdViolations(timed, stopsById, vertrektijd),
+  };
+}

@@ -6,20 +6,27 @@ import {
   firstOrderDivergenceIndex,
   parseSlotArrivalHhmm,
   recalculateRouteStops,
-  recalculateRouteStopsWithDepotReturns,
+  recalculateRouteStopsWithExplicitDepotBreaks,
   type RecalculatedStop,
   type RouteStop,
 } from "@/lib/route-recalc";
 import { orderRouteLoad, type OrderForRoute } from "@/lib/routific-payload";
 import { supabaseMissingOrdersRouteNummerColumn } from "@/lib/orders-route-nummer-supabase";
 import { findPausedMpOrderIds } from "@/lib/mp-pause";
+import {
+  isDepotStopId,
+  orderIdLegsFromStopSequence,
+  orderIdsFromStopSequence,
+} from "@/lib/depot-stops";
 
 type RouteInput = {
   routeNummer: number | null;
+  /** Alleen order-UUIDs (afgeleid uit stopIds). */
   orderIds: string[];
+  /** Gemengde volgorde: order-UUIDs + depot:… markers. */
+  stopIds: string[];
   previousOrderIds: string[];
   vertrektijd: string;
-  /** Max. fietsen per rit; bij meerdereRitten → terug naar depot tussen delen. */
   maxFietsen?: number;
   meerdereRitten?: boolean;
 };
@@ -36,125 +43,61 @@ type OrderUpdate = {
 /** Vertrektijd voor Overig-herschikking als er geen route 1-vertrektijd bekend is. */
 const DEFAULT_VERTREKTIJD_OVERIG = "10:30";
 
-function orderLegFromRow(o: Record<string, unknown> | undefined): number {
-  const n = Number(o?.leg_nummer ?? 1);
-  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
-}
-
-/**
- * Als maxFietsen ontbreekt maar de route al depot-delen had: schat capaciteit
- * als de hoogste load van een bestaand deel.
- */
-function inferCapacityFromExistingLegs(
-  orderIds: string[],
-  orderById: Map<string, Record<string, unknown>>
-): number | undefined {
-  const loadByLeg = new Map<number, number>();
-  for (const id of orderIds) {
-    const o = orderById.get(id);
-    if (!o) continue;
-    const leg = orderLegFromRow(o);
-    const load = orderRouteLoad({
-      id,
-      naam: o.naam ? String(o.naam) : null,
-      volledig_adres: String(o.volledig_adres ?? ""),
-      aantal_fietsen: o.aantal_fietsen == null ? null : Number(o.aantal_fietsen),
-      bezorgtijd_voorkeur: o.bezorgtijd_voorkeur
-        ? String(o.bezorgtijd_voorkeur)
-        : null,
-      producten: o.producten ? String(o.producten) : null,
-    } as OrderForRoute);
-    loadByLeg.set(leg, (loadByLeg.get(leg) ?? 0) + load);
-  }
-  if (loadByLeg.size <= 1) return undefined;
-  return Math.max(...Array.from(loadByLeg.values()));
-}
-
-function totalLoadForIds(
-  orderIds: string[],
+function loadForOrderId(
+  id: string,
   orderById: Map<string, Record<string, unknown>>
 ): number {
-  return orderIds.reduce((sum, id) => {
-    const o = orderById.get(id);
-    if (!o) return sum;
-    return (
-      sum +
-      orderRouteLoad({
-        id,
-        naam: o.naam ? String(o.naam) : null,
-        volledig_adres: String(o.volledig_adres ?? ""),
-        aantal_fietsen: o.aantal_fietsen == null ? null : Number(o.aantal_fietsen),
-        bezorgtijd_voorkeur: o.bezorgtijd_voorkeur
-          ? String(o.bezorgtijd_voorkeur)
-          : null,
-        producten: o.producten ? String(o.producten) : null,
-      } as OrderForRoute)
-    );
-  }, 0);
+  const o = orderById.get(id);
+  if (!o) return 0;
+  return orderRouteLoad({
+    id,
+    naam: o.naam ? String(o.naam) : null,
+    volledig_adres: String(o.volledig_adres ?? ""),
+    aantal_fietsen: o.aantal_fietsen == null ? null : Number(o.aantal_fietsen),
+    bezorgtijd_voorkeur: o.bezorgtijd_voorkeur
+      ? String(o.bezorgtijd_voorkeur)
+      : null,
+    producten: o.producten ? String(o.producten) : null,
+  } as OrderForRoute);
 }
 
-/**
- * Bepaal of we opnieuw in capaciteitsdelen moeten packen, en met welke capaciteit.
- * Voorkomt dat een te hoge maxFietsen uit localStorage (bv. 11) alle depot-kopjes wist.
- */
-function resolveDepotPacking(
-  route: RouteInput,
-  orderIds: string[],
-  orderById: Map<string, Record<string, unknown>>
-): { capacity: number } | null {
-  const hadMultiLeg = orderIds.some((id) => orderLegFromRow(orderById.get(id)) > 1);
-  const wantDepot = Boolean(route.meerdereRitten) || hadMultiLeg;
-  if (!wantDepot || orderIds.length === 0) return null;
-
-  const clientCap =
-    route.maxFietsen != null &&
-    Number.isFinite(route.maxFietsen) &&
-    Number(route.maxFietsen) >= 1
-      ? Math.floor(Number(route.maxFietsen))
-      : undefined;
-  const inferred = inferCapacityFromExistingLegs(orderIds, orderById);
-  let capacity = clientCap ?? inferred;
-  if (capacity == null || capacity < 1) return null;
-
-  if (hadMultiLeg && inferred != null) {
-    const total = totalLoadForIds(orderIds, orderById);
-    const legsWithCap = Math.max(1, Math.ceil(total / capacity));
-    const prevLegs = Math.max(
-      1,
-      ...orderIds.map((id) => orderLegFromRow(orderById.get(id)))
-    );
-    // Te ruime capaciteit zou multi-leg wegpoetsen → blijf bij eerder pak-formaat.
-    if (legsWithCap < prevLegs) capacity = inferred;
-  }
-
-  return { capacity };
-}
-
-function buildStopsForDepotRecalc(
+function buildStopsForIds(
   orderIds: string[],
   orderById: Map<string, Record<string, unknown>>
 ): RouteStop[] {
   return orderIds.map((id) => {
     const o = orderById.get(id)!;
-    const load = orderRouteLoad({
-      id,
-      naam: o.naam ? String(o.naam) : null,
-      volledig_adres: String(o.volledig_adres ?? ""),
-      aantal_fietsen: o.aantal_fietsen == null ? null : Number(o.aantal_fietsen),
-      bezorgtijd_voorkeur: o.bezorgtijd_voorkeur
-        ? String(o.bezorgtijd_voorkeur)
-        : null,
-      producten: o.producten ? String(o.producten) : null,
-    } as OrderForRoute);
     return {
       id,
       volledig_adres: String(o.volledig_adres ?? ""),
       bezorgtijd_voorkeur: o.bezorgtijd_voorkeur
         ? String(o.bezorgtijd_voorkeur)
         : null,
-      load,
+      load: loadForOrderId(id, orderById),
     };
   });
+}
+
+function capacityWarningsForLegs(
+  legs: string[][],
+  orderById: Map<string, Record<string, unknown>>,
+  maxFietsen: number | undefined,
+  routeLabel: string
+): string[] {
+  if (maxFietsen == null || !Number.isFinite(maxFietsen) || maxFietsen < 1) {
+    return [];
+  }
+  const cap = Math.floor(maxFietsen);
+  const warnings: string[] = [];
+  legs.forEach((leg, idx) => {
+    const load = leg.reduce((sum, id) => sum + loadForOrderId(id, orderById), 0);
+    if (load > cap) {
+      warnings.push(
+        `${routeLabel} deel ${idx + 1}: ${load} load > max ${cap} fietsen.`
+      );
+    }
+  });
+  return warnings;
 }
 
 /**
@@ -178,7 +121,6 @@ async function recalculateFromDivergence(
 
   const divergeAt = firstOrderDivergenceIndex(previousOrderIds, orderIds);
   if (divergeAt <= 0 || divergeAt >= orderIds.length) {
-    // Hele route opnieuw, of er is geen suffix (alleen verkort) → suffix leeg.
     if (divergeAt >= orderIds.length) return [];
     return recalculateRouteStops(stops, vertrektijd);
   }
@@ -190,13 +132,66 @@ async function recalculateFromDivergence(
   );
   const fromAddress = String(prefixLast?.volledig_adres ?? "").trim();
   if (!arrival || !fromAddress) {
-    // Geen bruikbaar anker → veilige fallback: hele route opnieuw.
     return recalculateRouteStops(stops, vertrektijd);
   }
 
   const suffix = stops.slice(divergeAt);
   const departFromPrefix = departureAfterArrival(arrival);
   return recalculateRouteStops(suffix, departFromPrefix, { fromAddress });
+}
+
+async function recalculateRouteWithOptionalDepotMarkers(
+  route: RouteInput,
+  orderById: Map<string, Record<string, unknown>>,
+  routeLabel: string
+): Promise<{
+  recalculated: RecalculatedStop[];
+  packWithDepot: boolean;
+  warnings: string[];
+}> {
+  const stopIds =
+    route.stopIds.length > 0 ? route.stopIds : route.orderIds;
+  const hasDepotMarkers = stopIds.some((id) => isDepotStopId(id));
+  const orderLegs = orderIdLegsFromStopSequence(stopIds);
+  const warnings = capacityWarningsForLegs(
+    orderLegs,
+    orderById,
+    route.maxFietsen,
+    routeLabel
+  );
+
+  const hadMultiLeg = route.orderIds.some((id) => {
+    const n = Number(orderById.get(id)?.leg_nummer ?? 1);
+    return Number.isFinite(n) && n > 1;
+  });
+
+  if (hasDepotMarkers && orderLegs.length > 0) {
+    const legs = orderLegs.map((ids) => buildStopsForIds(ids, orderById));
+    const depotResult = await recalculateRouteStopsWithExplicitDepotBreaks(
+      legs,
+      route.vertrektijd
+    );
+    return {
+      recalculated: depotResult.stops,
+      packWithDepot: orderLegs.length > 1,
+      warnings,
+    };
+  }
+
+  // Alle depot-markers weg → hele route als één deel (wis oude leg_nummer).
+  if (hadMultiLeg) {
+    const stops = buildStopsForIds(route.orderIds, orderById);
+    const recalculated = await recalculateRouteStops(stops, route.vertrektijd);
+    return { recalculated, packWithDepot: false, warnings };
+  }
+
+  const recalculated = await recalculateFromDivergence(
+    route.orderIds,
+    route.previousOrderIds,
+    route.vertrektijd,
+    orderById
+  );
+  return { recalculated, packWithDepot: false, warnings };
 }
 
 /**
@@ -233,14 +228,17 @@ export async function POST(request: NextRequest) {
         routeNummerRaw == null || routeNummerRaw === ""
           ? null
           : Number(routeNummerRaw);
-      const orderIdsRaw = r.orderIds ?? r.order_ids;
-      const orderIds = Array.isArray(orderIdsRaw)
-        ? orderIdsRaw.map((id: unknown) => String(id).trim()).filter(Boolean)
+      const stopIdsRaw = r.stopIds ?? r.stop_ids ?? r.orderIds ?? r.order_ids;
+      const stopIdsAll = Array.isArray(stopIdsRaw)
+        ? stopIdsRaw.map((id: unknown) => String(id).trim()).filter(Boolean)
         : [];
+      const stopIds = stopIdsAll;
+      const orderIds = orderIdsFromStopSequence(stopIds);
       const previousRaw = r.previousOrderIds ?? r.previous_order_ids;
-      const previousOrderIds = Array.isArray(previousRaw)
+      const previousAll = Array.isArray(previousRaw)
         ? previousRaw.map((id: unknown) => String(id).trim()).filter(Boolean)
         : [];
+      const previousOrderIds = orderIdsFromStopSequence(previousAll);
       const vertrektijd = String(r.vertrektijd ?? "").trim();
       if (
         routeNummer != null &&
@@ -260,6 +258,7 @@ export async function POST(request: NextRequest) {
       routes.push({
         routeNummer,
         orderIds,
+        stopIds,
         previousOrderIds,
         vertrektijd,
         maxFietsen:
@@ -286,7 +285,12 @@ export async function POST(request: NextRequest) {
     const pausedMpOrderIds = await findPausedMpOrderIds(supabase, ownerEmail, allIdsRaw);
     for (const route of routes) {
       route.orderIds = route.orderIds.filter((id) => !pausedMpOrderIds.has(id));
-      route.previousOrderIds = route.previousOrderIds.filter((id) => !pausedMpOrderIds.has(id));
+      route.previousOrderIds = route.previousOrderIds.filter(
+        (id) => !pausedMpOrderIds.has(id)
+      );
+      route.stopIds = route.stopIds.filter(
+        (id) => isDepotStopId(id) || !pausedMpOrderIds.has(id)
+      );
     }
     const allIds = allIdsRaw.filter((id) => !pausedMpOrderIds.has(id));
     if (allIds.length === 0) {
@@ -315,6 +319,7 @@ export async function POST(request: NextRequest) {
     }
 
     const updates: OrderUpdate[] = [];
+    const capacityWarnings: string[] = [];
 
     const patchOrder = async (
       orderId: string,
@@ -345,17 +350,17 @@ export async function POST(request: NextRequest) {
 
     // Alle "Overig"-route-entries (routeNummer null) bundelen tot ÉÉN batch met ÉÉN
     // vertrektijd, ook als de client per ongeluk meerdere aparte entries stuurt.
-    const overigOrderIds: string[] = [];
+    const overigStopIds: string[] = [];
     let overigPreviousOrderIds: string[] = [];
     let overigVertrektijd: string | null = null;
     let overigMaxFietsen: number | undefined;
     let overigMeerdereRitten = false;
     const realRoutes: RouteInput[] = [];
     for (const route of routes) {
-      if (route.orderIds.length === 0) continue;
+      if (route.orderIds.length === 0 && !route.stopIds.some(isDepotStopId)) continue;
       if (route.routeNummer == null) {
-        for (const id of route.orderIds) {
-          if (!overigOrderIds.includes(id)) overigOrderIds.push(id);
+        for (const id of route.stopIds) {
+          if (!overigStopIds.includes(id)) overigStopIds.push(id);
         }
         if (overigPreviousOrderIds.length === 0 && route.previousOrderIds.length > 0) {
           overigPreviousOrderIds = route.previousOrderIds;
@@ -372,9 +377,9 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const overigOrderIds = orderIdsFromStopSequence(overigStopIds);
+
     if (overigOrderIds.length > 0) {
-      // 1) Orders die NU nog een route_nummer hebben → bewust naar Overig gesleept: ontkoppelen.
-      // 2) Orders die al los waren → herberekensuffix vanaf eerste wijziging.
       const toUnplan: string[] = [];
       const toRecalc: string[] = [];
       for (const id of overigOrderIds) {
@@ -388,6 +393,7 @@ export async function POST(request: NextRequest) {
           route_nummer: null,
           rit_nummer: null,
           aankomsttijd_slot: null,
+          leg_nummer: null,
         });
         if (err) {
           console.error("[route/reorder] unplan:", err);
@@ -411,38 +417,28 @@ export async function POST(request: NextRequest) {
             ? DEFAULT_VERTREKTIJD_OVERIG
             : rawVt;
 
-        // Eén bus zonder route_nummer kan wél depot-delen hebben (meerdereRitten).
-        const packing = resolveDepotPacking(
-          {
-            routeNummer: null,
-            orderIds: toRecalc,
-            previousOrderIds: overigPreviousOrderIds,
-            vertrektijd,
-            maxFietsen: overigMaxFietsen,
-            meerdereRitten: overigMeerdereRitten,
-          },
-          toRecalc,
-          orderById
+        // Alleen orders die in Overig blijven; depot-markers tussen die orders behouden.
+        const toRecalcSet = new Set(toRecalc);
+        const stopIdsForRecalc = overigStopIds.filter(
+          (id) => isDepotStopId(id) || toRecalcSet.has(id)
         );
 
-        let recalculated: RecalculatedStop[];
-        if (packing) {
-          const stops = buildStopsForDepotRecalc(toRecalc, orderById);
-          const depotResult = await recalculateRouteStopsWithDepotReturns(
-            stops,
-            vertrektijd,
-            packing.capacity,
-            { packMode: "best" }
+        const { recalculated, packWithDepot, warnings } =
+          await recalculateRouteWithOptionalDepotMarkers(
+            {
+              routeNummer: null,
+              orderIds: toRecalc,
+              stopIds: stopIdsForRecalc,
+              previousOrderIds: overigPreviousOrderIds,
+              vertrektijd,
+              maxFietsen: overigMaxFietsen,
+              meerdereRitten: overigMeerdereRitten,
+            },
+            orderById,
+            "Overig"
           );
-          recalculated = depotResult.stops;
-        } else {
-          recalculated = await recalculateFromDivergence(
-            toRecalc,
-            overigPreviousOrderIds,
-            vertrektijd,
-            orderById
-          );
-        }
+        capacityWarnings.push(...warnings);
+
         const recalculatedById = new Map(recalculated.map((s) => [s.id, s]));
         const maxLeg = Math.max(
           1,
@@ -450,9 +446,6 @@ export async function POST(request: NextRequest) {
           1
         );
 
-        // Belangrijk: ook in Overig rit_nummer 1..n zetten. Zonder rit_nummer sorteert
-        // de UI op kloktijd, waardoor een stop die over middernacht heen is gewikkeld
-        // (bijv. 01:13) bovenaan belandt alsof die als eerste vertrekt.
         for (let i = 0; i < toRecalc.length; i++) {
           const id = toRecalc[i]!;
           const ritNummer = i + 1;
@@ -464,7 +457,7 @@ export async function POST(request: NextRequest) {
               rit_nummer: ritNummer,
               aankomsttijd_slot: recalc.aankomsttijd_slot,
               arrivalTime: recalc.arrivalTime,
-              leg_nummer: packing
+              leg_nummer: packWithDepot
                 ? maxLeg > 1
                   ? (recalc.leg_nummer ?? 1)
                   : null
@@ -476,7 +469,6 @@ export async function POST(request: NextRequest) {
           const existingSlot = String(existing?.aankomsttijd_slot ?? "").trim();
           if (!existingSlot) continue;
           const existingRit = Number(existing?.rit_nummer ?? 0);
-          // Prefix: slot behouden, wel rit_nummer synchroon zetten als die ontbreekt/verkeerd is.
           if (existingRit !== ritNummer || existing?.rit_nummer == null) {
             updates.push({
               id,
@@ -498,29 +490,14 @@ export async function POST(request: NextRequest) {
           ? route.routeNummer
           : null;
 
-      // Oude breekpunten onthouden na slepen werkt niet. Wél: opnieuw packen op
-      // capaciteit in de nieuwe volgorde → nieuwe "Terug naar depot"-grenzen + tijden.
-      const packing = resolveDepotPacking(route, route.orderIds, orderById);
-      const packWithDepot = packing != null;
+      const { recalculated, packWithDepot, warnings } =
+        await recalculateRouteWithOptionalDepotMarkers(
+          route,
+          orderById,
+          routeNummerDb != null ? `Route ${routeNummerDb}` : "Route"
+        );
+      capacityWarnings.push(...warnings);
 
-      let recalculated: RecalculatedStop[];
-      if (packWithDepot) {
-        const stops = buildStopsForDepotRecalc(route.orderIds, orderById);
-        const depotResult = await recalculateRouteStopsWithDepotReturns(
-          stops,
-          route.vertrektijd,
-          packing.capacity,
-          { packMode: "best" }
-        );
-        recalculated = depotResult.stops;
-      } else {
-        recalculated = await recalculateFromDivergence(
-          route.orderIds,
-          route.previousOrderIds,
-          route.vertrektijd,
-          orderById
-        );
-      }
       const recalculatedById = new Map(recalculated.map((s) => [s.id, s]));
       const maxLeg = Math.max(
         1,
@@ -539,7 +516,6 @@ export async function POST(request: NextRequest) {
             rit_nummer: ritNummer,
             aankomsttijd_slot: recalc.aankomsttijd_slot,
             arrivalTime: recalc.arrivalTime,
-            // Altijd leg_nummer zetten bij depot-pack (ook bij 1 deel → null zodat UI schoon blijft).
             leg_nummer: packWithDepot
               ? maxLeg > 1
                 ? (recalc.leg_nummer ?? 1)
@@ -611,6 +587,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       ok: true,
       message: `${changedSlotCount} tijdsloten herberekend via Google Maps.`,
+      warnings: capacityWarnings.length > 0 ? capacityWarnings : undefined,
       updates: updates.map((u) => ({
         id: u.id,
         route_nummer: u.route_nummer,

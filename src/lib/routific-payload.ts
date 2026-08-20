@@ -10,8 +10,8 @@ export const DEPOT_ADDRESS = "Kapelweg 2, 3732 GS, De Bilt, Netherlands";
 export const SERVICE_TIME_MINUTES = 20;
 const DEFAULT_DURATION = SERVICE_TIME_MINUTES;
 const DEFAULT_SHIFT_END = "23:59";
-/** Minuten op het depot tussen twee ritten (laden/lossen). */
-export const DEPOT_RELOAD_MINUTES = 30;
+/** Minuten op het depot tussen twee ritten (laden/lossen / “terug naar depot”). */
+export const DEPOT_RELOAD_MINUTES = 80;
 /** @deprecated gebruik DEPOT_RELOAD_MINUTES */
 const RELOAD_TIME_MINUTEN = DEPOT_RELOAD_MINUTES;
 /** Ruwe schatting gemiddelde reistijd tussen twee opeenvolgende stops (minuten), alleen
