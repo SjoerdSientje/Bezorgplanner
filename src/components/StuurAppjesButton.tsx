@@ -8,6 +8,7 @@ import { isStuurAppjesEligibleOrder } from "@/lib/stuur-appjes-eligibility";
 
 type ActiveRouteOption = {
   routeNummer: number;
+  label: string;
   orderCount: number;
 };
 
@@ -18,16 +19,27 @@ async function fetchActiveRoutesToday(): Promise<ActiveRouteOption[]> {
 
   const todayKey = getAmsterdamCalendarDate(0);
   const counts = new Map<number, number>();
+  const names = new Map<number, string>();
   for (const row of (json.rows ?? []) as Record<string, unknown>[]) {
     const datum = String(row.datum ?? "");
     if (datum !== todayKey) continue;
     const rn = Number(row.route_nummer ?? 0);
     if (rn <= 0) continue;
     counts.set(rn, (counts.get(rn) ?? 0) + 1);
+    const naam = String(row.route_naam ?? "").trim();
+    if (naam && !names.has(rn)) names.set(rn, naam);
   }
   return Array.from(counts.entries())
     .sort(([a], [b]) => a - b)
-    .map(([routeNummer, orderCount]) => ({ routeNummer, orderCount }));
+    .map(([routeNummer, orderCount]) => {
+      const custom = names.get(routeNummer);
+      const fallback = routeStyleForIndex(routeNummer - 1).label;
+      return {
+        routeNummer,
+        label: custom && custom !== fallback ? custom : fallback,
+        orderCount,
+      };
+    });
 }
 
 type Section = "nieuwe_order" | "nieuw_tijdslot";
@@ -184,10 +196,8 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
   const [vertragingMinuten, setVertragingMinuten] = useState<string>("");
   const [verschuivenSending, setVerschuivenSending] = useState(false);
   const [verschuivenResult, setVerschuivenResult] = useState<VerschuivenResult | null>(null);
-  const [routePickerOpen, setRoutePickerOpen] = useState(false);
   const [activeRoutes, setActiveRoutes] = useState<ActiveRouteOption[]>([]);
   const [selectedRouteNummers, setSelectedRouteNummers] = useState<Set<number>>(new Set());
-  const [pendingVertragingMinuten, setPendingVertragingMinuten] = useState<number | null>(null);
 
   const currentByOrderId = useMemo(() => {
     const m = new Map<string, CurrentRitjesOrder>();
@@ -260,7 +270,14 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
     return { nieuw, bestaand };
   }
 
-  async function executeVerschuiven(minuten: number, routeNummers?: number[]) {
+  async function executeVerschuiven(minuten: number, routeNummers: number[]) {
+    if (routeNummers.length === 0) {
+      setVerschuivenResult({
+        ok: false,
+        error: "Selecteer minstens één route.",
+      });
+      return;
+    }
     setVerschuivenSending(true);
     setVerschuivenResult(null);
     try {
@@ -269,7 +286,7 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           vertragingMinuten: minuten,
-          ...(routeNummers && routeNummers.length > 0 ? { routeNummers } : {}),
+          routeNummers,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -283,31 +300,21 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
       setVerschuivenResult({ ok: false, error: "Er ging iets mis. Probeer het opnieuw." });
     } finally {
       setVerschuivenSending(false);
-      setRoutePickerOpen(false);
-      setPendingVertragingMinuten(null);
     }
   }
 
   async function handleVerschuiven() {
     const minuten = parseInt(vertragingMinuten, 10);
     if (!Number.isFinite(minuten) || minuten <= 0) return;
-
-    const routes = await fetchActiveRoutesToday();
-    if (routes.length <= 1) {
-      await executeVerschuiven(minuten);
+    if (selectedRouteNummers.size === 0) {
+      setVerschuivenResult({
+        ok: false,
+        error: "Vink minstens één route aan.",
+      });
       return;
     }
-
-    setPendingVertragingMinuten(minuten);
-    setActiveRoutes(routes);
-    setSelectedRouteNummers(new Set(routes.map((r) => r.routeNummer)));
-    setRoutePickerOpen(true);
-  }
-
-  async function confirmRouteVerschuiven() {
-    if (pendingVertragingMinuten == null || selectedRouteNummers.size === 0) return;
     await executeVerschuiven(
-      pendingVertragingMinuten,
+      minuten,
       Array.from(selectedRouteNummers).sort((a, b) => a - b)
     );
   }
@@ -321,30 +328,58 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
     });
   }
 
+  function toggleAllRoutes() {
+    setSelectedRouteNummers((prev) =>
+      prev.size === activeRoutes.length
+        ? new Set()
+        : new Set(activeRoutes.map((r) => r.routeNummer))
+    );
+  }
+
   const openDialog = useCallback(async () => {
     setResult(null);
     setVerschuivenResult(null);
     setVertragingMinuten("");
     setSelectedNieuweOrder(new Set());
     setSelectedNieuwTijdslot(new Set());
+    setActiveRoutes([]);
+    setSelectedRouteNummers(new Set());
     setLoadingOrders(true);
     setOpen(true);
     try {
       if (onBeforeOpen) await onBeforeOpen();
       await new Promise((r) => setTimeout(r, 250));
 
-      const { nieuw, bestaand } = await fetchAndSplit();
+      const [{ nieuw, bestaand }, routes] = await Promise.all([
+        fetchAndSplit(),
+        fetchActiveRoutesToday(),
+      ]);
       setNieuweOrderOrders(nieuw);
       setNieuwTijdslotOrders(bestaand);
+      setActiveRoutes(routes);
+      setSelectedRouteNummers(new Set(routes.map((r) => r.routeNummer)));
 
       // Retry voor eventuele in-flight PATCHes
       await new Promise((r) => setTimeout(r, 500));
-      const { nieuw: nieuw2, bestaand: bestaand2 } = await fetchAndSplit();
+      const [{ nieuw: nieuw2, bestaand: bestaand2 }, routes2] = await Promise.all([
+        fetchAndSplit(),
+        fetchActiveRoutesToday(),
+      ]);
       setNieuweOrderOrders(nieuw2);
       setNieuwTijdslotOrders(bestaand2);
+      setActiveRoutes(routes2);
+      setSelectedRouteNummers((prev) => {
+        const valid = new Set(routes2.map((r) => r.routeNummer));
+        const kept = Array.from(prev).filter((n) => valid.has(n));
+        return kept.length > 0
+          ? new Set(kept)
+          : new Set(routes2.map((r) => r.routeNummer));
+      });
     } catch (e) {
       setNieuweOrderOrders([]);
       setNieuwTijdslotOrders([]);
+      setActiveRoutes([]);
+      setSelectedRouteNummers(new Set());
       setResult({ ok: false, error: e instanceof Error ? e.message : "Orders ophalen mislukt." });
     } finally {
       setLoadingOrders(false);
@@ -523,11 +558,59 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
                   <div className="mb-3">
                     <h3 className="text-sm font-semibold text-koopje-black">Planning verschuiven</h3>
                     <p className="text-xs text-koopje-black/60">
-                      Verschuif actieve orders in de planning met een vertraging. Iedereen krijgt
-                      automatisch een appje met het nieuwe tijdslot. Bij meerdere routes kun je
-                      kiezen welke routes worden opgeschoven.
+                      Vink de routes aan die vertraging moeten krijgen. Bij goedkeuren worden alleen
+                      die routes opgeschoven en krijgen die orders een appje met het nieuwe tijdslot.
                     </p>
                   </div>
+
+                  {activeRoutes.length === 0 ? (
+                    <p className="mb-3 text-sm italic text-koopje-black/40">
+                      Geen actieve routes in de planning van vandaag.
+                    </p>
+                  ) : (
+                    <div className="mb-3 space-y-2 rounded-xl border border-koopje-black/10 p-3">
+                      <label className="mb-1 flex cursor-pointer items-center gap-2 text-xs font-medium text-koopje-black/60 hover:text-koopje-black">
+                        <input
+                          type="checkbox"
+                          checked={
+                            activeRoutes.length > 0 &&
+                            selectedRouteNummers.size === activeRoutes.length
+                          }
+                          onChange={toggleAllRoutes}
+                          className="h-3.5 w-3.5 rounded accent-koopje-orange"
+                        />
+                        Alle routes
+                      </label>
+                      {activeRoutes.map((route) => {
+                        const style = routeStyleForIndex(route.routeNummer - 1);
+                        const selected = selectedRouteNummers.has(route.routeNummer);
+                        return (
+                          <label
+                            key={route.routeNummer}
+                            className={`flex cursor-pointer items-center gap-3 rounded-lg border border-l-4 px-3 py-2.5 transition ${style.border} ${
+                              selected ? style.bg : "bg-white hover:bg-stone-50"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selected}
+                              onChange={() => toggleRouteNummer(route.routeNummer)}
+                              className="h-4 w-4 accent-koopje-orange"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <span className={`text-sm font-semibold ${style.header}`}>
+                                {route.label}
+                              </span>
+                              <p className="text-xs text-koopje-black/60">
+                                {route.orderCount} order{route.orderCount === 1 ? "" : "s"} in planning
+                              </p>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+
                   <div className="flex items-center gap-3">
                     <div className="flex items-center gap-2 rounded-xl border border-koopje-black/10 bg-koopje-black/5 px-3 py-2">
                       <input
@@ -549,6 +632,8 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
                       onClick={handleVerschuiven}
                       disabled={
                         verschuivenSending ||
+                        activeRoutes.length === 0 ||
+                        selectedRouteNummers.size === 0 ||
                         !vertragingMinuten ||
                         parseInt(vertragingMinuten, 10) <= 0
                       }
@@ -609,79 +694,6 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
     </>
   ) : null;
 
-  const routePickerModal = routePickerOpen ? (
-    <>
-      <div
-        className="fixed inset-0 z-[60] bg-koopje-black/40"
-        aria-hidden
-        onClick={() => {
-          if (!verschuivenSending) {
-            setRoutePickerOpen(false);
-            setPendingVertragingMinuten(null);
-          }
-        }}
-      />
-      <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
-        <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
-          <h3 className="text-base font-semibold text-koopje-black">
-            Welke routes moeten worden opgeschoven?
-          </h3>
-          <p className="mt-1 text-xs text-koopje-black/60">
-            Alleen orders van de geselecteerde routes krijgen een nieuw tijdslot en een appje.
-          </p>
-          <div className="mt-4 space-y-2">
-            {activeRoutes.map((route) => {
-              const style = routeStyleForIndex(route.routeNummer - 1);
-              const selected = selectedRouteNummers.has(route.routeNummer);
-              return (
-                <label
-                  key={route.routeNummer}
-                  className={`flex cursor-pointer items-center gap-3 rounded-lg border border-l-4 px-3 py-2.5 transition ${style.border} ${
-                    selected ? style.bg : "bg-white hover:bg-stone-50"
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={selected}
-                    onChange={() => toggleRouteNummer(route.routeNummer)}
-                    className="h-4 w-4 accent-koopje-orange"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <span className={`text-sm font-semibold ${style.header}`}>{style.label}</span>
-                    <p className="text-xs text-koopje-black/60">
-                      {route.orderCount} order{route.orderCount === 1 ? "" : "s"} in planning
-                    </p>
-                  </div>
-                </label>
-              );
-            })}
-          </div>
-          <div className="mt-5 flex justify-end gap-2">
-            <button
-              type="button"
-              disabled={verschuivenSending}
-              onClick={() => {
-                setRoutePickerOpen(false);
-                setPendingVertragingMinuten(null);
-              }}
-              className="rounded-lg px-4 py-2 text-sm text-koopje-black/60 hover:text-koopje-black disabled:opacity-50"
-            >
-              Annuleren
-            </button>
-            <button
-              type="button"
-              disabled={verschuivenSending || selectedRouteNummers.size === 0}
-              onClick={confirmRouteVerschuiven}
-              className="rounded-lg bg-koopje-orange px-4 py-2 text-sm font-medium text-white hover:bg-koopje-orange-dark disabled:opacity-50"
-            >
-              {verschuivenSending ? "Bezig…" : "Overschuiven"}
-            </button>
-          </div>
-        </div>
-      </div>
-    </>
-  ) : null;
-
   return (
     <>
       <button
@@ -701,9 +713,6 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
       </button>
       {typeof document !== "undefined" && modal
         ? createPortal(modal, document.body)
-        : null}
-      {typeof document !== "undefined" && routePickerModal
-        ? createPortal(routePickerModal, document.body)
         : null}
     </>
   );

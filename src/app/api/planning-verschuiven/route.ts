@@ -47,6 +47,12 @@ export async function POST(request: NextRequest) {
           .map((n: unknown) => Number(n))
           .filter((n) => Number.isFinite(n) && n > 0)
       : null;
+    if (Array.isArray(routeNummersRaw) && (!routeNummersFilter || routeNummersFilter.length === 0)) {
+      return NextResponse.json(
+        { error: "Selecteer minstens één route." },
+        { status: 400 }
+      );
+    }
 
     const supabase = createClient(supabaseUrl, serviceKey);
 
