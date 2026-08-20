@@ -1,10 +1,11 @@
 /**
  * Berekent een tijdslot (2 uur) rond een verwachte aankomsttijd.
  *
- * Belangrijk: de **echte aankomst** uit de route is leidend. Restricties mogen het
- * 2-uursvenster alleen verschuiven als de aankomst daar nog in past. Nooit een
- * vroeg/laat slot verzinnen dat de aankomst buiten het venster zet (dat gaf
- * bv. "12:00-14:00" terwijl de bus pas na depot-return om 16:xx aankomt).
+ * Belangrijk: de **echte aankomst** uit de route is leidend.
+ * - "na …" beïnvloedt alleen Routific-planning, niet het getoonde slot.
+ * - "voor …" / "tussen …" mogen het 2-uursvenster alleen verschuiven als de
+ *   aankomst daar nog in past. Nooit een vroeg/laat slot verzinnen dat de
+ *   aankomst buiten het venster zet.
  */
 
 import { parseBezorgtijdRestriction } from "@/lib/bezorgtijd-window";
@@ -51,16 +52,10 @@ export function maakTijdslot(
   }
 
   if (res.kind === "na") {
-    const minStart = toMinutes(res.minStart);
-    // Aankomst vóór toegestaan venster → toon eerlijk aankomst-slot, forceer niet later.
-    if (arrival < minStart) {
-      return defaultSlotAroundArrival(arrival);
-    }
-    const slotStart = Math.max(minStart, arrival - DEFAULT_BEFORE_MIN);
-    if (!arrivalInside(arrival, slotStart)) {
-      return defaultSlotAroundArrival(arrival);
-    }
-    return formatSlotRange(slotStart);
+    // "na HH:mm" stuurt alleen de Routific-planning (visit start). Het getoonde
+    // 2-uurs slot volgt altijd de echte aankomst — niet forceren naar minStart
+    // (dat gaf bv. "16:00–18:00" terwijl arrival-45 natuurlijker was).
+    return defaultSlotAroundArrival(arrival);
   }
 
   if (res.kind === "voor") {
