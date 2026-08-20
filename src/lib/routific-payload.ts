@@ -204,15 +204,25 @@ function buildVisitForOrder(
   const address = (o.volledig_adres || "").trim() || "Onbekend adres";
   const load = orderRouteLoad(o);
   const window = parseBezorgtijdVoorkeur(o.bezorgtijd_voorkeur, shiftStart);
+
+  // Tijdvensters zijn harde Routific-constraints. Onmogelijk → unserved + waarschuwing.
+  // - geen restrictie → hele shift
+  // - "na HH:mm" → start gezet, end weglaten (= anytime after; Routific-docs)
+  // - "voor HH:mm" / "tussen A en B" → start + end
   const start = window ? window.start : shiftStart;
-  const end = window && window.end !== null ? window.end : DEFAULT_SHIFT_END;
+  const end =
+    window == null
+      ? DEFAULT_SHIFT_END
+      : window.end === null
+        ? undefined
+        : window.end;
 
   return {
     location: buildLocation(address, o.lat, o.lng),
     load,
     duration: DEFAULT_DURATION,
     start,
-    end,
+    ...(end != null ? { end } : {}),
     ...(vehicleType ? { type: vehicleType } : {}),
   };
 }

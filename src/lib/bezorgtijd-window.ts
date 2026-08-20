@@ -90,9 +90,10 @@ export function parseBezorgtijdRestriction(
 const DEFAULT_SHIFT_END = "23:59";
 
 /**
- * Routific visit-venster uit bezorgtijd-voorkeur.
- * - "voor 15:00" → start = shiftStart, end = 15:00 (Routific plant vóór deadline)
- * - "na 15:00" → start = 15:00, geen end
+ * Routific visit-venster uit bezorgtijd-voorkeur (harde constraints).
+ * - "voor 15:00" → start = shiftStart, end = 15:00
+ * - "na 15:00" → start = 15:00, end = null (end weglaten in payload)
+ * - "tussen 14:00 en 16:00" → start = 14:00, end = 16:00
  */
 export function parseBezorgtijdVoorkeur(
   text: string | null | undefined,
