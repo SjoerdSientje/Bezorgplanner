@@ -70,6 +70,66 @@ function inferCapacityFromExistingLegs(
   return Math.max(...Array.from(loadByLeg.values()));
 }
 
+function totalLoadForIds(
+  orderIds: string[],
+  orderById: Map<string, Record<string, unknown>>
+): number {
+  return orderIds.reduce((sum, id) => {
+    const o = orderById.get(id);
+    if (!o) return sum;
+    return (
+      sum +
+      orderRouteLoad({
+        id,
+        naam: o.naam ? String(o.naam) : null,
+        volledig_adres: String(o.volledig_adres ?? ""),
+        aantal_fietsen: o.aantal_fietsen == null ? null : Number(o.aantal_fietsen),
+        bezorgtijd_voorkeur: o.bezorgtijd_voorkeur
+          ? String(o.bezorgtijd_voorkeur)
+          : null,
+        producten: o.producten ? String(o.producten) : null,
+      } as OrderForRoute)
+    );
+  }, 0);
+}
+
+/**
+ * Bepaal of we opnieuw in capaciteitsdelen moeten packen, en met welke capaciteit.
+ * Voorkomt dat een te hoge maxFietsen uit localStorage (bv. 11) alle depot-kopjes wist.
+ */
+function resolveDepotPacking(
+  route: RouteInput,
+  orderIds: string[],
+  orderById: Map<string, Record<string, unknown>>
+): { capacity: number } | null {
+  const hadMultiLeg = orderIds.some((id) => orderLegFromRow(orderById.get(id)) > 1);
+  const wantDepot = Boolean(route.meerdereRitten) || hadMultiLeg;
+  if (!wantDepot || orderIds.length === 0) return null;
+
+  const clientCap =
+    route.maxFietsen != null &&
+    Number.isFinite(route.maxFietsen) &&
+    Number(route.maxFietsen) >= 1
+      ? Math.floor(Number(route.maxFietsen))
+      : undefined;
+  const inferred = inferCapacityFromExistingLegs(orderIds, orderById);
+  let capacity = clientCap ?? inferred;
+  if (capacity == null || capacity < 1) return null;
+
+  if (hadMultiLeg && inferred != null) {
+    const total = totalLoadForIds(orderIds, orderById);
+    const legsWithCap = Math.max(1, Math.ceil(total / capacity));
+    const prevLegs = Math.max(
+      1,
+      ...orderIds.map((id) => orderLegFromRow(orderById.get(id)))
+    );
+    // Te ruime capaciteit zou multi-leg wegpoetsen → blijf bij eerder pak-formaat.
+    if (legsWithCap < prevLegs) capacity = inferred;
+  }
+
+  return { capacity };
+}
+
 function buildStopsForDepotRecalc(
   orderIds: string[],
   orderById: Map<string, Record<string, unknown>>
@@ -395,22 +455,8 @@ export async function POST(request: NextRequest) {
 
       // Oude breekpunten onthouden na slepen werkt niet. Wél: opnieuw packen op
       // capaciteit in de nieuwe volgorde → nieuwe "Terug naar depot"-grenzen + tijden.
-      // Ook als meerdereRitten-flag in localStorage ontbreekt, maar de route al legs had.
-      const hadMultiLeg = route.orderIds.some(
-        (id) => orderLegFromRow(orderById.get(id)) > 1
-      );
-      const capacity =
-        route.maxFietsen != null &&
-        Number.isFinite(route.maxFietsen) &&
-        Number(route.maxFietsen) >= 1
-          ? Number(route.maxFietsen)
-          : hadMultiLeg
-            ? inferCapacityFromExistingLegs(route.orderIds, orderById)
-            : undefined;
-      const packWithDepot =
-        capacity != null &&
-        capacity >= 1 &&
-        (Boolean(route.meerdereRitten) || hadMultiLeg);
+      const packing = resolveDepotPacking(route, route.orderIds, orderById);
+      const packWithDepot = packing != null;
 
       let recalculated: RecalculatedStop[];
       if (packWithDepot) {
@@ -418,7 +464,8 @@ export async function POST(request: NextRequest) {
         const depotResult = await recalculateRouteStopsWithDepotReturns(
           stops,
           route.vertrektijd,
-          capacity
+          packing.capacity,
+          { packMode: "full" }
         );
         recalculated = depotResult.stops;
       } else {
@@ -447,6 +494,7 @@ export async function POST(request: NextRequest) {
             rit_nummer: ritNummer,
             aankomsttijd_slot: recalc.aankomsttijd_slot,
             arrivalTime: recalc.arrivalTime,
+            // Altijd leg_nummer zetten bij depot-pack (ook bij 1 deel → null zodat UI schoon blijft).
             leg_nummer: packWithDepot
               ? maxLeg > 1
                 ? (recalc.leg_nummer ?? 1)

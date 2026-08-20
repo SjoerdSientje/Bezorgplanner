@@ -229,6 +229,70 @@ function orderLegNummer(order: AlleRittenOrder | undefined): number {
   return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
 }
 
+/**
+ * Capacité voor depot-delen: uit Route genereren, of afgeleid uit bestaande legs.
+ * Voorkomt dat een te hoge maxFietsen in storage alle kopjes wist.
+ */
+function depotCapacityForRoute(
+  routeNum: number | null,
+  orderIds: string[],
+  orderById: Map<string, AlleRittenOrder>
+): number | null {
+  if (routeNum == null || orderIds.length === 0) return null;
+  const saved = readSavedRoutesFromStorage()[routeNum - 1];
+  const hadMulti = orderIds.some((id) => orderLegNummer(orderById.get(id)) > 1);
+  if (!saved?.meerdereRitten && !hadMulti) return null;
+
+  const clientCap =
+    saved?.maxFietsen != null && Number.isFinite(saved.maxFietsen) && saved.maxFietsen >= 1
+      ? Math.floor(saved.maxFietsen)
+      : null;
+
+  const loadByLeg = new Map<number, number>();
+  for (const id of orderIds) {
+    const o = orderById.get(id);
+    if (!o) continue;
+    const leg = orderLegNummer(o);
+    loadByLeg.set(leg, (loadByLeg.get(leg) ?? 0) + orderRouteLoad(o as unknown as OrderForRoute));
+  }
+  const inferred =
+    loadByLeg.size > 1 ? Math.max(...Array.from(loadByLeg.values())) : undefined;
+
+  let capacity = clientCap ?? inferred ?? null;
+  if (capacity == null || capacity < 1) return null;
+
+  if (hadMulti && inferred != null) {
+    const total = totalLoadForOrders(orderIds, orderById);
+    const legsWithCap = Math.max(1, Math.ceil(total / capacity));
+    const prevLegs = Math.max(1, ...orderIds.map((id) => orderLegNummer(orderById.get(id))));
+    if (legsWithCap < prevLegs) capacity = inferred;
+  }
+  return capacity;
+}
+
+/** Deelnummers in huidige stopvolgorde (pack-full op capaciteit), voor depot-banners. */
+function assignDisplayLegs(
+  orderIds: string[],
+  orderById: Map<string, AlleRittenOrder>,
+  capacity: number | null
+): number[] {
+  if (capacity != null && capacity >= 1) {
+    let leg = 1;
+    let load = 0;
+    return orderIds.map((id) => {
+      const o = orderById.get(id);
+      const l = o ? orderRouteLoad(o as unknown as OrderForRoute) : 1;
+      if (load > 0 && load + l > capacity) {
+        leg += 1;
+        load = 0;
+      }
+      load += l;
+      return leg;
+    });
+  }
+  return orderIds.map((id) => orderLegNummer(orderById.get(id)));
+}
+
 function DepotReturnBanner({
   legNummer,
   gridClass,
@@ -757,13 +821,24 @@ export default function LijstSjoerd({
           return;
         }
         const saved = readSavedRoutesFromStorage()[entry.rn - 1];
+        const orderByIdLocal = new Map(
+          groups.flatMap((g) => g.orders).map((o) => [String(o.id), o])
+        );
+        const hadDepotLegs = entry.orderIds.some(
+          (id) => orderLegNummer(orderByIdLocal.get(id)) > 1
+        );
+        const capFromOrders = depotCapacityForRoute(
+          entry.routeNummer,
+          entry.orderIds,
+          orderByIdLocal
+        );
         routes.push({
           routeNummer: entry.routeNummer,
           orderIds: entry.orderIds,
           previousOrderIds: entry.previousOrderIds,
           vertrektijd,
-          maxFietsen: saved?.maxFietsen,
-          meerdereRitten: saved?.meerdereRitten,
+          maxFietsen: saved?.maxFietsen ?? capFromOrders ?? undefined,
+          meerdereRitten: Boolean(saved?.meerdereRitten) || hadDepotLegs,
         });
       }
 
@@ -1029,11 +1104,14 @@ export default function LijstSjoerd({
                   </span>
                 </div>
               )}
-              {orderIds.map((orderId, i) => {
+              {(() => {
+                const capacity = depotCapacityForRoute(routeNum, orderIds, orderById);
+                const displayLegs = assignDisplayLegs(orderIds, orderById, capacity);
+                return orderIds.map((orderId, i) => {
                 const order = orderById.get(orderId);
                 if (!order) return null;
-                const leg = orderLegNummer(order);
-                const prevLeg = i > 0 ? orderLegNummer(orderById.get(orderIds[i - 1]!)) : leg;
+                const leg = displayLegs[i] ?? 1;
+                const prevLeg = i > 0 ? (displayLegs[i - 1] ?? leg) : leg;
                 const showDepotBreak = i > 0 && leg > prevLeg;
                 return (
                   <div key={`${orderId}-${order.aankomsttijd_slot ?? ""}-${(order as { rit_nummer?: number }).rit_nummer ?? ""}-${leg}`}>
@@ -1082,7 +1160,8 @@ export default function LijstSjoerd({
                     />
                   </div>
                 );
-              })}
+              });
+              })()}
             </div>
           );
         })
@@ -1202,11 +1281,14 @@ function RouteGroupRows({
         </DroppableRouteHeader>
       )}
       <SortableContext items={orderIds} strategy={verticalListSortingStrategy}>
-        {orderIds.map((id, i) => {
+        {(() => {
+          const capacity = depotCapacityForRoute(routeNum, orderIds, orderById);
+          const displayLegs = assignDisplayLegs(orderIds, orderById, capacity);
+          return orderIds.map((id, i) => {
           const order = orderById.get(id);
           if (!order) return null;
-          const leg = orderLegNummer(order);
-          const prevLeg = i > 0 ? orderLegNummer(orderById.get(orderIds[i - 1]!)) : leg;
+          const leg = displayLegs[i] ?? 1;
+          const prevLeg = i > 0 ? (displayLegs[i - 1] ?? leg) : leg;
           const showDepotBreak = i > 0 && leg > prevLeg;
           return (
             <div key={`${id}-${order.aankomsttijd_slot ?? ""}-${(order as { rit_nummer?: number }).rit_nummer ?? ""}-${leg}`}>
@@ -1227,7 +1309,8 @@ function RouteGroupRows({
               />
             </div>
           );
-        })}
+        });
+        })()}
       </SortableContext>
     </div>
   );

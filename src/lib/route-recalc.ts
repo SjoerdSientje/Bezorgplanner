@@ -443,12 +443,29 @@ export async function chooseBestCapacityLegs(
 /**
  * Herberekent een route met terug naar depot + herladen tussen capaciteitsdelen.
  * Respecteert bezorgtijd zo goed mogelijk (minst aantal schendingen).
+ *
+ * `packMode: "full"` = altijd volle bus eerst (stabiel bij handmatig herschikken).
  */
 export async function recalculateRouteStopsWithDepotReturns(
   stops: RouteStop[],
   vertrektijd: string,
   capacity: number,
-  options?: { depot?: string; routificLegs?: RouteStop[][] }
+  options?: {
+    depot?: string;
+    routificLegs?: RouteStop[][];
+    packMode?: "best" | "full";
+  }
 ): Promise<DepotRecalcResult> {
+  if (options?.packMode === "full") {
+    const depot = options?.depot ?? DEPOT_ADDRESS;
+    const cap = Math.max(1, Math.floor(Number(capacity) || 1));
+    const legs = splitStopsByVehicleCapacity(stops, cap);
+    const stopsById = new Map(stops.map((s) => [s.id, s]));
+    const timed = await timeLegsWithDepotReturns(legs, vertrektijd, depot);
+    return {
+      stops: timed,
+      violations: collectBezorgtijdViolations(timed, stopsById, vertrektijd),
+    };
+  }
   return chooseBestCapacityLegs(stops, capacity, vertrektijd, options);
 }
