@@ -230,16 +230,17 @@ function orderLegNummer(order: AlleRittenOrder | undefined): number {
 }
 
 /**
- * Capacité voor depot-delen: uit Route genereren, of afgeleid uit bestaande legs.
- * Voorkomt dat een te hoge maxFietsen in storage alle kopjes wist.
+ * Capaciteit voor depot-delen: uit Route genereren, of afgeleid uit bestaande legs.
+ * Werkt ook bij één bus zonder route_nummer (routeNum null → settings van route 1).
  */
 function depotCapacityForRoute(
   routeNum: number | null,
   orderIds: string[],
   orderById: Map<string, AlleRittenOrder>
 ): number | null {
-  if (routeNum == null || orderIds.length === 0) return null;
-  const saved = readSavedRoutesFromStorage()[routeNum - 1];
+  if (orderIds.length === 0) return null;
+  const savedIdx = routeNum != null && routeNum > 0 ? routeNum - 1 : 0;
+  const saved = readSavedRoutesFromStorage()[savedIdx];
   const hadMulti = orderIds.some((id) => orderLegNummer(orderById.get(id)) > 1);
   if (!saved?.meerdereRitten && !hadMulti) return null;
 
@@ -293,18 +294,11 @@ function assignDisplayLegs(
   return orderIds.map((id) => orderLegNummer(orderById.get(id)));
 }
 
-function DepotReturnBanner({
-  legNummer,
-  gridClass,
-  colSpanClass,
-}: {
-  legNummer: number;
-  gridClass: string;
-  colSpanClass: string;
-}) {
+function DepotReturnBanner({ legNummer }: { legNummer: number }) {
+  // Geen multi-kolom grid: bij horizontaal scrollen bleef alleen een lege gele strook zichtbaar.
   return (
-    <div className={`grid ${gridClass} border-b border-amber-200 bg-amber-50`}>
-      <div className={`${colSpanClass} px-3 py-2.5 text-sm text-amber-950`}>
+    <div className="border-b border-amber-200 bg-amber-50">
+      <div className="sticky left-0 z-[1] w-max max-w-[min(100vw,42rem)] px-3 py-2.5 text-sm text-amber-950">
         <span className="font-semibold">Terug naar depot</span>
         <span className="text-amber-800">
           {" "}
@@ -805,11 +799,22 @@ export default function LijstSjoerd({
         // werd dat verkeerdelijk als vertrektijd gebruikt en startte de hele lijst 's nachts.
         if (entry.routeNummer == null) {
           const vertrektijd = getVertrektijdForRoute(1) ?? "";
+          const orderByIdLocal = new Map(
+            groups.flatMap((g) => g.orders).map((o) => [String(o.id), o])
+          );
+          const hadDepotLegs = entry.orderIds.some(
+            (id) => orderLegNummer(orderByIdLocal.get(id)) > 1
+          );
+          const saved = readSavedRoutesFromStorage()[0];
+          const capFromOrders = depotCapacityForRoute(null, entry.orderIds, orderByIdLocal);
           routes.push({
             routeNummer: null,
             orderIds: entry.orderIds,
             previousOrderIds: entry.previousOrderIds,
             vertrektijd,
+            // Eén bus zonder route_nummer: toch depot-pack meenemen als er legs/settings zijn.
+            maxFietsen: saved?.maxFietsen ?? capFromOrders ?? undefined,
+            meerdereRitten: Boolean(saved?.meerdereRitten) || hadDepotLegs,
           });
           continue;
         }
@@ -1115,13 +1120,7 @@ export default function LijstSjoerd({
                 const showDepotBreak = i > 0 && leg > prevLeg;
                 return (
                   <div key={`${orderId}-${order.aankomsttijd_slot ?? ""}-${(order as { rit_nummer?: number }).rit_nummer ?? ""}-${leg}`}>
-                    {showDepotBreak && (
-                      <DepotReturnBanner
-                        legNummer={leg}
-                        gridClass={GRID_COLS_TOUCH}
-                        colSpanClass="col-span-9"
-                      />
-                    )}
+                    {showDepotBreak && <DepotReturnBanner legNummer={leg} />}
                     <TouchOrderRow
                       order={order}
                       rowNum={i + 1}
@@ -1292,13 +1291,7 @@ function RouteGroupRows({
           const showDepotBreak = i > 0 && leg > prevLeg;
           return (
             <div key={`${id}-${order.aankomsttijd_slot ?? ""}-${(order as { rit_nummer?: number }).rit_nummer ?? ""}-${leg}`}>
-              {showDepotBreak && (
-                <DepotReturnBanner
-                  legNummer={leg}
-                  gridClass={GRID_COLS}
-                  colSpanClass="col-span-7"
-                />
-              )}
+              {showDepotBreak && <DepotReturnBanner legNummer={leg} />}
               <SortableOrderRow
                 id={id}
                 order={order}

@@ -348,6 +348,8 @@ export async function POST(request: NextRequest) {
     const overigOrderIds: string[] = [];
     let overigPreviousOrderIds: string[] = [];
     let overigVertrektijd: string | null = null;
+    let overigMaxFietsen: number | undefined;
+    let overigMeerdereRitten = false;
     const realRoutes: RouteInput[] = [];
     for (const route of routes) {
       if (route.orderIds.length === 0) continue;
@@ -361,6 +363,10 @@ export async function POST(request: NextRequest) {
         if (!overigVertrektijd && /^\d{1,2}:\d{2}$/.test(route.vertrektijd)) {
           overigVertrektijd = route.vertrektijd;
         }
+        if (route.maxFietsen != null && Number.isFinite(route.maxFietsen)) {
+          overigMaxFietsen = Number(route.maxFietsen);
+        }
+        if (route.meerdereRitten) overigMeerdereRitten = true;
       } else {
         realRoutes.push(route);
       }
@@ -404,13 +410,45 @@ export async function POST(request: NextRequest) {
           Number.isFinite(vh) && vh >= 0 && vh < 6
             ? DEFAULT_VERTREKTIJD_OVERIG
             : rawVt;
-        const recalculated = await recalculateFromDivergence(
+
+        // Eén bus zonder route_nummer kan wél depot-delen hebben (meerdereRitten).
+        const packing = resolveDepotPacking(
+          {
+            routeNummer: null,
+            orderIds: toRecalc,
+            previousOrderIds: overigPreviousOrderIds,
+            vertrektijd,
+            maxFietsen: overigMaxFietsen,
+            meerdereRitten: overigMeerdereRitten,
+          },
           toRecalc,
-          overigPreviousOrderIds,
-          vertrektijd,
           orderById
         );
+
+        let recalculated: RecalculatedStop[];
+        if (packing) {
+          const stops = buildStopsForDepotRecalc(toRecalc, orderById);
+          const depotResult = await recalculateRouteStopsWithDepotReturns(
+            stops,
+            vertrektijd,
+            packing.capacity,
+            { packMode: "full" }
+          );
+          recalculated = depotResult.stops;
+        } else {
+          recalculated = await recalculateFromDivergence(
+            toRecalc,
+            overigPreviousOrderIds,
+            vertrektijd,
+            orderById
+          );
+        }
         const recalculatedById = new Map(recalculated.map((s) => [s.id, s]));
+        const maxLeg = Math.max(
+          1,
+          ...recalculated.map((s) => Number(s.leg_nummer ?? 1)),
+          1
+        );
 
         // Belangrijk: ook in Overig rit_nummer 1..n zetten. Zonder rit_nummer sorteert
         // de UI op kloktijd, waardoor een stop die over middernacht heen is gewikkeld
@@ -426,6 +464,11 @@ export async function POST(request: NextRequest) {
               rit_nummer: ritNummer,
               aankomsttijd_slot: recalc.aankomsttijd_slot,
               arrivalTime: recalc.arrivalTime,
+              leg_nummer: packing
+                ? maxLeg > 1
+                  ? (recalc.leg_nummer ?? 1)
+                  : null
+                : null,
             });
             continue;
           }
@@ -441,6 +484,8 @@ export async function POST(request: NextRequest) {
               rit_nummer: ritNummer,
               aankomsttijd_slot: existingSlot,
               arrivalTime: parseSlotArrivalHhmm(existingSlot) ?? "",
+              leg_nummer:
+                existing?.leg_nummer != null ? Number(existing.leg_nummer) : null,
             });
           }
         }
