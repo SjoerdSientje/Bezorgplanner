@@ -7,7 +7,11 @@ import {
   DEPOT_RELOAD_MINUTES,
   SERVICE_TIME_MINUTES,
 } from "@/lib/routific-payload";
-import { parseBezorgtijdRestriction } from "@/lib/bezorgtijd-window";
+import {
+  arrivalViolatesBezorgtijd,
+  parseBezorgtijdRestriction,
+  parseBezorgtijdVoorkeur,
+} from "@/lib/bezorgtijd-window";
 import { maakTijdslot } from "@/lib/tijdslot";
 import {
   getChainTravelMinutes,
@@ -30,6 +34,18 @@ export type RecalculatedStop = {
   arrivalTime: string;
   aankomsttijd_slot: string;
   leg_nummer?: number;
+};
+
+export type BezorgtijdViolation = {
+  orderId: string;
+  arrivalTime: string;
+  restrictie: string;
+  detail: string;
+};
+
+export type DepotRecalcResult = {
+  stops: RecalculatedStop[];
+  violations: BezorgtijdViolation[];
 };
 
 function toMinutes(hhmm: string): number {
@@ -62,8 +78,14 @@ export function recalculateStopsFromLegMinutes(
     if (prevFinishMin != null && current < prevFinishMin) {
       current = prevFinishMin;
     }
-    const arrivalTime = fromMinutes(current);
     const stop = stops[i]!;
+    // Wacht tot het bezorgtijd-venster opent ("na 15:00" / "tussen …"), net als Routific.
+    const window = parseBezorgtijdVoorkeur(stop.bezorgtijd_voorkeur, vertrektijd);
+    if (window) {
+      const windowStart = toMinutes(window.start);
+      if (current < windowStart) current = windowStart;
+    }
+    const arrivalTime = fromMinutes(current);
     results.push({
       id: stop.id,
       arrivalTime,
@@ -255,22 +277,83 @@ async function scoreLegsTotalTravelMinutes(
   return total;
 }
 
+async function timeLegsWithDepotReturns(
+  legs: RouteStop[][],
+  vertrektijd: string,
+  depot: string
+): Promise<RecalculatedStop[]> {
+  if (legs.length === 0) return [];
+  if (legs.length === 1) {
+    const single = await recalculateRouteStops(legs[0]!, vertrektijd, { depot });
+    return single.map((s) => ({ ...s, leg_nummer: 1 }));
+  }
+
+  const out: RecalculatedStop[] = [];
+  let nextDepart = vertrektijd;
+
+  for (let i = 0; i < legs.length; i++) {
+    const leg = legs[i]!;
+    const calc = await recalculateRouteStops(leg, nextDepart, { depot });
+    for (const s of calc) {
+      out.push({ ...s, leg_nummer: i + 1 });
+    }
+    if (i < legs.length - 1) {
+      const last = calc[calc.length - 1]!;
+      const lastAddr = String(leg[leg.length - 1]?.volledig_adres ?? "").trim();
+      let toDepot = 25;
+      try {
+        toDepot = await getPointToPointTravelMinutes(lastAddr, depot);
+      } catch {
+        // fallback
+      }
+      nextDepart = fromMinutes(
+        toMinutes(last.arrivalTime) + SERVICE_TIME_MINUTES + toDepot + DEPOT_RELOAD_MINUTES
+      );
+    }
+  }
+  return out;
+}
+
+function collectBezorgtijdViolations(
+  timed: RecalculatedStop[],
+  stopsById: Map<string, RouteStop>,
+  vertrektijd: string
+): BezorgtijdViolation[] {
+  const out: BezorgtijdViolation[] = [];
+  for (const s of timed) {
+    const stop = stopsById.get(s.id);
+    if (!stop) continue;
+    const detail = arrivalViolatesBezorgtijd(
+      s.arrivalTime,
+      stop.bezorgtijd_voorkeur,
+      vertrektijd
+    );
+    if (!detail) continue;
+    out.push({
+      orderId: s.id,
+      arrivalTime: s.arrivalTime,
+      restrictie: String(stop.bezorgtijd_voorkeur ?? "").trim() || "?",
+      detail,
+    });
+  }
+  return out;
+}
+
 /**
- * Kies de beste verdeling in precies het minimale aantal ritten:
- * - pack-full (4+4+1)
- * - balanced (3+3+3)
- * - eventueel Routific-verdeling (als die al minimaal #ritten heeft en binnen capaciteit past)
- * Score = totale rijtijd incl. terug naar depot.
+ * Kies de beste verdeling in precies het minimale aantal ritten.
+ * Eerst zo weinig mogelijk bezorgtijd-schendingen, daarna kortste rijtijd.
  */
 export async function chooseBestCapacityLegs(
   stops: RouteStop[],
   capacity: number,
+  vertrektijd: string,
   options?: { depot?: string; routificLegs?: RouteStop[][] }
-): Promise<RouteStop[][]> {
+): Promise<DepotRecalcResult> {
   const depot = options?.depot ?? DEPOT_ADDRESS;
   const cap = Math.max(1, Math.floor(Number(capacity) || 1));
-  if (stops.length === 0) return [];
+  if (stops.length === 0) return { stops: [], violations: [] };
 
+  const stopsById = new Map(stops.map((s) => [s.id, s]));
   const minLegs = Math.max(1, Math.ceil(totalRouteStopLoad(stops) / cap));
   const candidates: { name: string; legs: RouteStop[][] }[] = [
     { name: "pack_full", legs: splitStopsByVehicleCapacity(stops, cap) },
@@ -297,79 +380,75 @@ export async function chooseBestCapacityLegs(
     unique.push(c);
   }
 
-  if (unique.length === 1) return unique[0]!.legs;
+  type Scored = {
+    name: string;
+    timed: RecalculatedStop[];
+    violations: BezorgtijdViolation[];
+    travelMin: number;
+  };
+  const scored: Scored[] = [];
 
-  let best = unique[0]!;
-  let bestScore = Number.POSITIVE_INFINITY;
   for (const c of unique) {
     try {
-      const score = await scoreLegsTotalTravelMinutes(c.legs, depot);
+      const timed = await timeLegsWithDepotReturns(c.legs, vertrektijd, depot);
+      const violations = collectBezorgtijdViolations(timed, stopsById, vertrektijd);
+      let travelMin = Number.POSITIVE_INFINITY;
+      try {
+        travelMin = await scoreLegsTotalTravelMinutes(c.legs, depot);
+      } catch {
+        // travel score optioneel als matrix faalt maar timing al lukte
+      }
       console.info(
         "[route-recalc] depot-legs kandidaat",
         c.name,
         c.legs.map((leg) => `${leg.length}st/${totalRouteStopLoad(leg)}load`).join(" + "),
-        `→ ${score} min`
+        `→ ${travelMin === Number.POSITIVE_INFINITY ? "?" : travelMin} min`,
+        `schendingen=${violations.length}`
       );
-      if (score < bestScore) {
-        bestScore = score;
-        best = c;
-      }
+      scored.push({ name: c.name, timed, violations, travelMin });
     } catch (err) {
-      console.warn("[route-recalc] score mislukt voor", c.name, err);
+      console.warn("[route-recalc] kandidaat mislukt", c.name, err);
     }
   }
 
+  if (scored.length === 0) {
+    const fallback = await timeLegsWithDepotReturns(
+      splitStopsByVehicleCapacity(stops, cap),
+      vertrektijd,
+      depot
+    );
+    return {
+      stops: fallback,
+      violations: collectBezorgtijdViolations(fallback, stopsById, vertrektijd),
+    };
+  }
+
+  scored.sort((a, b) => {
+    if (a.violations.length !== b.violations.length) {
+      return a.violations.length - b.violations.length;
+    }
+    return a.travelMin - b.travelMin;
+  });
+
+  const best = scored[0]!;
   console.info(
     "[route-recalc] depot-legs gekozen",
     best.name,
-    best.legs.map((leg) => `${leg.length}st`).join(" + ")
+    `schendingen=${best.violations.length}`,
+    best.timed.length
   );
-  return best.legs;
+  return { stops: best.timed, violations: best.violations };
 }
 
 /**
  * Herberekent een route met terug naar depot + herladen tussen capaciteitsdelen.
- * Kiest tussen volle bus, gebalanceerde ritten, en (optioneel) Routific-split op rijtijd.
+ * Respecteert bezorgtijd zo goed mogelijk (minst aantal schendingen).
  */
 export async function recalculateRouteStopsWithDepotReturns(
   stops: RouteStop[],
   vertrektijd: string,
   capacity: number,
   options?: { depot?: string; routificLegs?: RouteStop[][] }
-): Promise<RecalculatedStop[]> {
-  const depot = options?.depot ?? DEPOT_ADDRESS;
-  const legs = await chooseBestCapacityLegs(stops, capacity, {
-    depot,
-    routificLegs: options?.routificLegs,
-  });
-  if (legs.length <= 1) {
-    const single = await recalculateRouteStops(stops, vertrektijd, { depot });
-    return single.map((s) => ({ ...s, leg_nummer: 1 }));
-  }
-
-  const out: RecalculatedStop[] = [];
-  let nextDepart = vertrektijd;
-
-  for (let i = 0; i < legs.length; i++) {
-    const leg = legs[i]!;
-    const calc = await recalculateRouteStops(leg, nextDepart, { depot });
-    for (const s of calc) {
-      out.push({ ...s, leg_nummer: i + 1 });
-    }
-    if (i < legs.length - 1) {
-      const last = calc[calc.length - 1]!;
-      const lastAddr = String(leg[leg.length - 1]?.volledig_adres ?? "").trim();
-      let toDepot = 25;
-      try {
-        toDepot = await getPointToPointTravelMinutes(lastAddr, depot);
-      } catch {
-        // fallback schatting
-      }
-      nextDepart = fromMinutes(
-        toMinutes(last.arrivalTime) + SERVICE_TIME_MINUTES + toDepot + DEPOT_RELOAD_MINUTES
-      );
-    }
-  }
-
-  return out;
+): Promise<DepotRecalcResult> {
+  return chooseBestCapacityLegs(stops, capacity, vertrektijd, options);
 }

@@ -223,11 +223,18 @@ function buildVisits(
   pinToRouteType: Map<string, string>
 ): RoutificPayload["visits"] {
   const defaultStart = earliestParallelShiftStart(routes);
+  // Gepinde orders: venster t.o.v. de vertrektijd van hú́n route (niet de vroegste van alle).
+  const shiftByRouteType = new Map<string, string>();
+  routes.forEach((r, i) => {
+    shiftByRouteType.set(`route_${i + 1}`, r.shift_start);
+  });
   const visits: RoutificPayload["visits"] = {};
   for (const o of orders) {
     const visitId = sanitizeVisitId(o.id);
     const vehicleType = pinToRouteType.get(o.id);
-    visits[visitId] = buildVisitForOrder(o, defaultStart, vehicleType);
+    const shiftStart =
+      (vehicleType ? shiftByRouteType.get(vehicleType) : undefined) ?? defaultStart;
+    visits[visitId] = buildVisitForOrder(o, shiftStart, vehicleType);
   }
   return visits;
 }

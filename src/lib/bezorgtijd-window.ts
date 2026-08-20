@@ -109,3 +109,33 @@ export function parseBezorgtijdVoorkeur(
   }
   return { start: res.minStart, end: res.maxEnd };
 }
+
+function timeToMinutes(hhmm: string): number {
+  const [h, m] = hhmm.split(":").map((x) => parseInt(x, 10));
+  return (h ?? 0) * 60 + (m ?? 0);
+}
+
+/**
+ * True als de aankomst buiten het bezorgtijd-venster valt.
+ * (Gebruikt bij nabewerking / waarschuwingen — Routific krijgt start/end al in de payload.)
+ */
+export function arrivalViolatesBezorgtijd(
+  arrivalHhmm: string,
+  bezorgtijd: string | null | undefined,
+  shiftStart = "00:00"
+): string | null {
+  const window = parseBezorgtijdVoorkeur(bezorgtijd, shiftStart);
+  if (!window) return null;
+  const arrival = timeToMinutes(arrivalHhmm);
+  const start = timeToMinutes(window.start);
+  if (arrival < start) {
+    return `aankomst ${arrivalHhmm} is vóór toegestaan vanaf ${window.start}`;
+  }
+  if (window.end != null) {
+    const end = timeToMinutes(window.end);
+    if (arrival > end) {
+      return `aankomst ${arrivalHhmm} is na deadline ${window.end}`;
+    }
+  }
+  return null;
+}

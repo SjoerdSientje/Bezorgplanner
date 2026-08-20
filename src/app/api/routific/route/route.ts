@@ -316,17 +316,22 @@ export async function POST(request: NextRequest) {
     const meerDanEenRoute = parallelRoutes.length > 1;
     const ordersById = new Map(rowsGeocoded.map((o) => [o.id, o]));
 
-    // Pins worden nu als hard `type`-constraint aan Routific meegegeven (zie
-    // buildRoutificPayloadFromRoutes), dus de solver zelf plaatst gekozen orders op hun
-    // route én respecteert daarbij de capaciteit. We vertrouwen daarom direct op Routific's
-    // volgorde/tijden — geen naderhand orders verplaatsen of Google Maps herberekenen, dat
-    // veroorzaakte eerder "verzonnen" tijdsloten en capaciteitsoverschrijding.
+    // Pins worden als hard `type`-constraint aan Routific meegegeven.
+    // Eerste generatie: alleen Routific-volgorde/tijden + tijdsloten (geen Google).
+    // Google-reistijden alleen bij handmatige herschikking (/api/route/reorder).
     const { lists: routeOrderLists } = buildRouteOrderListsFromSolution(
       parallelRoutes,
       solution ?? {},
       orderByVisitId,
       routeVehicleKeys
     );
+
+    const allBezorgtijdViolations: {
+      orderId: string;
+      arrivalTime: string;
+      restrictie: string;
+      detail: string;
+    }[] = [];
 
     for (let vi = 0; vi < parallelRoutes.length; vi++) {
       const routeNum = vi + 1;
@@ -354,8 +359,8 @@ export async function POST(request: NextRequest) {
           vertrektijd: parallelRoutes[vi]?.shift_start,
         }
       );
-      const maxLeg = Math.max(1, ...built.map((s) => s.leg_nummer));
-      for (const slot of built) {
+      const maxLeg = Math.max(1, ...built.slots.map((s) => s.leg_nummer));
+      for (const slot of built.slots) {
         volgorde += 1;
         slotsToInsert.push({
           order_id: slot.order_id,
@@ -367,6 +372,9 @@ export async function POST(request: NextRequest) {
           route_naam: routeNaamDb,
           leg_nummer: maxLeg > 1 ? slot.leg_nummer : null,
         });
+      }
+      for (const v of built.violations) {
+        allBezorgtijdViolations.push(v);
       }
     }
 
@@ -503,6 +511,16 @@ export async function POST(request: NextRequest) {
     );
     if (capacityWarnings.length > 0) {
       warningParts.push(capacityWarnings.join("\n"));
+    }
+
+    if (allBezorgtijdViolations.length > 0) {
+      const lines = allBezorgtijdViolations.map((v) => {
+        const naam = ordersById.get(v.orderId)?.naam ?? v.orderId;
+        return `• ${naam} — aankomst ${v.arrivalTime} schendt tijdsrestrictie "${v.restrictie}" (${v.detail})`;
+      });
+      warningParts.push(
+        `${allBezorgtijdViolations.length} order(s) buiten tijdsrestrictie (niet haalbaar binnen de overige constraints):\n${lines.join("\n")}`
+      );
     }
     const combinedWarning = warningParts.length > 0 ? warningParts.join("\n\n") : undefined;
 

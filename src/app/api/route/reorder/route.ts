@@ -361,11 +361,12 @@ export async function POST(request: NextRequest) {
             load,
           };
         });
-        recalculated = await recalculateRouteStopsWithDepotReturns(
+        const depotResult = await recalculateRouteStopsWithDepotReturns(
           stops,
           route.vertrektijd,
           Number(route.maxFietsen)
         );
+        recalculated = depotResult.stops;
       } else {
         recalculated = await recalculateFromDivergence(
           route.orderIds,
