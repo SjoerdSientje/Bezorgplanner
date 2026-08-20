@@ -116,6 +116,7 @@ export default function RitjesVandaagPage() {
         route_nummer: number | null;
         rit_nummer?: number;
         aankomsttijd_slot: string;
+        leg_nummer?: number | null;
       }>
     ) => {
       if (updates.length > 0) {
@@ -128,6 +129,7 @@ export default function RitjesVandaagPage() {
                   route_nummer: u.route_nummer,
                   rit_nummer: u.rit_nummer ?? (o as { rit_nummer?: number }).rit_nummer,
                   aankomsttijd_slot: u.aankomsttijd_slot,
+                  ...(u.leg_nummer !== undefined ? { leg_nummer: u.leg_nummer } : {}),
                 }
               : o;
           })

@@ -36,6 +36,67 @@ type OrderUpdate = {
 /** Vertrektijd voor Overig-herschikking als er geen route 1-vertrektijd bekend is. */
 const DEFAULT_VERTREKTIJD_OVERIG = "10:30";
 
+function orderLegFromRow(o: Record<string, unknown> | undefined): number {
+  const n = Number(o?.leg_nummer ?? 1);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
+}
+
+/**
+ * Als maxFietsen ontbreekt maar de route al depot-delen had: schat capaciteit
+ * als de hoogste load van een bestaand deel.
+ */
+function inferCapacityFromExistingLegs(
+  orderIds: string[],
+  orderById: Map<string, Record<string, unknown>>
+): number | undefined {
+  const loadByLeg = new Map<number, number>();
+  for (const id of orderIds) {
+    const o = orderById.get(id);
+    if (!o) continue;
+    const leg = orderLegFromRow(o);
+    const load = orderRouteLoad({
+      id,
+      naam: o.naam ? String(o.naam) : null,
+      volledig_adres: String(o.volledig_adres ?? ""),
+      aantal_fietsen: o.aantal_fietsen == null ? null : Number(o.aantal_fietsen),
+      bezorgtijd_voorkeur: o.bezorgtijd_voorkeur
+        ? String(o.bezorgtijd_voorkeur)
+        : null,
+      producten: o.producten ? String(o.producten) : null,
+    } as OrderForRoute);
+    loadByLeg.set(leg, (loadByLeg.get(leg) ?? 0) + load);
+  }
+  if (loadByLeg.size <= 1) return undefined;
+  return Math.max(...Array.from(loadByLeg.values()));
+}
+
+function buildStopsForDepotRecalc(
+  orderIds: string[],
+  orderById: Map<string, Record<string, unknown>>
+): RouteStop[] {
+  return orderIds.map((id) => {
+    const o = orderById.get(id)!;
+    const load = orderRouteLoad({
+      id,
+      naam: o.naam ? String(o.naam) : null,
+      volledig_adres: String(o.volledig_adres ?? ""),
+      aantal_fietsen: o.aantal_fietsen == null ? null : Number(o.aantal_fietsen),
+      bezorgtijd_voorkeur: o.bezorgtijd_voorkeur
+        ? String(o.bezorgtijd_voorkeur)
+        : null,
+      producten: o.producten ? String(o.producten) : null,
+    } as OrderForRoute);
+    return {
+      id,
+      volledig_adres: String(o.volledig_adres ?? ""),
+      bezorgtijd_voorkeur: o.bezorgtijd_voorkeur
+        ? String(o.bezorgtijd_voorkeur)
+        : null,
+      load,
+    };
+  });
+}
+
 /**
  * Herberekent alleen vanaf de eerste gewijzigde stop. Ongewijzigde prefix
  * (zelfde order-IDs in dezelfde volgorde) behoudt bestaande tijdsloten.
@@ -332,39 +393,32 @@ export async function POST(request: NextRequest) {
           ? route.routeNummer
           : null;
 
-      const useDepotReturns =
-        Boolean(route.meerdereRitten) &&
+      // Oude breekpunten onthouden na slepen werkt niet. Wél: opnieuw packen op
+      // capaciteit in de nieuwe volgorde → nieuwe "Terug naar depot"-grenzen + tijden.
+      // Ook als meerdereRitten-flag in localStorage ontbreekt, maar de route al legs had.
+      const hadMultiLeg = route.orderIds.some(
+        (id) => orderLegFromRow(orderById.get(id)) > 1
+      );
+      const capacity =
+        route.maxFietsen != null &&
         Number.isFinite(route.maxFietsen) &&
-        Number(route.maxFietsen) >= 1;
+        Number(route.maxFietsen) >= 1
+          ? Number(route.maxFietsen)
+          : hadMultiLeg
+            ? inferCapacityFromExistingLegs(route.orderIds, orderById)
+            : undefined;
+      const packWithDepot =
+        capacity != null &&
+        capacity >= 1 &&
+        (Boolean(route.meerdereRitten) || hadMultiLeg);
 
       let recalculated: RecalculatedStop[];
-      if (useDepotReturns) {
-        const stops: RouteStop[] = route.orderIds.map((id) => {
-          const o = orderById.get(id)!;
-          const load = orderRouteLoad({
-            id,
-            naam: o.naam ? String(o.naam) : null,
-            volledig_adres: String(o.volledig_adres ?? ""),
-            aantal_fietsen:
-              o.aantal_fietsen == null ? null : Number(o.aantal_fietsen),
-            bezorgtijd_voorkeur: o.bezorgtijd_voorkeur
-              ? String(o.bezorgtijd_voorkeur)
-              : null,
-            producten: o.producten ? String(o.producten) : null,
-          } as OrderForRoute);
-          return {
-            id,
-            volledig_adres: String(o.volledig_adres ?? ""),
-            bezorgtijd_voorkeur: o.bezorgtijd_voorkeur
-              ? String(o.bezorgtijd_voorkeur)
-              : null,
-            load,
-          };
-        });
+      if (packWithDepot) {
+        const stops = buildStopsForDepotRecalc(route.orderIds, orderById);
         const depotResult = await recalculateRouteStopsWithDepotReturns(
           stops,
           route.vertrektijd,
-          Number(route.maxFietsen)
+          capacity
         );
         recalculated = depotResult.stops;
       } else {
@@ -376,6 +430,11 @@ export async function POST(request: NextRequest) {
         );
       }
       const recalculatedById = new Map(recalculated.map((s) => [s.id, s]));
+      const maxLeg = Math.max(
+        1,
+        ...recalculated.map((s) => Number(s.leg_nummer ?? 1)),
+        1
+      );
 
       for (let i = 0; i < route.orderIds.length; i++) {
         const id = route.orderIds[i]!;
@@ -388,11 +447,15 @@ export async function POST(request: NextRequest) {
             rit_nummer: ritNummer,
             aankomsttijd_slot: recalc.aankomsttijd_slot,
             arrivalTime: recalc.arrivalTime,
-            leg_nummer: useDepotReturns ? (recalc.leg_nummer ?? 1) : null,
+            leg_nummer: packWithDepot
+              ? maxLeg > 1
+                ? (recalc.leg_nummer ?? 1)
+                : null
+              : null,
           });
           continue;
         }
-        if (useDepotReturns) continue;
+        if (packWithDepot) continue;
         const existing = orderById.get(id);
         const existingSlot = String(existing?.aankomsttijd_slot ?? "").trim();
         const existingRit = Number(existing?.rit_nummer ?? 0);
@@ -407,7 +470,7 @@ export async function POST(request: NextRequest) {
             rit_nummer: ritNummer,
             aankomsttijd_slot: existingSlot,
             arrivalTime: parseSlotArrivalHhmm(existingSlot) ?? "",
-            leg_nummer: null,
+            leg_nummer: existing?.leg_nummer != null ? Number(existing.leg_nummer) : null,
           });
         }
       }

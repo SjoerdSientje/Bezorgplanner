@@ -369,6 +369,7 @@ type ReorderUpdate = {
   route_nummer: number | null;
   rit_nummer: number;
   aankomsttijd_slot: string;
+  leg_nummer?: number | null;
 };
 
 function SortableOrderRow({
