@@ -26,7 +26,9 @@ import {
   isOrderReadyForSjoerdLijst,
 } from "@/lib/planning-date";
 import StuurAppjesButton from "@/components/StuurAppjesButton";
+import EditableRouteName from "@/components/EditableRouteName";
 import { routeDisplayLabel, routeNaamFromOrders } from "@/lib/route-colors";
+import { updateSavedRouteNaam } from "@/lib/route-vertrektijden";
 
 function normalizeToE164(input: string): string | null {
   const s = String(input ?? "").trim();
@@ -175,6 +177,28 @@ export default function RitjesVandaagPage() {
     },
     [fetchRitjes]
   );
+
+  /** Routenaam wijzigen in Routes-tab → alle orders op die route (+ planning via orders.route_naam). */
+  const handleRouteRename = useCallback(async (routeNummer: number, naam: string) => {
+    const res = await fetch("/api/route/rename", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ routeNummer, naam }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(
+        [data.error, data.detail].filter(Boolean).join(" — ") || "Routenaam opslaan mislukt."
+      );
+    }
+    const savedNaam = String(data.naam ?? naam).trim() || `Route ${routeNummer}`;
+    updateSavedRouteNaam(routeNummer, savedNaam);
+    setOrders((prev) =>
+      prev.map((o) =>
+        Number(o.route_nummer ?? 0) === routeNummer ? { ...o, route_naam: savedNaam } : o
+      )
+    );
+  }, []);
 
   /** Verwijder order op ID (voor AlleRittenTabel). */
   const deleteOrderById = useCallback(
@@ -668,10 +692,15 @@ export default function RitjesVandaagPage() {
                         <div key={sub.routeNum ?? "overig"}>
                           {sub.routeNum != null && (
                             <h3 className={`mb-2 text-sm font-semibold ${routeLabelColor}`}>
-                              {routeDisplayLabel(
-                                sub.routeNum,
-                                routeNaamFromOrders(subOrders as AlleRittenOrder[])
-                              )}
+                              <EditableRouteName
+                                routeNummer={sub.routeNum}
+                                value={routeDisplayLabel(
+                                  sub.routeNum,
+                                  routeNaamFromOrders(subOrders as AlleRittenOrder[])
+                                )}
+                                className={routeLabelColor}
+                                onSave={(naam) => handleRouteRename(sub.routeNum!, naam)}
+                              />
                             </h3>
                           )}
                           <EditableSheetTable

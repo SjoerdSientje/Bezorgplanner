@@ -103,6 +103,36 @@ export function defaultRouteRowsForDialog(): SavedRouteRow[] {
   ];
 }
 
+/** Update weergavenaam van route N (1-based) in localStorage (Route genereren-dialoog). */
+export function updateSavedRouteNaam(routeNummer: number, naam: string): void {
+  if (typeof window === "undefined") return;
+  const n = Math.floor(Number(routeNummer));
+  if (!Number.isFinite(n) || n < 1) return;
+  const rows = readSavedRoutesFromStorage();
+  const idx = n - 1;
+  const trimmed = String(naam ?? "").trim() || defaultNaamForIndex(idx);
+  if (idx < rows.length) {
+    const next = [...rows];
+    next[idx] = { ...next[idx]!, naam: trimmed };
+    writeSavedRoutesToStorage(next);
+    return;
+  }
+  // Route bestaat in DB maar nog niet in storage → vul aan tot index.
+  const filled = [...rows];
+  while (filled.length < n) {
+    const i = filled.length;
+    filled.push({
+      naam: defaultNaamForIndex(i),
+      vertrektijd: FALLBACK_VERTREKTIJD,
+      maxFietsen: 11,
+      meerdereRitten: false,
+      orderIds: [],
+    });
+  }
+  filled[idx] = { ...filled[idx]!, naam: trimmed };
+  writeSavedRoutesToStorage(filled);
+}
+
 /** Route-nummer (1, 2, …) → vertrektijd uit Route genereren-dialoog. */
 export function loadRouteVertrektijden(): Record<number, string> {
   const map: Record<number, string> = {};
