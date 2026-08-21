@@ -12,15 +12,25 @@ type ActiveRouteOption = {
   orderCount: number;
 };
 
+type RoutePickOption = {
+  /** null = Overig */
+  routeNummer: number | null;
+  label: string;
+};
+
 async function fetchActiveRoutesToday(): Promise<ActiveRouteOption[]> {
-  const res = await fetch(`/api/planning?t=${Date.now()}`, { cache: "no-store" });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) return [];
+  const [planningRes, ritjesRes] = await Promise.all([
+    fetch(`/api/planning?t=${Date.now()}`, { cache: "no-store" }),
+    fetch(`/api/ritjes-vandaag?t=${Date.now()}`, { cache: "no-store" }),
+  ]);
+  const planningJson = await planningRes.json().catch(() => ({}));
+  const ritjesJson = await ritjesRes.json().catch(() => ({}));
 
   const todayKey = getAmsterdamCalendarDate(0);
   const counts = new Map<number, number>();
   const names = new Map<number, string>();
-  for (const row of (json.rows ?? []) as Record<string, unknown>[]) {
+
+  for (const row of (planningJson.rows ?? []) as Record<string, unknown>[]) {
     const datum = String(row.datum ?? "");
     if (datum !== todayKey) continue;
     const rn = Number(row.route_nummer ?? 0);
@@ -29,6 +39,17 @@ async function fetchActiveRoutesToday(): Promise<ActiveRouteOption[]> {
     const naam = String(row.route_naam ?? "").trim();
     if (naam && !names.has(rn)) names.set(rn, naam);
   }
+
+  for (const o of (ritjesJson.orders ?? []) as Record<string, unknown>[]) {
+    if (o.in_morgen_tab === true) continue;
+    const rn = Number(o.route_nummer ?? 0);
+    if (rn <= 0) continue;
+    if (!counts.has(rn)) counts.set(rn, 0);
+    counts.set(rn, (counts.get(rn) ?? 0) + 1);
+    const naam = String(o.route_naam ?? "").trim();
+    if (naam && !names.has(rn)) names.set(rn, naam);
+  }
+
   return Array.from(counts.entries())
     .sort(([a], [b]) => a - b)
     .map(([routeNummer, orderCount]) => {
@@ -79,17 +100,26 @@ type CurrentRitjesOrder = {
 type Props = {
   huidigeRitjesOrders?: CurrentRitjesOrder[];
   onBeforeOpen?: () => Promise<void>;
+  /** Na succesvol versturen: herlaad lijsten zodat volgorde live klopt. */
+  onDone?: () => void | Promise<void>;
 };
 
 function OrderCard({
   order,
   selected,
   onToggle,
+  routeOptions,
+  pickedRoute,
+  onPickRoute,
 }: {
   order: AppjesOrder;
   selected: boolean;
   onToggle: () => void;
+  routeOptions?: RoutePickOption[];
+  pickedRoute?: number | null;
+  onPickRoute?: (routeNummer: number | null) => void;
 }) {
+  const showPicker = Boolean(routeOptions && onPickRoute);
   return (
     <label
       className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 transition ${
@@ -128,6 +158,44 @@ function OrderCard({
             <span className="text-red-500">Geen telefoonnummer</span>
           )}
         </div>
+        {showPicker && selected && (
+          <div
+            className="mt-2 flex flex-wrap gap-1.5"
+            onClick={(e) => e.preventDefault()}
+            onKeyDown={(e) => e.stopPropagation()}
+          >
+            <span className="w-full text-[11px] font-medium text-koopje-black/50">
+              Plaats in route:
+            </span>
+            {routeOptions!.map((opt) => {
+              const active =
+                opt.routeNummer === null
+                  ? pickedRoute === null
+                  : pickedRoute === opt.routeNummer;
+              return (
+                <button
+                  key={opt.routeNummer ?? "overig"}
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onPickRoute!(opt.routeNummer);
+                  }}
+                  className={`rounded-full border px-2.5 py-0.5 text-xs font-medium transition ${
+                    active
+                      ? "border-koopje-orange bg-koopje-orange text-white"
+                      : "border-stone-200 bg-white text-koopje-black/70 hover:border-koopje-orange/50"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+            {pickedRoute === undefined && (
+              <span className="text-[11px] text-amber-700">Kies een route</span>
+            )}
+          </div>
+        )}
       </div>
     </label>
   );
@@ -141,6 +209,9 @@ function SectionBlock({
   onToggle,
   onToggleAll,
   emptyText,
+  routeOptions,
+  routePickByOrderId,
+  onPickRoute,
 }: {
   title: string;
   description: string;
@@ -149,6 +220,9 @@ function SectionBlock({
   onToggle: (id: string) => void;
   onToggleAll: () => void;
   emptyText: string;
+  routeOptions?: RoutePickOption[];
+  routePickByOrderId?: Record<string, number | null>;
+  onPickRoute?: (orderId: string, routeNummer: number | null) => void;
 }) {
   const allSelected = orders.length > 0 && selected.size === orders.length;
   return (
@@ -176,6 +250,15 @@ function SectionBlock({
               order={o}
               selected={selected.has(o.order_id)}
               onToggle={() => onToggle(o.order_id)}
+              routeOptions={routeOptions}
+              pickedRoute={
+                routePickByOrderId && o.order_id in routePickByOrderId
+                  ? routePickByOrderId[o.order_id]
+                  : undefined
+              }
+              onPickRoute={
+                onPickRoute ? (rn) => onPickRoute(o.order_id, rn) : undefined
+              }
             />
           ))}
         </div>
@@ -184,12 +267,20 @@ function SectionBlock({
   );
 }
 
-export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }: Props) {
+export default function StuurAppjesButton({
+  huidigeRitjesOrders,
+  onBeforeOpen,
+  onDone,
+}: Props) {
   const [open, setOpen] = useState(false);
   const [nieuweOrderOrders, setNieuweOrderOrders] = useState<AppjesOrder[]>([]);
   const [nieuwTijdslotOrders, setNieuwTijdslotOrders] = useState<AppjesOrder[]>([]);
   const [selectedNieuweOrder, setSelectedNieuweOrder] = useState<Set<string>>(new Set());
   const [selectedNieuwTijdslot, setSelectedNieuwTijdslot] = useState<Set<string>>(new Set());
+  /** Per order: gekozen route (null = Overig). Alleen voor nieuwe_order. */
+  const [routePickByOrderId, setRoutePickByOrderId] = useState<
+    Record<string, number | null>
+  >({});
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<SendResult | null>(null);
@@ -198,6 +289,17 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
   const [verschuivenResult, setVerschuivenResult] = useState<VerschuivenResult | null>(null);
   const [activeRoutes, setActiveRoutes] = useState<ActiveRouteOption[]>([]);
   const [selectedRouteNummers, setSelectedRouteNummers] = useState<Set<number>>(new Set());
+
+  const nieuweOrderRouteOptions = useMemo<RoutePickOption[]>(
+    () => [
+      ...activeRoutes.map((r) => ({
+        routeNummer: r.routeNummer as number | null,
+        label: r.label,
+      })),
+      { routeNummer: null, label: "Overig" },
+    ],
+    [activeRoutes]
+  );
 
   const currentByOrderId = useMemo(() => {
     const m = new Map<string, CurrentRitjesOrder>();
@@ -342,6 +444,7 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
     setVertragingMinuten("");
     setSelectedNieuweOrder(new Set());
     setSelectedNieuwTijdslot(new Set());
+    setRoutePickByOrderId({});
     setActiveRoutes([]);
     setSelectedRouteNummers(new Set());
     setLoadingOrders(true);
@@ -391,8 +494,19 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
     if (section === "nieuwe_order") {
       setSelectedNieuweOrder((prev) => {
         const next = new Set(prev);
-        if (next.has(orderId)) next.delete(orderId);
-        else next.add(orderId);
+        if (next.has(orderId)) {
+          next.delete(orderId);
+          setRoutePickByOrderId((picks) => {
+            const copy = { ...picks };
+            delete copy[orderId];
+            return copy;
+          });
+        } else {
+          next.add(orderId);
+          setRoutePickByOrderId((picks) =>
+            orderId in picks ? picks : { ...picks, [orderId]: null }
+          );
+        }
         return next;
       });
     } else {
@@ -407,11 +521,21 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
 
   function toggleAll(section: Section) {
     if (section === "nieuwe_order") {
-      setSelectedNieuweOrder((prev) =>
-        prev.size === nieuweOrderOrders.length
-          ? new Set()
-          : new Set(nieuweOrderOrders.map((o) => o.order_id))
-      );
+      setSelectedNieuweOrder((prev) => {
+        if (prev.size === nieuweOrderOrders.length) {
+          setRoutePickByOrderId({});
+          return new Set();
+        }
+        const ids = nieuweOrderOrders.map((o) => o.order_id);
+        setRoutePickByOrderId((picks) => {
+          const next = { ...picks };
+          for (const id of ids) {
+            if (!(id in next)) next[id] = null;
+          }
+          return next;
+        });
+        return new Set(ids);
+      });
     } else {
       setSelectedNieuwTijdslot((prev) =>
         prev.size === nieuwTijdslotOrders.length
@@ -421,14 +545,35 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
     }
   }
 
+  function pickRouteForOrder(orderId: string, routeNummer: number | null) {
+    setRoutePickByOrderId((prev) => ({ ...prev, [orderId]: routeNummer }));
+    setSelectedNieuweOrder((prev) => {
+      if (prev.has(orderId)) return prev;
+      const next = new Set(prev);
+      next.add(orderId);
+      return next;
+    });
+  }
+
   const totalSelected = selectedNieuweOrder.size + selectedNieuwTijdslot.size;
 
   async function handleVerstuur() {
     if (totalSelected === 0) return;
+
+    const missingPick = Array.from(selectedNieuweOrder).filter(
+      (id) => !(id in routePickByOrderId)
+    );
+    if (missingPick.length > 0) {
+      setResult({
+        ok: false,
+        error: "Kies voor elke nieuwe order een route (of Overig).",
+      });
+      return;
+    }
+
     setSending(true);
     setResult(null);
     try {
-      // Herlaad voor verzending om altijd het nieuwste tijdslot te sturen
       const latestRes = await fetch(`/api/ritjes-vandaag?t=${Date.now()}`, { cache: "no-store" });
       const latestData = await latestRes.json().catch(() => ({}));
       const latestById = new Map<string, Record<string, unknown>>();
@@ -437,14 +582,21 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
         if (id) latestById.set(id, o);
       }
 
-      type Payload = AppjesOrder & { section: Section };
+      type Payload = AppjesOrder & {
+        section: Section;
+        route_nummer?: number | null;
+      };
       const payload: Payload[] = [];
 
       for (const o of nieuweOrderOrders) {
         if (!selectedNieuweOrder.has(o.order_id)) continue;
         const latest = latestById.get(o.order_id);
         const merged = latest ? mergeWithCurrent(rawToOrder(latest)) : o;
-        payload.push({ ...merged, section: "nieuwe_order" });
+        payload.push({
+          ...merged,
+          section: "nieuwe_order",
+          route_nummer: routePickByOrderId[o.order_id] ?? null,
+        });
       }
       for (const o of nieuwTijdslotOrders) {
         if (!selectedNieuwTijdslot.has(o.order_id)) continue;
@@ -481,6 +633,8 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
         });
         setSelectedNieuweOrder(new Set());
         setSelectedNieuwTijdslot(new Set());
+        setRoutePickByOrderId({});
+        if (onDone) await onDone();
       }
     } catch {
       setResult({ ok: false, error: "Er ging iets mis. Probeer het opnieuw." });
@@ -531,19 +685,22 @@ export default function StuurAppjesButton({ huidigeRitjesOrders, onBeforeOpen }:
               <>
                 <SectionBlock
                   title="Nieuwe order"
-                  description="Orders met tijdslot die nog niet in de planning staan. Worden na versturen ook aan de planning toegevoegd."
+                  description="Orders met tijdslot die nog niet in de planning staan. Kies per order een actieve route of Overig; ze komen op volgorde van tijdslot in die route."
                   orders={nieuweOrderOrders}
                   selected={selectedNieuweOrder}
                   onToggle={(id) => toggleOrder(id, "nieuwe_order")}
                   onToggleAll={() => toggleAll("nieuwe_order")}
                   emptyText="Geen nieuwe orders met tijdslot."
+                  routeOptions={nieuweOrderRouteOptions}
+                  routePickByOrderId={routePickByOrderId}
+                  onPickRoute={pickRouteForOrder}
                 />
 
                 <div className="border-t border-koopje-black/10" />
 
                 <SectionBlock
                   title="Nieuw tijdslot"
-                  description="Orders die al in de planning staan met een gewijzigd tijdslot."
+                  description="Orders die al in de planning staan met een gewijzigd tijdslot. Worden automatisch opnieuw op tijdslot gesorteerd in hun route."
                   orders={nieuwTijdslotOrders}
                   selected={selectedNieuwTijdslot}
                   onToggle={(id) => toggleOrder(id, "nieuw_tijdslot")}

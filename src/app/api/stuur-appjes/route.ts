@@ -6,6 +6,13 @@ import { getLatestOrNewPlanningDate } from "@/lib/planning-promote";
 import { getPlanningDate } from "@/lib/planning-date";
 import { isStuurAppjesEligibleOrder } from "@/lib/stuur-appjes-eligibility";
 import { isIncompleteMpOrder, isMpPausedForOwner } from "@/lib/mp-pause";
+import {
+  resequencePlanningSlotsByTijdslot,
+  resequenceRouteOrdersByTijdslot,
+  type ResequencedOrder,
+} from "@/lib/route-resequence";
+import { supabaseMissingOrdersRouteNummerColumn } from "@/lib/orders-route-nummer-supabase";
+import { routeDisplayLabel } from "@/lib/route-colors";
 
 function mergeSlotDatums(rows: Array<{ order_id: string | null; datum: string | null }>) {
   const m = new Map<string, string>();
@@ -19,13 +26,46 @@ function mergeSlotDatums(rows: Array<{ order_id: string | null; datum: string | 
   return m;
 }
 
+function parseRouteNummer(raw: unknown): number | null {
+  if (raw === null || raw === undefined || raw === "" || raw === "overig") return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 1) return null;
+  return Math.floor(n);
+}
+
+async function patchOrderRouteAndSlot(
+  supabase: any,
+  ownerEmail: string,
+  orderId: string,
+  payload: {
+    route_nummer: number | null;
+    aankomsttijd_slot: string;
+    route_naam?: string | null;
+  }
+) {
+  let { error } = await supabase
+    .from("orders")
+    .update(payload)
+    .eq("owner_email", ownerEmail)
+    .eq("id", orderId);
+  if (error && supabaseMissingOrdersRouteNummerColumn(error)) {
+    const { route_nummer: _r, route_naam: _n, ...rest } = payload;
+    const r2 = await supabase
+      .from("orders")
+      .update(rest)
+      .eq("owner_email", ownerEmail)
+      .eq("id", orderId);
+    error = r2.error;
+  }
+  return error;
+}
+
 /**
  * POST /api/stuur-appjes
- * Body: { orders: Array<{ order_id; order_nummer; naam; aankomsttijd_slot; telefoon_e164;
- *                          telefoon_nummer; bezorgtijd_voorkeur; section: "nieuwe_order"|"nieuw_tijdslot" }> }
+ * Body: { orders: Array<{ …; section; route_nummer?: number | null }> }
  *
- * - "nieuw_tijdslot": order staat al in planning → nieuw_tijdslot WhatsApp template.
- * - "nieuwe_order":  order staat NIET in planning → standaard template + toevoegen aan planning.
+ * - "nieuw_tijdslot": sync tijdslot + herorden route op tijdslot.
+ * - "nieuwe_order": kies route (of overig), planning-slot, herorden op tijdslot.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -50,6 +90,8 @@ export async function POST(request: NextRequest) {
       telefoon_nummer: string;
       bezorgtijd_voorkeur?: string;
       section: "nieuwe_order" | "nieuw_tijdslot";
+      /** Alleen nieuwe_order: null = Overig. Verplicht aanwezig (ook als null). */
+      route_nummer?: number | null;
     }>;
 
     if (selected.length === 0) {
@@ -59,11 +101,10 @@ export async function POST(request: NextRequest) {
     const supabase = createClient(supabaseUrl, serviceKey);
     const mpPaused = await isMpPausedForOwner(supabase, ownerEmail);
 
-    // Haal extra orderdata op (type, betaald, etc.) voor template-keuze
     const { data: ordersMeta } = await supabase
       .from("orders")
       .select(
-        "id, status, source, order_nummer, type, betaald, mp_tags, datum, opmerkingen_klant, bezorgtijd_voorkeur, bestelling_totaal_prijs, meenemen_in_planning, aankomsttijd_slot"
+        "id, status, source, order_nummer, type, betaald, mp_tags, datum, opmerkingen_klant, bezorgtijd_voorkeur, bestelling_totaal_prijs, meenemen_in_planning, aankomsttijd_slot, route_nummer, route_naam, rit_nummer"
       )
       .eq("owner_email", ownerEmail)
       .in(
@@ -90,21 +131,44 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Sync handmatig aangepaste tijdslot terug naar bestaande planning_slots (voor "nieuw_tijdslot")
-    for (const o of selected.filter((o) => o.section === "nieuw_tijdslot")) {
+    const missingRoute = selected.filter(
+      (o) => o.section === "nieuwe_order" && !("route_nummer" in o)
+    );
+    if (missingRoute.length > 0) {
+      return NextResponse.json(
+        {
+          error:
+            "Kies voor elke nieuwe order een route (of Overig) voordat je appjes stuurt.",
+        },
+        { status: 400 }
+      );
+    }
+
+    const routesToResequence = new Set<string>();
+    const markRoute = (rn: number | null) => {
+      routesToResequence.add(rn == null || rn < 1 ? "overig" : String(rn));
+    };
+    const planningDatumsToResequence = new Set<string>();
+    const orderUpdates: ResequencedOrder[] = [];
+
+    for (const o of selected.filter((x) => x.section === "nieuw_tijdslot")) {
       if (!o.aankomsttijd_slot) continue;
       await supabase
         .from("planning_slots")
         .update({ aankomsttijd: o.aankomsttijd_slot })
         .eq("owner_email", ownerEmail)
         .eq("order_id", o.order_id);
+
+      await supabase
+        .from("orders")
+        .update({ aankomsttijd_slot: o.aankomsttijd_slot })
+        .eq("owner_email", ownerEmail)
+        .eq("id", o.order_id);
+
+      const meta = metaById.get(o.order_id);
+      markRoute(parseRouteNummer(meta?.route_nummer));
     }
 
-    // Voor "nieuwe_order": toevoegen aan planning
-    // Doeldatum + WhatsApp-tekst ("vandaag"/"morgen") voor deze sectie volgen uitsluitend de
-    // 18:00-Amsterdam-rollover op het moment van versturen — bewust NIET de
-    // getLatestOrNewPlanningDate-heuristiek (die bij een al actieve batch voor zowel vandaag als
-    // morgen alles naar morgen duwt, ook als de order al een tijdslot vandaag heeft gekregen).
     const nieuweOrderOrders = selected.filter((o) => o.section === "nieuwe_order");
     let planningDatumVoorNieuweOrders: string | null = null;
     let nieuweOrderIsMorgen = false;
@@ -113,46 +177,61 @@ export async function POST(request: NextRequest) {
       planningDatumVoorNieuweOrders = date;
       nieuweOrderIsMorgen = isTomorrow;
       const targetDate = planningDatumVoorNieuweOrders;
+      planningDatumsToResequence.add(targetDate);
 
-      // Bepaal hoogste volgorde voor die datum
-      const { data: existingSlots } = await supabase
-        .from("planning_slots")
-        .select("volgorde")
+      const { data: nameRows } = await supabase
+        .from("orders")
+        .select("route_nummer, route_naam")
         .eq("owner_email", ownerEmail)
-        .eq("datum", targetDate)
-        .order("volgorde", { ascending: false })
-        .limit(1);
-      const maxVolgorde =
-        existingSlots && existingSlots.length > 0
-          ? Number((existingSlots[0] as Record<string, unknown>).volgorde ?? 0)
-          : 0;
+        .not("route_nummer", "is", null);
+      const naamByRoute = new Map<number, string>();
+      for (const r of (nameRows ?? []) as Record<string, unknown>[]) {
+        const rn = Number(r.route_nummer ?? 0);
+        const nm = String(r.route_naam ?? "").trim();
+        if (rn > 0 && nm && !naamByRoute.has(rn)) naamByRoute.set(rn, nm);
+      }
 
-      // Verwijder eventuele bestaande slots voor deze orders op die datum (vermijd duplicaten)
       await supabase
         .from("planning_slots")
         .delete()
         .eq("owner_email", ownerEmail)
         .eq("datum", targetDate)
-        .in("order_id", nieuweOrderOrders.map((o) => o.order_id));
+        .in(
+          "order_id",
+          nieuweOrderOrders.map((o) => o.order_id)
+        );
+
+      for (const o of nieuweOrderOrders) {
+        const rn = parseRouteNummer(o.route_nummer);
+        markRoute(rn);
+        const routeNaam =
+          rn != null ? (naamByRoute.get(rn) ?? routeDisplayLabel(rn, null)) : null;
+        const err = await patchOrderRouteAndSlot(supabase, ownerEmail, o.order_id, {
+          route_nummer: rn,
+          aankomsttijd_slot: o.aankomsttijd_slot,
+          route_naam: routeNaam,
+        });
+        if (err) console.error("[api/stuur-appjes] order route patch:", err);
+      }
 
       const slotsToInsert = nieuweOrderOrders.map((o, i) => ({
         owner_email: ownerEmail,
         datum: targetDate,
         order_id: o.order_id,
-        volgorde: maxVolgorde + i + 1,
+        volgorde: 9000 + i,
         aankomsttijd: o.aankomsttijd_slot,
         tijd_opmerking: String(
-          (metaById.get(o.order_id) as Record<string, unknown> | undefined)?.bezorgtijd_voorkeur ?? o.bezorgtijd_voorkeur ?? ""
+          (metaById.get(o.order_id) as Record<string, unknown> | undefined)
+            ?.bezorgtijd_voorkeur ??
+            o.bezorgtijd_voorkeur ??
+            ""
         ),
       }));
 
       const { error: insertErr } = await supabase
         .from("planning_slots")
         .insert(slotsToInsert);
-      if (insertErr) {
-        console.error("[api/stuur-appjes] planning insert:", insertErr);
-      }
-
+      if (insertErr) console.error("[api/stuur-appjes] planning insert:", insertErr);
     }
 
     const tijdslotOrderIds = Array.from(
@@ -166,7 +245,30 @@ export async function POST(request: NextRequest) {
         .eq("owner_email", ownerEmail)
         .in("order_id", tijdslotOrderIds)
         .neq("status", "afgerond");
-      slotDatumByOrderId = mergeSlotDatums((slotRows ?? []) as Array<{ order_id: string | null; datum: string | null }>);
+      slotDatumByOrderId = mergeSlotDatums(
+        (slotRows ?? []) as Array<{ order_id: string | null; datum: string | null }>
+      );
+      for (const d of Array.from(slotDatumByOrderId.values())) {
+        if (d) planningDatumsToResequence.add(d);
+      }
+    }
+
+    for (const key of Array.from(routesToResequence)) {
+      const rn = key === "overig" ? null : Number(key);
+      const updated = await resequenceRouteOrdersByTijdslot(
+        supabase as any,
+        ownerEmail,
+        rn == null || !Number.isFinite(rn) ? null : rn
+      );
+      for (const u of updated) {
+        const prev = orderUpdates.findIndex((x) => x.id === u.id);
+        if (prev >= 0) orderUpdates[prev] = u;
+        else orderUpdates.push(u);
+      }
+    }
+
+    for (const datum of Array.from(planningDatumsToResequence)) {
+      await resequencePlanningSlotsByTijdslot(supabase as any, ownerEmail, datum);
     }
 
     const mistSlotDatumVoorTijdslot = selected.some(
@@ -176,22 +278,18 @@ export async function POST(request: NextRequest) {
       ? await getLatestOrNewPlanningDate(ownerEmail, supabase as any)
       : "";
 
-    // Verstuur WhatsApp per order
     const details: string[] = [];
     let sentCount = 0;
     let failCount = 0;
 
     for (const o of selected) {
       const meta = (metaById.get(o.order_id) ?? {}) as Record<string, unknown>;
-
-      // "nieuwe_order" → standaard template (in_planning_en_ritjes_vandaag = false)
-      // "nieuw_tijdslot" → nieuw_tijdslot template (in_planning_en_ritjes_vandaag = true)
       const inPlanningEnRitjesVandaag = o.section === "nieuw_tijdslot";
 
       const templatePlandatum =
         o.section === "nieuwe_order"
           ? (planningDatumVoorNieuweOrders ?? "")
-          : (slotDatumByOrderId.get(o.order_id) || fallbackPlanningDatum);
+          : slotDatumByOrderId.get(o.order_id) || fallbackPlanningDatum;
 
       const sendRes = await sendWhatsAppByEvent(
         "stuur_appjes",
@@ -209,8 +307,6 @@ export async function POST(request: NextRequest) {
           opmerkingen_klant: String(meta.opmerkingen_klant ?? ""),
           bezorgtijd_voorkeur: String(meta.bezorgtijd_voorkeur ?? ""),
           in_planning_en_ritjes_vandaag: inPlanningEnRitjesVandaag,
-          // Alleen voor "nieuwe_order": forceer "vandaag"/"morgen" in het bericht i.p.v. een datum,
-          // op basis van de 18:00-rollover op verzendmoment. Laat "nieuw_tijdslot" ongewijzigd.
           ...(o.section === "nieuwe_order"
             ? {
                 leveringLabelOverride: (nieuweOrderIsMorgen ? "morgen" : "vandaag") as
@@ -235,6 +331,7 @@ export async function POST(request: NextRequest) {
       ok: true,
       message: `${sentCount} verzonden, ${failCount} mislukt.`,
       details,
+      orderUpdates,
     });
   } catch (e) {
     console.error("[api/stuur-appjes]", e);

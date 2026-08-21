@@ -579,6 +579,7 @@ export default function RitjesVandaagPage() {
                 ) as any
               }
               onBeforeOpen={fetchRitjes}
+              onDone={fetchRitjes}
             />
             <button
               type="button"
