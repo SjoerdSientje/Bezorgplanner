@@ -17,12 +17,6 @@ type Stats = {
   mutationsToday: number;
 };
 
-type ShopifySearchResult = {
-  inventory_product_id: string | null;
-  title: string;
-  stock_quantity: number | null;
-};
-
 type Filter = "alle" | "fiets" | "onderdeel" | "overig";
 const FILTER_LABELS: Record<Filter, string> = {
   alle: "Alle producten",
@@ -34,6 +28,15 @@ const FILTER_LABELS: Record<Filter, string> = {
 type StockFilter = "alle" | "laag" | "uitverkocht";
 
 type MutationType = "inkomend" | "uitgaand" | "correctie";
+
+type ProductMutationDraft = {
+  quantity: string;
+  note: string;
+};
+
+function defaultMutationDraft(): ProductMutationDraft {
+  return { quantity: "1", note: "" };
+}
 
 function mutationTypeLabel(t: MutationType): string {
   switch (t) {
@@ -97,10 +100,12 @@ export default function VoorraadbeheerPage() {
 
   const [editProduct, setEditProduct] = useState<InventoryProductRow | null>(null);
   const [manageOpen, setManageOpen] = useState(false);
-  const [manageProduct, setManageProduct] = useState<InventoryProductRow | null>(null);
-  const [shopifyQuery, setShopifyQuery] = useState("");
-  const [shopifyResults, setShopifyResults] = useState<ShopifySearchResult[]>([]);
-  const [shopifySearching, setShopifySearching] = useState(false);
+  const [manageStep, setManageStep] = useState<"pick" | "mutate">("pick");
+  const [manageSelectedIds, setManageSelectedIds] = useState<Set<string>>(new Set());
+  const [manageSearch, setManageSearch] = useState("");
+  const [manageMutationsById, setManageMutationsById] = useState<
+    Record<string, ProductMutationDraft>
+  >({});
 
   const [mutationType, setMutationType] = useState<MutationType>("inkomend");
   const [quantity, setQuantity] = useState("1");
@@ -144,25 +149,13 @@ export default function VoorraadbeheerPage() {
     load(false);
   }, [load]);
 
-  useEffect(() => {
-    if (!manageOpen || shopifyQuery.trim().length < 2) {
-      setShopifyResults([]);
-      return;
-    }
-    const t = setTimeout(async () => {
-      setShopifySearching(true);
-      try {
-        const res = await fetch(`/api/inventory/search?q=${encodeURIComponent(shopifyQuery.trim())}`);
-        const data = await res.json();
-        setShopifyResults(data.results ?? []);
-      } catch {
-        setShopifyResults([]);
-      } finally {
-        setShopifySearching(false);
-      }
-    }, 300);
-    return () => clearTimeout(t);
-  }, [shopifyQuery, manageOpen]);
+  const managePickProducts = useMemo(() => {
+    return products.filter((p) => matchesInventorySearch(p, manageSearch));
+  }, [products, manageSearch]);
+
+  const manageSelectedProducts = useMemo(() => {
+    return products.filter((p) => manageSelectedIds.has(p.id));
+  }, [products, manageSelectedIds]);
 
   const displayedProducts = useMemo(() => {
     return products.filter((p) => {
@@ -212,9 +205,10 @@ export default function VoorraadbeheerPage() {
 
   const openManageModal = () => {
     setManageOpen(true);
-    setManageProduct(null);
-    setShopifyQuery("");
-    setShopifyResults([]);
+    setManageStep("pick");
+    setManageSelectedIds(new Set());
+    setManageSearch("");
+    setManageMutationsById({});
     resetMutationForm();
     setError(null);
   };
@@ -222,32 +216,59 @@ export default function VoorraadbeheerPage() {
   const closeModals = () => {
     setEditProduct(null);
     setManageOpen(false);
-    setManageProduct(null);
-    setShopifyQuery("");
-    setShopifyResults([]);
+    setManageStep("pick");
+    setManageSelectedIds(new Set());
+    setManageSearch("");
+    setManageMutationsById({});
   };
 
-  const pickManageProduct = (result: ShopifySearchResult) => {
-    if (!result.inventory_product_id) return;
-    const found = products.find((p) => p.id === result.inventory_product_id);
-    if (found) {
-      setManageProduct(found);
-      setEditLevertijd(found.levertijd ?? "");
-      setEditOpmerking(found.opmerking ?? "");
-    } else {
-      setManageProduct({
-        id: result.inventory_product_id,
-        title: result.title,
-        stock_quantity: result.stock_quantity ?? 0,
-        levertijd: null,
-        opmerking: null,
-      } as InventoryProductRow);
-      setEditLevertijd("");
-      setEditOpmerking("");
+  const toggleManageProduct = (productId: string) => {
+    setManageSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(productId)) next.delete(productId);
+      else next.add(productId);
+      return next;
+    });
+  };
+
+  const toggleAllManagePick = () => {
+    const visibleIds = managePickProducts.map((p) => p.id);
+    const allSelected =
+      visibleIds.length > 0 && visibleIds.every((id) => manageSelectedIds.has(id));
+    setManageSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allSelected) {
+        for (const id of visibleIds) next.delete(id);
+      } else {
+        for (const id of visibleIds) next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const goToManageMutate = () => {
+    if (manageSelectedIds.size === 0) {
+      setError("Selecteer minstens één product.");
+      return;
     }
-    setShopifyQuery("");
-    setShopifyResults([]);
-    resetMutationForm();
+    const drafts: Record<string, ProductMutationDraft> = {};
+    for (const id of Array.from(manageSelectedIds)) {
+      drafts[id] = manageMutationsById[id] ?? defaultMutationDraft();
+    }
+    setManageMutationsById(drafts);
+    setMutationType("inkomend");
+    setManageStep("mutate");
+    setError(null);
+  };
+
+  const updateManageMutation = (
+    productId: string,
+    patch: Partial<ProductMutationDraft>
+  ) => {
+    setManageMutationsById((prev) => ({
+      ...prev,
+      [productId]: { ...(prev[productId] ?? defaultMutationDraft()), ...patch },
+    }));
   };
 
   const saveOpmerkingInline = async (productId: string, opmerking: string) => {
@@ -325,7 +346,6 @@ export default function VoorraadbeheerPage() {
       const updated = data.product as InventoryProductRow;
       setProducts((prev) => prev.map((p) => (p.id === updated.id ? { ...p, ...updated } : p)));
       if (editProduct?.id === updated.id) setEditProduct({ ...editProduct, ...updated });
-      if (manageProduct?.id === updated.id) setManageProduct({ ...manageProduct, ...updated });
       setMessage("Levertijd en opmerking opgeslagen.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Opslaan mislukt");
@@ -374,6 +394,249 @@ export default function VoorraadbeheerPage() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const submitBulkMutation = async () => {
+    if (manageSelectedProducts.length === 0) {
+      setError("Geen producten geselecteerd.");
+      return;
+    }
+
+    for (const product of manageSelectedProducts) {
+      const draft = manageMutationsById[product.id] ?? defaultMutationDraft();
+      const qty = parseInt(draft.quantity, 10);
+      if (!Number.isFinite(qty) || qty < 0) {
+        setError(`Ongeldig aantal voor ${product.title}.`);
+        return;
+      }
+    }
+
+    setSaving(true);
+    setError(null);
+    let ok = 0;
+    const failed: string[] = [];
+
+    try {
+      for (const product of manageSelectedProducts) {
+        const draft = manageMutationsById[product.id] ?? defaultMutationDraft();
+        const qty = parseInt(draft.quantity, 10);
+        const res = await fetch("/api/inventory/mutate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            productId: product.id,
+            mutationType,
+            quantity: qty,
+            note: draft.note.trim() || undefined,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          failed.push(`${product.title}: ${data?.error ?? "mislukt"}`);
+        } else {
+          ok += 1;
+        }
+      }
+
+      if (ok > 0) {
+        closeModals();
+        setMessage(
+          failed.length > 0
+            ? `${ok} product(en) bijgewerkt. ${failed.length} mislukt: ${failed.slice(0, 2).join(" | ")}`
+            : `${ok} product(en) bijgewerkt.`
+        );
+        await load(false);
+      } else {
+        setError(failed[0] ?? "Mutatie mislukt voor alle geselecteerde producten.");
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Mutatie mislukt");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const bulkMutationForm = () => (
+    <>
+      <p className="mt-1 text-sm text-stone-600">
+        Kies het mutatietype voor de hele lijst; stel per product het aantal in (
+        {manageSelectedProducts.length} geselecteerd).
+      </p>
+
+      <p className="mt-3 text-xs font-medium uppercase tracking-wide text-stone-400">
+        Mutatietype (voor alle producten)
+      </p>
+      <div className="mt-2 flex gap-2">
+        {(["inkomend", "uitgaand", "correctie"] as const).map((t) => (
+          <button
+            key={t}
+            type="button"
+            onClick={() => setMutationType(t)}
+            className={`flex-1 rounded-lg px-2 py-2 text-xs font-medium capitalize ${
+              mutationType === t
+                ? "bg-koopje-orange text-white"
+                : "border border-stone-200 text-koopje-black"
+            }`}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+
+      <ul className="mt-4 max-h-[min(24rem,55vh)] space-y-3 overflow-y-auto pr-1">
+        {manageSelectedProducts.map((p) => {
+          const draft = manageMutationsById[p.id] ?? defaultMutationDraft();
+          return (
+            <li
+              key={p.id}
+              className="rounded-xl border border-stone-200 bg-stone-50/60 p-3"
+            >
+              <div className="mb-2 flex items-start justify-between gap-2">
+                <p className="min-w-0 flex-1 text-sm font-medium leading-snug text-koopje-black">
+                  {p.title}
+                </p>
+                <span className={`shrink-0 text-xs ${stockClass(p.stock_quantity)}`}>
+                  nu: {p.stock_quantity}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-[5rem_1fr] gap-2">
+                <div>
+                  <label className="block text-[10px] font-medium uppercase text-stone-400">
+                    {mutationType === "correctie" ? "Nieuw" : "Aantal"}
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={draft.quantity}
+                    onChange={(e) => updateManageMutation(p.id, { quantity: e.target.value })}
+                    className="mt-0.5 w-full rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-medium uppercase text-stone-400">
+                    Opmerking
+                  </label>
+                  <input
+                    type="text"
+                    value={draft.note}
+                    onChange={(e) => updateManageMutation(p.id, { note: e.target.value })}
+                    placeholder="Optioneel"
+                    className="mt-0.5 w-full rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-sm"
+                  />
+                </div>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+
+      <div className="mt-6 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            setManageStep("pick");
+            setError(null);
+          }}
+          className="rounded-xl px-4 py-2 text-sm text-stone-600"
+        >
+          Terug
+        </button>
+        <button type="button" onClick={closeModals} className="rounded-xl px-4 py-2 text-sm text-stone-600">
+          Annuleren
+        </button>
+        <button
+          type="button"
+          onClick={() => void submitBulkMutation()}
+          disabled={saving}
+          className="rounded-xl bg-koopje-orange px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+        >
+          {saving ? "Opslaan…" : `${manageSelectedProducts.length} producten opslaan`}
+        </button>
+      </div>
+    </>
+  );
+
+  const managePickForm = () => {
+    const allSelectedVisible =
+      managePickProducts.length > 0 &&
+      managePickProducts.every((p) => manageSelectedIds.has(p.id));
+
+    return (
+      <>
+        <p className="mt-1 text-sm text-stone-600">
+          Selecteer producten; daarna stel je per product de mutatie in (bijv. 5× V20, 6× V8).
+        </p>
+
+        <label className="mt-4 block text-xs font-medium text-stone-500">Zoeken</label>
+        <input
+          type="search"
+          value={manageSearch}
+          onChange={(e) => setManageSearch(e.target.value)}
+          placeholder="Filter producten…"
+          autoFocus
+          className="mt-1 w-full rounded-lg border border-stone-200 px-3 py-2 text-sm"
+        />
+
+        <div className="mt-3 flex items-center justify-between gap-2">
+          <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-stone-600">
+            <input
+              type="checkbox"
+              checked={allSelectedVisible}
+              onChange={toggleAllManagePick}
+              className="h-4 w-4 rounded accent-koopje-orange"
+            />
+            Alles selecteren ({managePickProducts.length})
+          </label>
+          <span className="text-xs text-stone-500">{manageSelectedIds.size} gekozen</span>
+        </div>
+
+        <ul className="mt-2 max-h-72 overflow-y-auto rounded-lg border border-stone-200">
+          {managePickProducts.map((p) => {
+            const selected = manageSelectedIds.has(p.id);
+            return (
+              <li key={p.id} className="border-b border-stone-100 last:border-b-0">
+                <label
+                  className={`flex cursor-pointer items-center gap-3 px-3 py-2.5 text-sm hover:bg-stone-50 ${
+                    selected ? "bg-koopje-orange-light/40" : ""
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected}
+                    onChange={() => toggleManageProduct(p.id)}
+                    className="h-4 w-4 shrink-0 rounded accent-koopje-orange"
+                  />
+                  <span className="min-w-0 flex-1 truncate font-medium text-koopje-black">
+                    {p.title}
+                  </span>
+                  <span className={`shrink-0 text-xs ${stockClass(p.stock_quantity)}`}>
+                    {p.stock_quantity}
+                  </span>
+                </label>
+              </li>
+            );
+          })}
+          {managePickProducts.length === 0 && (
+            <li className="px-3 py-6 text-center text-sm text-stone-400">Geen producten gevonden.</li>
+          )}
+        </ul>
+
+        <div className="mt-6 flex justify-end gap-2">
+          <button type="button" onClick={closeModals} className="rounded-xl px-4 py-2 text-sm text-stone-600">
+            Annuleren
+          </button>
+          <button
+            type="button"
+            onClick={goToManageMutate}
+            disabled={manageSelectedIds.size === 0}
+            className="rounded-xl bg-koopje-orange px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+          >
+            Doorgaan ({manageSelectedIds.size})
+          </button>
+        </div>
+      </>
+    );
   };
 
   const metaFields = (product: InventoryProductRow) => (
@@ -768,72 +1031,14 @@ export default function VoorraadbeheerPage() {
         <>
           <div className="fixed inset-0 z-40 bg-black/40" onClick={closeModals} />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+            <div
+              className={`w-full rounded-2xl bg-white p-6 shadow-xl ${
+                manageStep === "mutate" ? "max-w-xl" : "max-w-lg"
+              }`}
+            >
               <h2 className="text-lg font-semibold text-koopje-black">Voorraad beheren</h2>
               {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
-
-              {!manageProduct ? (
-                <>
-                  <p className="mt-1 text-sm text-stone-600">
-                    Zoek een product in Shopify om de voorraad aan te passen.
-                  </p>
-                  <label className="mt-4 block text-xs font-medium text-stone-500">Product zoeken</label>
-                  <input
-                    type="text"
-                    value={shopifyQuery}
-                    onChange={(e) => setShopifyQuery(e.target.value)}
-                    placeholder="Typ productnaam…"
-                    autoFocus
-                    className="mt-1 w-full rounded-lg border border-stone-200 px-3 py-2 text-sm"
-                  />
-                  {shopifySearching && <p className="mt-1 text-xs text-stone-400">Zoeken…</p>}
-                  {shopifyResults.length > 0 && (
-                    <ul className="mt-2 max-h-52 overflow-y-auto rounded-lg border border-stone-200">
-                      {shopifyResults.map((r) => (
-                        <li key={r.inventory_product_id ?? r.title}>
-                          <button
-                            type="button"
-                            disabled={!r.inventory_product_id}
-                            className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-stone-50 disabled:opacity-50"
-                            onClick={() => pickManageProduct(r)}
-                          >
-                            <span>{r.title}</span>
-                            <span className="ml-2 shrink-0 text-stone-400">
-                              {r.stock_quantity ?? "?"} op voorraad
-                            </span>
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  {shopifyQuery.trim().length >= 2 && !shopifySearching && shopifyResults.length === 0 && (
-                    <p className="mt-2 text-xs text-stone-400">Geen producten gevonden.</p>
-                  )}
-                  <div className="mt-6 flex justify-end">
-                    <button
-                      type="button"
-                      onClick={closeModals}
-                      className="rounded-xl px-4 py-2 text-sm text-stone-600"
-                    >
-                      Annuleren
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setManageProduct(null);
-                      resetMutationForm();
-                    }}
-                    className="mt-2 text-xs text-koopje-orange hover:underline"
-                  >
-                    ← Ander product kiezen
-                  </button>
-                  {mutationForm(manageProduct, () => submitMutation(manageProduct))}
-                </>
-              )}
+              {manageStep === "pick" ? managePickForm() : bulkMutationForm()}
             </div>
           </div>
         </>

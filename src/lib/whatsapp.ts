@@ -338,6 +338,8 @@ export async function sendWhatsAppTemplate(params: {
   templateName: string;
   languageCode?: string;
   bodyVariables?: string[];
+  /** Named body params (parameter_format: named), e.g. { productnaam: "..." } */
+  bodyNamedVariables?: Record<string, string>;
   headerVariables?: string[];
 }): Promise<SendWhatsAppResult> {
   const phoneNumberId = env("WHATSAPP_PHONE_NUMBER_ID");
@@ -361,7 +363,20 @@ export async function sendWhatsAppTemplate(params: {
       parameters: (params.headerVariables ?? []).map((text) => ({ type: "text", text })),
     });
   }
-  if ((params.bodyVariables ?? []).length > 0) {
+
+  const namedEntries = Object.entries(params.bodyNamedVariables ?? {}).filter(
+    ([, v]) => String(v ?? "").trim() !== ""
+  );
+  if (namedEntries.length > 0) {
+    components.push({
+      type: "body",
+      parameters: namedEntries.map(([parameter_name, text]) => ({
+        type: "text",
+        parameter_name,
+        text: String(text).slice(0, 1024),
+      })),
+    });
+  } else if ((params.bodyVariables ?? []).length > 0) {
     components.push({
       type: "body",
       parameters: (params.bodyVariables ?? []).map((text) => ({ type: "text", text })),
@@ -495,5 +510,262 @@ export async function fetchWhatsAppTemplates() {
     ok: true as const,
     templates: (json?.data ?? []) as Array<Record<string, unknown>>,
   };
+}
+
+/** Vast nummer voor voorraad-alerts (overschrijfbaar via WHATSAPP_VOORRAAD_ALERT_TO). */
+export const INVENTORY_ALERT_PHONE_DEFAULT = "31687139057";
+
+export const INVENTORY_ALERT_TEMPLATE_LOW = "voorraad_laag_3";
+export const INVENTORY_ALERT_TEMPLATE_OUT = "voorraad_uitverkocht";
+
+/** @deprecated gebruik INVENTORY_ALERT_TEMPLATE_LOW / _OUT */
+export const INVENTORY_ALERT_TEMPLATE_DEFAULT = INVENTORY_ALERT_TEMPLATE_LOW;
+
+export async function sendWhatsAppText(params: {
+  to: string;
+  text: string;
+}): Promise<SendWhatsAppResult> {
+  const phoneNumberId = env("WHATSAPP_PHONE_NUMBER_ID");
+  const waToken = env("WHATSAPP_ACCESS_TOKEN");
+  if (!phoneNumberId || !waToken) {
+    return {
+      ok: false,
+      error: "WHATSAPP_PHONE_NUMBER_ID of WHATSAPP_ACCESS_TOKEN ontbreekt.",
+    };
+  }
+
+  const to = normalizePhone(params.to);
+  if (!to) return { ok: false, error: "Geen geldig telefoonnummer." };
+
+  const body = String(params.text ?? "").trim();
+  if (!body) return { ok: false, error: "Lege WhatsApp-tekst." };
+
+  const waRes = await fetch(`https://graph.facebook.com/v22.0/${phoneNumberId}/messages`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${waToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      to,
+      type: "text",
+      text: { body: body.slice(0, 4096) },
+    }),
+  });
+  const waJson = await waRes.json().catch(() => ({}));
+  if (!waRes.ok) {
+    return {
+      ok: false,
+      error:
+        (waJson?.error?.message as string | undefined) ??
+        `WhatsApp fout (${waRes.status})`,
+    };
+  }
+  return {
+    ok: true,
+    messageId: waJson?.messages?.[0]?.id as string | undefined,
+  };
+}
+
+type InventoryTemplateSpec = {
+  name: string;
+  bodyText: string;
+  exampleProduct: string;
+};
+
+const INVENTORY_ALERT_TEMPLATE_SPECS: InventoryTemplateSpec[] = [
+  {
+    name: INVENTORY_ALERT_TEMPLATE_LOW,
+    bodyText: "De voorraad van {{productnaam}} is laag (3).",
+    exampleProduct: "Fatbike Zwart",
+  },
+  {
+    name: INVENTORY_ALERT_TEMPLATE_OUT,
+    bodyText: "Waarschuwing! {{productnaam}} is uitverkocht, bestel bij!",
+    exampleProduct: "Fatbike Zwart",
+  },
+];
+
+export type InventoryTemplateCreateResult = {
+  name: string;
+  language: string;
+  ok: boolean;
+  id?: string;
+  status?: string;
+  error?: string;
+  alreadyExists?: boolean;
+};
+
+async function createNamedUtilityTemplate(params: {
+  wabaId: string;
+  token: string;
+  name: string;
+  language: string;
+  bodyText: string;
+  exampleProduct: string;
+}): Promise<InventoryTemplateCreateResult> {
+  const { wabaId, token, name, language, bodyText, exampleProduct } = params;
+
+  const res = await fetch(
+    `https://graph.facebook.com/v22.0/${wabaId}/message_templates`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        name,
+        language,
+        category: "UTILITY",
+        allow_category_change: true,
+        parameter_format: "named",
+        components: [
+          {
+            type: "BODY",
+            text: bodyText,
+            example: {
+              body_text_named_params: [
+                { param_name: "productnaam", example: exampleProduct },
+              ],
+            },
+          },
+        ],
+      }),
+    }
+  );
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg =
+      (json?.error?.message as string | undefined) ??
+      `Template aanmaken mislukt (${res.status})`;
+    const already = /already exists|duplicate|taken/i.test(msg);
+    return { name, language, ok: false, error: msg, alreadyExists: already };
+  }
+
+  return {
+    name,
+    language,
+    ok: true,
+    id: json?.id ? String(json.id) : undefined,
+    status: json?.status ? String(json.status) : "PENDING",
+  };
+}
+
+/**
+ * Dient beide voorraad-templates in bij Meta (laag=3 en uitverkocht=0).
+ */
+export async function createInventoryAlertTemplates(): Promise<
+  | { ok: true; language: string; results: InventoryTemplateCreateResult[] }
+  | { ok: false; error: string; results?: InventoryTemplateCreateResult[] }
+> {
+  const wabaId = env("WHATSAPP_BUSINESS_ACCOUNT_ID");
+  const token = env("WHATSAPP_ACCESS_TOKEN");
+  if (!wabaId || !token) {
+    return {
+      ok: false,
+      error: "WHATSAPP_BUSINESS_ACCOUNT_ID of WHATSAPP_ACCESS_TOKEN ontbreekt.",
+    };
+  }
+
+  const language = env("WHATSAPP_VOORRAAD_ALERT_LANGUAGE") || "nl";
+  const existing = await fetchWhatsAppTemplates();
+  const results: InventoryTemplateCreateResult[] = [];
+
+  for (const spec of INVENTORY_ALERT_TEMPLATE_SPECS) {
+    const found =
+      existing.ok &&
+      (existing.templates ?? []).find(
+        (t) =>
+          String(t.name ?? "") === spec.name &&
+          String(t.language ?? "").toLowerCase().startsWith(language.toLowerCase().slice(0, 2))
+      );
+
+    if (found) {
+      results.push({
+        name: spec.name,
+        language: String(found.language ?? language),
+        ok: true,
+        id: found.id ? String(found.id) : undefined,
+        status: found.status ? String(found.status) : undefined,
+        alreadyExists: true,
+      });
+      continue;
+    }
+
+    results.push(
+      await createNamedUtilityTemplate({
+        wabaId,
+        token,
+        name: spec.name,
+        language,
+        bodyText: spec.bodyText,
+        exampleProduct: spec.exampleProduct,
+      })
+    );
+  }
+
+  const allOk = results.every((r) => r.ok || r.alreadyExists);
+  if (!allOk) {
+    const firstErr = results.find((r) => !r.ok)?.error ?? "Template(s) aanmaken mislukt.";
+    return { ok: false, error: firstErr, results };
+  }
+
+  return { ok: true, language, results };
+}
+
+/** @deprecated gebruik createInventoryAlertTemplates */
+export async function createInventoryAlertTemplate() {
+  const res = await createInventoryAlertTemplates();
+  if (!res.ok) {
+    return {
+      ok: false as const,
+      error: res.error,
+      alreadyExists: res.results?.some((r) => r.alreadyExists),
+    };
+  }
+  const first = res.results[0]!;
+  return {
+    ok: true as const,
+    id: first.id,
+    status: first.status,
+    name: first.name,
+    language: res.language,
+  };
+}
+
+/**
+ * Appje bij voorraad 3 of 0 met de juiste Meta-template.
+ */
+export async function notifyInventoryStockAlert(params: {
+  productTitle: string;
+  stockAfter: number;
+}): Promise<SendWhatsAppResult> {
+  const to = env("WHATSAPP_VOORRAAD_ALERT_TO") || INVENTORY_ALERT_PHONE_DEFAULT;
+  const title = String(params.productTitle ?? "").trim() || "Product";
+  const stock = Math.max(0, Math.floor(params.stockAfter));
+  const productnaam = title.slice(0, 200);
+
+  const text =
+    stock === 0
+      ? `Waarschuwing! ${title} is uitverkocht, bestel bij!`
+      : `De voorraad van ${title} is laag (3).`;
+
+  const templateName =
+    stock === 0
+      ? env("WHATSAPP_VOORRAAD_OUT_TEMPLATE") || INVENTORY_ALERT_TEMPLATE_OUT
+      : env("WHATSAPP_VOORRAAD_LOW_TEMPLATE") || INVENTORY_ALERT_TEMPLATE_LOW;
+
+  const tplRes = await sendWhatsAppTemplate({
+    to,
+    templateName,
+    languageCode: env("WHATSAPP_VOORRAAD_ALERT_LANGUAGE") || "nl",
+    bodyNamedVariables: { productnaam },
+  });
+  if (tplRes.ok) return tplRes;
+  console.warn("[whatsapp] voorraad template mislukt, probeer tekst:", tplRes.error);
+
+  return sendWhatsAppText({ to, text });
 }
 

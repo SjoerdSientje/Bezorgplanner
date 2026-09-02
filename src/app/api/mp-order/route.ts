@@ -69,13 +69,13 @@ function buildMpShopifyLineItems(productenLijst: ProductRegel[]): ShopifyLineIte
 
     if (p.type === "fiets") {
       const montageProps: { name: string; value: string }[] = [];
-      const losseExtras: string[] = [];
 
       if (p.achterzitje === "ja") {
         if (p.achterzitjeGemonteerd === "ja") {
           montageProps.push({ name: "Montage", value: "achterzitje gemonteerd" });
         } else if (p.achterzitjeGemonteerd === "nee") {
-          losseExtras.push("achterzitje");
+          // Zelfde weergave als Shopify: notitie onder de fiets, geen los product.
+          montageProps.push({ name: "Achterzitje", value: "Apart in doos" });
         }
       }
 
@@ -83,7 +83,7 @@ function buildMpShopifyLineItems(productenLijst: ProductRegel[]): ShopifyLineIte
         if (p.voorrekjeGemonteerd === "ja") {
           montageProps.push({ name: "Montage", value: "voorrekje gemonteerd" });
         } else if (p.voorrekjeGemonteerd === "nee") {
-          losseExtras.push("voorrekje");
+          montageProps.push({ name: "Voorrekje", value: "Apart in doos" });
         }
       }
 
@@ -102,10 +102,6 @@ function buildMpShopifyLineItems(productenLijst: ProductRegel[]): ShopifyLineIte
         product_id: p.shopify_product_id ?? undefined,
         variant_id: p.shopify_variant_id ?? undefined,
       });
-
-      for (const extra of losseExtras) {
-        lineItems.push({ name: extra, price: 0, properties: [] });
-      }
     } else {
       lineItems.push({
         name: p.naam,
@@ -129,14 +125,34 @@ function buildMpLineItemsJson(
   return buildLineItemsJson({ line_items: lineItems }, rules);
 }
 
-/** Voorraadaftrek: fiets + standaardproducten + family-deal + extra's. */
+/** Losse (niet-gemonteerde) extras die wél van voorraad af moeten, ook al zijn het geen productregels. */
+function collectMpUnmountedAccessoryDeductions(
+  productenLijst: ProductRegel[]
+): Array<{ name: string; quantity: number }> {
+  const out: Array<{ name: string; quantity: number }> = [];
+  for (const p of productenLijst) {
+    if (p.type !== "fiets") continue;
+    if (p.achterzitje === "ja" && p.achterzitjeGemonteerd === "nee") {
+      out.push({ name: "achterzitje", quantity: 1 });
+    }
+    if (p.voorrekje === "ja" && p.voorrekjeGemonteerd === "nee") {
+      out.push({ name: "voorrekje", quantity: 1 });
+    }
+  }
+  return out;
+}
+
+/** Voorraadaftrek: fiets + standaardproducten + family-deal + extras (ook “Apart in doos”). */
 function buildMpDeductionLineItems(
   productenLijst: ProductRegel[],
   rules: ProductDefaultItemsRulesV1
 ) {
   const lineItems = buildMpShopifyLineItems(productenLijst);
   if (!lineItems.length) return [];
-  return buildInventoryDeductionLineItems(lineItems, rules);
+  const fromLines = buildInventoryDeductionLineItems(lineItems, rules);
+  const extras = collectMpUnmountedAccessoryDeductions(productenLijst);
+  if (!extras.length) return fromLines;
+  return [...fromLines, ...extras];
 }
 
 /**
@@ -240,8 +256,12 @@ export async function POST(request: NextRequest) {
           .flatMap((p) => {
             if (p.type !== "fiets") return [String(p.naam ?? "").trim()];
             const lines = [buildMpFietsNaamMetMontage(p)];
-            if (p.achterzitje === "ja" && p.achterzitjeGemonteerd === "nee") lines.push("achterzitje");
-            if (p.voorrekje === "ja" && p.voorrekjeGemonteerd === "nee") lines.push("voorrekje");
+            if (p.achterzitje === "ja" && p.achterzitjeGemonteerd === "nee") {
+              lines.push("Achterzitje: Apart in doos");
+            }
+            if (p.voorrekje === "ja" && p.voorrekjeGemonteerd === "nee") {
+              lines.push("Voorrekje: Apart in doos");
+            }
             return lines;
           })
           .filter(Boolean)

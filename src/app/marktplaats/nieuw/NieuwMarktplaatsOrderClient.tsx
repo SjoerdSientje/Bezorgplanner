@@ -494,7 +494,7 @@ export default function NieuwMarktplaatsOrderClient() {
                                 <p className="mt-1.5 text-xs text-koopje-black/50">
                                   {product.achterzitjeGemonteerd === "ja"
                                     ? "→ Wordt als montage-opmerking onder de fiets vermeld"
-                                    : "→ Wordt als los product meegenomen in paklijst & afronden"}
+                                    : "→ Wordt genoteerd als “Achterzitje: Apart in doos” (wel voorraadaftrek)"}
                                 </p>
                               )}
                             </div>
@@ -520,7 +520,7 @@ export default function NieuwMarktplaatsOrderClient() {
                                 <p className="mt-1.5 text-xs text-koopje-black/50">
                                   {product.voorrekjeGemonteerd === "ja"
                                     ? "→ Wordt als montage-opmerking onder de fiets vermeld"
-                                    : "→ Wordt als los product meegenomen in paklijst & afronden"}
+                                    : "→ Wordt genoteerd als “Voorrekje: Apart in doos” (wel voorraadaftrek)"}
                                 </p>
                               )}
                             </div>

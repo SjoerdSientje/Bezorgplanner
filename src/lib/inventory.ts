@@ -982,6 +982,28 @@ export async function applyInventoryMutation(
     return { ok: false, error: logErr.message };
   }
 
+  // Appje naar vast nummer wanneer voorraad precies 3 bereikt of naar 0 gaat.
+  const hitThree = after === LOW_STOCK_THRESHOLD && before !== LOW_STOCK_THRESHOLD;
+  const hitZero = after === 0 && before > 0;
+  if (hitThree || hitZero) {
+    const variant = String(product.variant_title ?? "").trim();
+    const productTitle = variant
+      ? `${String(product.title ?? "").trim()} (${variant})`
+      : String(product.title ?? "").trim();
+    try {
+      const { notifyInventoryStockAlert } = await import("@/lib/whatsapp");
+      const wa = await notifyInventoryStockAlert({
+        productTitle: productTitle || "Product",
+        stockAfter: after,
+      });
+      if (!wa.ok) {
+        console.warn("[inventory] voorraad-alert WhatsApp mislukt:", wa.error);
+      }
+    } catch (e) {
+      console.warn("[inventory] voorraad-alert WhatsApp fout:", e);
+    }
+  }
+
   return { ok: true, stockAfter: after };
 }
 
