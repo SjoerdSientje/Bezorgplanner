@@ -108,7 +108,7 @@ export default function VoorraadbeheerPage() {
   >({});
 
   const [mutationType, setMutationType] = useState<MutationType>("inkomend");
-  const [quantity, setQuantity] = useState("1");
+  const [quantity, setQuantity] = useState("0");
   const [note, setNote] = useState("");
   const [editLevertijd, setEditLevertijd] = useState("");
   const [editOpmerking, setEditOpmerking] = useState("");
@@ -191,7 +191,7 @@ export default function VoorraadbeheerPage() {
 
   const resetMutationForm = () => {
     setMutationType("inkomend");
-    setQuantity("1");
+    setQuantity("0");
     setNote("");
   };
 
@@ -364,7 +364,7 @@ export default function VoorraadbeheerPage() {
     setError(null);
     try {
       // Bewaar levertijd/opmerking mee als die gewijzigd zijn.
-      await fetch("/api/inventory", {
+      const metaRes = await fetch("/api/inventory", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -373,21 +373,28 @@ export default function VoorraadbeheerPage() {
           opmerking: editOpmerking,
         }),
       });
+      const metaData = await metaRes.json().catch(() => ({}));
+      if (!metaRes.ok) throw new Error(metaData?.error ?? "Opslaan mislukt");
 
-      const res = await fetch("/api/inventory/mutate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          productId: product.id,
-          mutationType,
-          quantity: qty,
-          note,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error ?? "Mutatie mislukt");
+      // Aantal 0 = alleen info opslaan (geen voorraadmutatie), behalve bij correctie → voorraad op 0.
+      const skipStockMutation = qty === 0 && mutationType !== "correctie";
+      if (!skipStockMutation) {
+        const res = await fetch("/api/inventory/mutate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            productId: product.id,
+            mutationType,
+            quantity: qty,
+            note,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.error ?? "Mutatie mislukt");
+      }
+
       closeModals();
-      setMessage("Voorraad bijgewerkt.");
+      setMessage(skipStockMutation ? "Opgeslagen." : "Voorraad bijgewerkt.");
       await load(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Mutatie mislukt");
