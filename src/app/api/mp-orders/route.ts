@@ -25,7 +25,9 @@ export async function GET(request: NextRequest) {
       .select("*")
       .eq("owner_email", ownerEmail)
       .eq("source", "mp")
-      .neq("status", "ritjes_vandaag");
+      .neq("status", "ritjes_vandaag")
+      .order("datum", { ascending: false, nullsFirst: false })
+      .range(0, 9999);
     if (error) {
       console.error("[mp-orders]", error);
       return NextResponse.json({ error: "Ophalen mislukt." }, { status: 500 });
