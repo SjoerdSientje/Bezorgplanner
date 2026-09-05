@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   DragOverlay,
-  KeyboardSensor,
   PointerSensor,
   TouchSensor,
   closestCenter,
@@ -18,7 +17,6 @@ import {
 import {
   SortableContext,
   arrayMove,
-  sortableKeyboardCoordinates,
   useSortable,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
@@ -126,6 +124,11 @@ function stopDragPointer(e: React.PointerEvent) {
   e.stopPropagation();
 }
 
+/** Voorkomt dat Space/Enter van dnd-kit KeyboardSensor een sleep start tijdens cel-edit. */
+function stopDragKeyboard(e: React.KeyboardEvent) {
+  e.stopPropagation();
+}
+
 function EditableCell({
   value,
   onSave,
@@ -159,7 +162,11 @@ function EditableCell({
         onBlur={commit}
         onPointerDown={stopDragPointer}
         onKeyDown={(e) => {
-          if (e.key === "Enter") commit();
+          stopDragKeyboard(e);
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commit();
+          }
           if (e.key === "Escape") {
             setEditing(false);
             setDraft(value);
@@ -209,7 +216,9 @@ function DraggableAddress({
         }}
         onPointerDown={stopDragPointer}
         onKeyDown={(e) => {
+          stopDragKeyboard(e);
           if (e.key === "Enter") {
+            e.preventDefault();
             setEditing(false);
             if (draft.trim() !== value) onSave(draft.trim());
           }
@@ -831,10 +840,11 @@ export default function LijstSjoerd({
     setContainers(groupsToContainers(groups));
   }, [groups]);
 
+  // Geen KeyboardSensor: Space/Enter bij tijdslot-bewerken startte per ongeluk een sleep
+  // (DragOverlay-popup). Slepen gaat via muis/touch.
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 6 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 6 } })
   );
 
   const submitReorder = useCallback(

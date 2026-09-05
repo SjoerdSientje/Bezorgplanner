@@ -9,7 +9,7 @@ import {
 } from "@/lib/shopify-order";
 import type { ProductDefaultItemsRulesV1 } from "@/lib/product-default-items-rules";
 import { loadProductDefaultItemsRules } from "@/lib/product-rules-server";
-import { isDatumOpmerkingVandaagOfMorgen } from "@/lib/planning-date";
+import { defaultMeenemenInPlanning } from "@/lib/planning-date";
 import { deductInventoryForMpOrder, buildInventoryDeductionLineItems } from "@/lib/inventory";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { isMpPausedForOwner } from "@/lib/mp-pause";
@@ -288,7 +288,7 @@ export async function POST(request: NextRequest) {
       ? buildMpLineItemsJson(productenLijst, productRules)
       : null;
 
-    // Bereken datum_opmerking van te voren zodat we meenemen_in_planning kunnen bepalen
+    // datum_opmerking voor bezorging (voorkeursdatum)
     const mpDatumOpmerking = soort === "bezorging"
       ? (((body.datum_voorkeur ?? "").trim().toLowerCase() === "x")
           ? "vandaag"
@@ -316,7 +316,7 @@ export async function POST(request: NextRequest) {
       line_items_json: lineItemsJson,
       datum: datumDb,
       meenemen_in_planning: soort === "bezorging"
-        ? isDatumOpmerkingVandaagOfMorgen(mpDatumOpmerking)
+        ? defaultMeenemenInPlanning(new Date())
         : false,
 
       // Bezorging defaults

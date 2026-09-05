@@ -268,6 +268,31 @@ export function isDatumOpmerkingVandaagOfMorgen(
 }
 
 /**
+ * Koopjefatbike: voor 20:00 besteld ≈ morgen in huis.
+ * Orders die tussen 20:00 en 22:00 (Amsterdam) binnenkomen → meenemen_in_planning = nee.
+ * Buiten dat venster → ja (handmatig nog steeds te wijzigen).
+ * Venster: [20:00, 22:00).
+ */
+export const MEENEMEN_NEE_WINDOW_START_HOUR_AMSTERDAM = 20;
+export const MEENEMEN_NEE_WINDOW_END_HOUR_AMSTERDAM = 22;
+
+export function isInMeenemenNeeWindowAmsterdam(at: Date = new Date()): boolean {
+  const amsterdam = getAmsterdamNow(at);
+  const minutes = amsterdam.getHours() * 60 + amsterdam.getMinutes();
+  const start = MEENEMEN_NEE_WINDOW_START_HOUR_AMSTERDAM * 60;
+  const end = MEENEMEN_NEE_WINDOW_END_HOUR_AMSTERDAM * 60;
+  return minutes >= start && minutes < end;
+}
+
+/**
+ * Standaardwaarde voor `meenemen_in_planning` bij nieuwe/geüpdatete orders.
+ * @param at Besteltijdstip (Shopify created_at) of moment van aanmaken (MP).
+ */
+export function defaultMeenemenInPlanning(at: Date = new Date()): boolean {
+  return !isInMeenemenNeeWindowAmsterdam(at);
+}
+
+/**
  * "Lijst Sjoerd" / route-genereren-pool: een order telt hier alleen als klaar wanneer
  * meenemen_in_planning=ja ÉN de voorkeursdatum ("Datum opmerking") op dit moment naar
  * vandaag of morgen wijst. Voorkomt dat orders die ooit (lang geleden) op meenemen=ja zijn
