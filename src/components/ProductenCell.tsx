@@ -3,10 +3,10 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { stripMpDummyPricesFromLineItemsJsonString } from "@/lib/line-items-json-sanitize";
 import {
-  DEFAULT_PRODUCT_RULES_V1,
+  DEFAULT_PRODUCT_RULES_V2,
   getDefaultItemsForFiets,
-  isProductDefaultItemsRulesV1,
-  type ProductDefaultItemsRulesV1,
+  normalizeProductDefaultItemsRules,
+  type ProductDefaultItemsRulesV2,
 } from "@/lib/product-default-items-rules";
 
 /** Oude MP-data: fiets op €999 dummy — tonen als €0 tot DB-migratie is gedraaid. */
@@ -255,7 +255,7 @@ export default function ProductenCell({
   const [newName, setNewName] = useState("");
   const [newPrice, setNewPrice] = useState("0");
   const [saving, setSaving] = useState(false);
-  const [productRules, setProductRules] = useState<ProductDefaultItemsRulesV1>(DEFAULT_PRODUCT_RULES_V1);
+  const [productRules, setProductRules] = useState<ProductDefaultItemsRulesV2>(DEFAULT_PRODUCT_RULES_V2);
   const ref = useRef<HTMLDivElement>(null);
 
   // Lokale display-state — wordt direct na opslaan bijgewerkt zodat de cel
@@ -285,12 +285,12 @@ export default function ProductenCell({
       .then((res) => res.json().catch(() => ({})))
       .then((data) => {
         if (cancelled) return;
-        if (isProductDefaultItemsRulesV1(data?.rules)) {
-          setProductRules(data.rules);
+        if (data?.rules) {
+          setProductRules(normalizeProductDefaultItemsRules(data.rules));
         }
       })
       .catch(() => {
-        // Fallback blijft DEFAULT_PRODUCT_RULES_V1.
+        // Fallback blijft DEFAULT_PRODUCT_RULES_V2.
       });
     return () => {
       cancelled = true;

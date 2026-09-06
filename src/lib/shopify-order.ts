@@ -4,16 +4,16 @@
  */
 
 import {
-  DEFAULT_PRODUCT_RULES_V1,
+  DEFAULT_PRODUCT_RULES_V2,
   getDefaultItemsForFiets,
-  type ProductDefaultItemsRulesV1,
+  type ProductDefaultItemsRulesV2,
 } from "@/lib/product-default-items-rules";
 import { hasLeveringProperty } from "@/lib/line-items-json-sanitize";
 import { defaultMeenemenInPlanning } from "@/lib/planning-date";
 
 export { extractModelnaamVanProduct } from "@/lib/bike-model-name";
-export type { ProductDefaultItemsRulesV1 } from "@/lib/product-default-items-rules";
-export { DEFAULT_PRODUCT_RULES_V1 } from "@/lib/product-default-items-rules";
+export type { ProductDefaultItemsRulesV2 as ProductDefaultItemsRulesV1 } from "@/lib/product-default-items-rules";
+export { DEFAULT_PRODUCT_RULES_V2 as DEFAULT_PRODUCT_RULES_V1 } from "@/lib/product-default-items-rules";
 
 export interface ShopifyAddress {
   address1?: string | null;
@@ -646,7 +646,7 @@ function parseExtrasFromManualBikeTitle(title: string): {
 function getDefaultItemsVoorFiets(
   naam: string,
   rawProperties: ShopifyLineItemProperty[],
-  rules: ProductDefaultItemsRulesV1 = DEFAULT_PRODUCT_RULES_V1
+  rules: ProductDefaultItemsRulesV2 = DEFAULT_PRODUCT_RULES_V2
 ): string[] {
   return getDefaultItemsForFiets(naam, rawProperties, rules);
 }
@@ -656,7 +656,7 @@ function getDefaultItemsVoorFiets(
  */
 export function buildStructuredLineItems(
   order: Pick<ShopifyOrder, "line_items">,
-  rules: ProductDefaultItemsRulesV1 = DEFAULT_PRODUCT_RULES_V1
+  rules: ProductDefaultItemsRulesV2 = DEFAULT_PRODUCT_RULES_V2
 ): StructuredLineItem[] {
   const items = order.line_items ?? [];
   if (!items.length) return [];
@@ -770,7 +770,7 @@ export function buildStructuredLineItems(
  */
 export function buildLineItemsJson(
   order: ShopifyOrder,
-  rules: ProductDefaultItemsRulesV1 = DEFAULT_PRODUCT_RULES_V1
+  rules: ProductDefaultItemsRulesV2 = DEFAULT_PRODUCT_RULES_V2
 ): string | null {
   const structured = buildStructuredLineItems(order, rules);
   if (!structured.length) return null;
@@ -863,7 +863,7 @@ function getMpTagFromShopifyOrderTags(order: ShopifyOrder): string | null {
 /** Zet een Shopify-order om naar één rij voor Ritjes voor vandaag (orders-tabel). */
 export function mapShopifyOrderToRitjesRow(
   order: ShopifyOrder,
-  rules: ProductDefaultItemsRulesV1 = DEFAULT_PRODUCT_RULES_V1
+  rules: ProductDefaultItemsRulesV2 = DEFAULT_PRODUCT_RULES_V2
 ): RitjesOrderRow {
   const noteParsed = parseNote(order.note);
   const volledigAdres = getVolledigAdres(order);

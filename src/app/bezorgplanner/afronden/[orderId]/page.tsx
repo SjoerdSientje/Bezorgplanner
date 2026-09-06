@@ -5,10 +5,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Header from "@/components/Header";
 import {
-  DEFAULT_PRODUCT_RULES_V1,
+  DEFAULT_PRODUCT_RULES_V2,
   getDefaultItemsForFiets,
-  isProductDefaultItemsRulesV1,
-  type ProductDefaultItemsRulesV1,
+  normalizeProductDefaultItemsRules,
+  type ProductDefaultItemsRulesV2,
 } from "@/lib/product-default-items-rules";
 
 type PaymentOption =
@@ -45,7 +45,7 @@ function shouldIgnoreAfrondenChecklistItem(label: string): boolean {
 
 function parseChecklist(
   order: OrderDetail,
-  rules: ProductDefaultItemsRulesV1
+  rules: ProductDefaultItemsRulesV2
 ): Array<{ label: string; count: number }> {
   const counts = new Map<string, number>();
   const add = (s: string) => {
@@ -94,12 +94,14 @@ export default function AfrondenVragenlijstPage({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [productRules, setProductRules] = useState<ProductDefaultItemsRulesV1>(DEFAULT_PRODUCT_RULES_V1);
+  const [productRules, setProductRules] = useState<ProductDefaultItemsRulesV2>(DEFAULT_PRODUCT_RULES_V2);
 
   useEffect(() => {
     fetch(`/api/product-rules?t=${Date.now()}`, { cache: "no-store" })
       .then((r) => r.json().catch(() => ({})))
-      .then((d) => { if (isProductDefaultItemsRulesV1(d?.rules)) setProductRules(d.rules); })
+      .then((d) => {
+        if (d?.rules) setProductRules(normalizeProductDefaultItemsRules(d.rules));
+      })
       .catch(() => {});
   }, []);
 

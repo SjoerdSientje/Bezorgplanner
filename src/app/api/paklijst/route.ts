@@ -4,10 +4,10 @@ import { requireAccountEmail } from "@/lib/account";
 import { isDatumOpmerkingVandaagOfMorgen } from "@/lib/planning-date";
 import { isIncompleteMpOrder, isMpPausedForOwner } from "@/lib/mp-pause";
 import {
-  DEFAULT_PRODUCT_RULES_V1,
+  DEFAULT_PRODUCT_RULES_V2,
   getDefaultItemsForFiets,
-  isProductDefaultItemsRulesV1,
-  type ProductDefaultItemsRulesV1,
+  normalizeProductDefaultItemsRules,
+  type ProductDefaultItemsRulesV2,
 } from "@/lib/product-default-items-rules";
 
 export const dynamic = "force-dynamic";
@@ -56,7 +56,7 @@ function parseProductsTextFallback(producten: unknown): LineItemFromJson[] {
 }
 
 /** Haal opgeslagen product-rules op, val terug op hardcoded defaults. */
-async function loadProductRules(ownerEmail: string): Promise<ProductDefaultItemsRulesV1> {
+async function loadProductRules(ownerEmail: string): Promise<ProductDefaultItemsRulesV2> {
   try {
     const supabase = createServerSupabaseClient();
     const { data: row } = await supabase
@@ -65,15 +65,15 @@ async function loadProductRules(ownerEmail: string): Promise<ProductDefaultItems
       .eq("owner_email", ownerEmail)
       .eq("id", "default")
       .maybeSingle();
-    if (row?.rules != null && isProductDefaultItemsRulesV1(row.rules)) return row.rules;
+    if (row?.rules != null) return normalizeProductDefaultItemsRules(row.rules);
   } catch { /* gebruik default */ }
-  return DEFAULT_PRODUCT_RULES_V1;
+  return DEFAULT_PRODUCT_RULES_V2;
 }
 
 /** Herbereken defaultItems voor een fiets-item vanuit actuele rules. */
 function liveDefaultItems(
   item: LineItemFromJson,
-  rules: ProductDefaultItemsRulesV1
+  rules: ProductDefaultItemsRulesV2
 ): string[] {
   if (!item.isFiets) return [];
   return getDefaultItemsForFiets(item.name, item.properties ?? [], rules);

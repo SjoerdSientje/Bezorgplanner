@@ -7,9 +7,10 @@ import Header from "@/components/Header";
 import AdresAutocomplete from "@/components/AdresAutocomplete";
 import ProductAutocomplete from "@/components/ProductAutocomplete";
 import {
-  DEFAULT_PRODUCT_RULES_V1,
+  DEFAULT_PRODUCT_RULES_V2,
   getDefaultItemsForFiets,
-  type ProductDefaultItemsRulesV1,
+  normalizeProductDefaultItemsRules,
+  type ProductDefaultItemsRulesV2,
 } from "@/lib/product-default-items-rules";
 
 type Soort = "bezorging" | "afhaal";
@@ -154,7 +155,7 @@ function StandaardProductenLijst({
 }: {
   naam: string;
   levering: Levering;
-  rules: ProductDefaultItemsRulesV1;
+  rules: ProductDefaultItemsRulesV2;
 }) {
   const trimmed = naam.trim();
   if (!trimmed) return null;
@@ -192,13 +193,13 @@ export default function NieuwMarktplaatsOrderClient() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [garantieWarning, setGarantieWarning] = useState<string | null>(null);
-  const [productRules, setProductRules] = useState<ProductDefaultItemsRulesV1>(DEFAULT_PRODUCT_RULES_V1);
+  const [productRules, setProductRules] = useState<ProductDefaultItemsRulesV2>(DEFAULT_PRODUCT_RULES_V2);
 
   useEffect(() => {
     fetch("/api/product-rules")
       .then((res) => res.json())
-      .then((data: { rules?: ProductDefaultItemsRulesV1 }) => {
-        if (data.rules) setProductRules(data.rules);
+      .then((data: { rules?: unknown }) => {
+        if (data.rules) setProductRules(normalizeProductDefaultItemsRules(data.rules));
       })
       .catch(() => {});
   }, []);

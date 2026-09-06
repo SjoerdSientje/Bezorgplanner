@@ -18,7 +18,8 @@ import {
   isInventoryMarketingOverlayTitle,
   type InventoryStockKeyInfo,
 } from "@/lib/inventory-stock-key";
-import type { ProductDefaultItemsRulesV1 } from "@/lib/product-default-items-rules";
+import type { ProductDefaultItemsRulesV2 } from "@/lib/product-default-items-rules";
+import { getResolvedDefaultItemsForFiets } from "@/lib/product-default-items-rules";
 import { loadProductDefaultItemsRules } from "@/lib/product-rules-server";
 import {
   isExcludedFromInventory,
@@ -76,6 +77,8 @@ export type LineItemForDeduction = {
   quantity?: number | null;
   product_id?: string | number | null;
   variant_id?: string | number | null;
+  /** Directe koppeling naar inventory_products.id (standaard-inbegrepen met voorraadregel). */
+  inventory_product_id?: string | null;
 };
 
 type InventoryGroup = {
@@ -693,6 +696,25 @@ async function findProductForLineItem(
   ownerEmail: string,
   item: LineItemForDeduction
 ): Promise<InventoryProductRow | null> {
+  const inventoryProductId = String(item.inventory_product_id ?? "").trim();
+  if (inventoryProductId) {
+    const { data } = await supabase
+      .from("inventory_products")
+      .select("*")
+      .eq("owner_email", ownerEmail)
+      .eq("id", inventoryProductId)
+      .maybeSingle();
+    if (data) {
+      return (
+        (await resolveCanonicalInventoryProduct(
+          supabase,
+          ownerEmail,
+          data as InventoryProductRow
+        )) ?? (data as InventoryProductRow)
+      );
+    }
+  }
+
   const variantId = item.variant_id != null ? Number(item.variant_id) : NaN;
   if (Number.isFinite(variantId) && variantId > 0) {
     const { data } = await supabase
@@ -802,8 +824,10 @@ function mergeDeductionLineItems(items: LineItemForDeduction[]): LineItemForDedu
 
   for (const item of items) {
     const name = String(item.name ?? "").trim();
-    if (!name) continue;
-    const key = normalizeDeductionName(name);
+    if (!name && !item.inventory_product_id) continue;
+    const key = item.inventory_product_id
+      ? `id:${item.inventory_product_id}`
+      : normalizeDeductionName(name);
     const qty = Math.max(1, Math.floor(Number(item.quantity ?? 1)));
     const existing = map.get(key);
 
@@ -816,6 +840,9 @@ function mergeDeductionLineItems(items: LineItemForDeduction[]): LineItemForDedu
     if (!existing.variant_id && item.variant_id) {
       existing.product_id = item.product_id;
       existing.variant_id = item.variant_id;
+    }
+    if (!existing.inventory_product_id && item.inventory_product_id) {
+      existing.inventory_product_id = item.inventory_product_id;
     }
   }
 
@@ -831,7 +858,8 @@ function appendBikeDeductionItems(
     variant_id?: string | number | null;
     defaultItems: string[];
   },
-  explicitOrderNames?: Set<string>
+  explicitOrderNames?: Set<string>,
+  resolvedDefaults?: { label: string; inventoryProductId: string | null }[]
 ): void {
   out.push({
     name: row.name,
@@ -840,17 +868,26 @@ function appendBikeDeductionItems(
     variant_id: row.variant_id ?? undefined,
   });
 
-  for (const defaultName of row.defaultItems) {
-    if (shouldSkipInventoryDeductionLineItem(defaultName)) continue;
+  const defaults =
+    resolvedDefaults ??
+    row.defaultItems.map((label) => ({ label, inventoryProductId: null as string | null }));
+
+  for (const d of defaults) {
+    const defaultName = d.label;
+    if (!d.inventoryProductId && shouldSkipInventoryDeductionLineItem(defaultName)) continue;
     if (explicitOrderNames?.has(normalizeDeductionName(defaultName))) continue;
-    out.push({ name: defaultName, quantity: 1 });
+    out.push({
+      name: defaultName,
+      quantity: 1,
+      inventory_product_id: d.inventoryProductId,
+    });
   }
 }
 
 /** Bouw volledige aftreklijst: fiets + standaardproducten + family-deal + extra's. */
 export function buildInventoryDeductionLineItems(
   lineItems: ShopifyLineItem[],
-  rules: ProductDefaultItemsRulesV1
+  rules: ProductDefaultItemsRulesV2
 ): LineItemForDeduction[] {
   if (!lineItems.length) return [];
 
@@ -866,7 +903,12 @@ export function buildInventoryDeductionLineItems(
     if (shouldSkipInventoryDeductionLineItem(row.name)) continue;
 
     if (row.isFiets) {
-      appendBikeDeductionItems(out, row, explicitOrderNames);
+      const resolved = getResolvedDefaultItemsForFiets(
+        row.name,
+        row.properties ?? [],
+        rules
+      );
+      appendBikeDeductionItems(out, row, explicitOrderNames, resolved);
     } else {
       out.push({
         name: row.name,

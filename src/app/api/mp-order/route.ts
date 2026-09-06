@@ -7,7 +7,7 @@ import {
   buildLineItemsJson,
   type ShopifyLineItem,
 } from "@/lib/shopify-order";
-import type { ProductDefaultItemsRulesV1 } from "@/lib/product-default-items-rules";
+import type { ProductDefaultItemsRulesV2 } from "@/lib/product-default-items-rules";
 import { loadProductDefaultItemsRules } from "@/lib/product-rules-server";
 import { defaultMeenemenInPlanning } from "@/lib/planning-date";
 import { deductInventoryForMpOrder, buildInventoryDeductionLineItems } from "@/lib/inventory";
@@ -118,7 +118,7 @@ function buildMpShopifyLineItems(productenLijst: ProductRegel[]): ShopifyLineIte
 
 function buildMpLineItemsJson(
   productenLijst: ProductRegel[],
-  rules: ProductDefaultItemsRulesV1
+  rules: ProductDefaultItemsRulesV2
 ): string | null {
   const lineItems = buildMpShopifyLineItems(productenLijst);
   if (!lineItems.length) return null;
@@ -145,7 +145,7 @@ function collectMpUnmountedAccessoryDeductions(
 /** Voorraadaftrek: fiets + standaardproducten + family-deal + extras (ook “Apart in doos”). */
 function buildMpDeductionLineItems(
   productenLijst: ProductRegel[],
-  rules: ProductDefaultItemsRulesV1
+  rules: ProductDefaultItemsRulesV2
 ) {
   const lineItems = buildMpShopifyLineItems(productenLijst);
   if (!lineItems.length) return [];

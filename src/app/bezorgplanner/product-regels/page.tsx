@@ -5,13 +5,14 @@ import Link from "next/link";
 import Header from "@/components/Header";
 import ProductRulesForm from "@/components/ProductRulesForm";
 import {
-  DEFAULT_PRODUCT_RULES_V1,
-  isProductDefaultItemsRulesV1,
+  DEFAULT_PRODUCT_RULES_V2,
+  isProductDefaultItemsRules,
+  normalizeProductDefaultItemsRules,
 } from "@/lib/product-default-items-rules";
-import type { ProductDefaultItemsRulesV1 } from "@/lib/product-default-items-rules";
+import type { ProductDefaultItemsRulesV2 } from "@/lib/product-default-items-rules";
 
 export default function ProductRegelsPage() {
-  const [rules, setRules] = useState<ProductDefaultItemsRulesV1>(DEFAULT_PRODUCT_RULES_V1);
+  const [rules, setRules] = useState<ProductDefaultItemsRulesV2>(DEFAULT_PRODUCT_RULES_V2);
   const [jsonDraft, setJsonDraft] = useState("");
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [fromDatabase, setFromDatabase] = useState(false);
@@ -27,7 +28,7 @@ export default function ProductRegelsPage() {
       const res = await fetch(`/api/product-rules?t=${Date.now()}`, { cache: "no-store" });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? "Laden mislukt");
-      const loaded = data.rules as ProductDefaultItemsRulesV1;
+      const loaded = normalizeProductDefaultItemsRules(data.rules);
       setRules(loaded);
       setJsonDraft(JSON.stringify(loaded, null, 2));
       setUpdatedAt(data.updated_at ?? null);
@@ -57,8 +58,9 @@ export default function ProductRegelsPage() {
       if (!res.ok) throw new Error(data?.error ?? "Opslaan mislukt");
       setMessage("Opgeslagen. Nieuwe bestellingen gebruiken deze regels.");
       if (data.rules) {
-        setRules(data.rules);
-        setJsonDraft(JSON.stringify(data.rules, null, 2));
+        const next = normalizeProductDefaultItemsRules(data.rules);
+        setRules(next);
+        setJsonDraft(JSON.stringify(next, null, 2));
       }
       await load();
     } catch (e) {
@@ -69,8 +71,8 @@ export default function ProductRegelsPage() {
   };
 
   const resetDefault = () => {
-    setRules(DEFAULT_PRODUCT_RULES_V1);
-    setJsonDraft(JSON.stringify(DEFAULT_PRODUCT_RULES_V1, null, 2));
+    setRules(DEFAULT_PRODUCT_RULES_V2);
+    setJsonDraft(JSON.stringify(DEFAULT_PRODUCT_RULES_V2, null, 2));
     setMessage(
       "Standaardregels ingeladen. Klik op Opslaan om dit definitief te maken."
     );
@@ -81,12 +83,13 @@ export default function ProductRegelsPage() {
     setMessage(null);
     try {
       const parsed: unknown = JSON.parse(jsonDraft);
-      if (!isProductDefaultItemsRulesV1(parsed)) {
+      if (!isProductDefaultItemsRules(parsed)) {
         throw new Error(
-          "De JSON klopt niet. Controleer of alle onderdelen aanwezig zijn (versie 1)."
+          "De JSON klopt niet. Verwacht version 2 (of oude version 1)."
         );
       }
-      setRules(parsed);
+      const normalized = normalizeProductDefaultItemsRules(parsed);
+      setRules(normalized);
       setMessage("JSON toegepast op het formulier hierboven. Vergeet niet op Opslaan te klikken.");
     } catch (e) {
       if (e instanceof SyntaxError) {
@@ -101,7 +104,7 @@ export default function ProductRegelsPage() {
     <>
       <Header />
       <main className="min-h-[calc(100vh-4rem)] bg-white">
-        <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 sm:py-12">
+        <div className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6 sm:py-12">
           <div className="mb-6 flex items-center gap-4">
             <Link
               href="/bezorgplanner"
@@ -118,11 +121,11 @@ export default function ProductRegelsPage() {
           </div>
 
           <p className="text-sm leading-relaxed text-stone-700">
-            Hier bepaal je welke items automatisch bij een fiets horen op de paklijst en in
-            het productoverzicht — afhankelijk van <strong>hoe de fiets geleverd wordt</strong>{" "}
-            (volledig rijklaar of in de doos) en <strong>welk model</strong> het is. Wijzigingen
-            gelden voor <strong>nieuwe</strong> orders; bestaande orders in het overzicht blijven
-            zoals ze waren.
+            Hier bepaal je welke items automatisch bij een fiets horen — met of zonder
+            voorraadkoppeling. Per regel kies je een <strong>voorraadregel</strong> (wordt
+            afgeschreven) of een <strong>tekstregel</strong> (alleen op de paklijst, zoals
+            opladerdoosje). Uitzonderingen en model-extra&apos;s regel je per leverwijze.
+            Wijzigingen gelden voor <strong>nieuwe</strong> orders.
           </p>
 
           <details className="mt-5 rounded-xl border border-stone-200 bg-stone-50/90 p-4 text-sm text-stone-700">
@@ -131,12 +134,8 @@ export default function ProductRegelsPage() {
             </summary>
             <ul className="mt-3 list-inside list-disc space-y-2 pl-0.5">
               <li>
-                Deze instellingen sturen alleen de lijst &quot;standaard inbegrepen&quot;, op basis van
-                de keuze <strong>Levering</strong> en het <strong>model</strong> uit de productnaam.
-              </li>
-              <li>
-                <strong>Marktplaats</strong>: bij een nieuwe order vult het formulier Levering in;
-                dezelfde regels worden gebruikt als bij de webshop.
+                <strong>Marktplaats</strong>: bij een nieuwe order vult het formulier Levering
+                in; dezelfde regels worden gebruikt als bij de webshop.
               </li>
               <li>
                 <strong>Webshop (Shopify)</strong>: orders komen binnen met productregels en
@@ -207,8 +206,7 @@ export default function ProductRegelsPage() {
                   Geavanceerd: ruwe JSON (alleen voor technische beheerders)
                 </summary>
                 <p className="mt-3 text-xs text-stone-600">
-                  Zelfde inhoud als het formulier; gebruik alleen als je bulk-import of
-                  copy-paste vanuit een andere omgeving nodig hebt. Na wijzigingen:{" "}
+                  Zelfde inhoud als het formulier (version 2). Na wijzigingen:{" "}
                   <strong>Pas JSON toe</strong> en daarna <strong>Opslaan</strong>.
                 </p>
                 <textarea

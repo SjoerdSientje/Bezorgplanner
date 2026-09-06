@@ -2,16 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { requireAccountEmail } from "@/lib/account";
 import {
-  DEFAULT_PRODUCT_RULES_V1,
-  isProductDefaultItemsRulesV1,
-  type ProductDefaultItemsRulesV1,
+  DEFAULT_PRODUCT_RULES_V2,
+  isProductDefaultItemsRules,
+  normalizeProductDefaultItemsRules,
+  type ProductDefaultItemsRulesV2,
 } from "@/lib/product-default-items-rules";
 
 export const dynamic = "force-dynamic";
 
 /**
- * GET: huidige regels (DB of default)
- * PUT: volledige regels overschrijven (JSON body { rules })
+ * GET: huidige regels (DB of default), altijd als v2
+ * PUT: volledige regels overschrijven (JSON body { rules } — version 2)
  */
 export async function GET(request: NextRequest) {
   try {
@@ -24,16 +25,16 @@ export async function GET(request: NextRequest) {
       .eq("id", "default")
       .maybeSingle();
 
-    const rules: ProductDefaultItemsRulesV1 =
-      row?.rules != null && isProductDefaultItemsRulesV1(row.rules)
-        ? row.rules
-        : DEFAULT_PRODUCT_RULES_V1;
+    const fromDatabase = Boolean(row?.rules);
+    const rules: ProductDefaultItemsRulesV2 = fromDatabase
+      ? normalizeProductDefaultItemsRules(row!.rules)
+      : DEFAULT_PRODUCT_RULES_V2;
 
     return NextResponse.json(
       {
         rules,
         updated_at: row?.updated_at ?? null,
-        fromDatabase: Boolean(row?.rules && isProductDefaultItemsRulesV1(row.rules)),
+        fromDatabase,
       },
       { headers: { "Cache-Control": "no-store" } }
     );
@@ -50,13 +51,14 @@ export async function PUT(request: NextRequest) {
     const ownerEmail = requireAccountEmail(request);
     const body = await request.json().catch(() => ({}));
     const candidate = body.rules as unknown;
-    if (!isProductDefaultItemsRulesV1(candidate)) {
+    if (!isProductDefaultItemsRules(candidate)) {
       return NextResponse.json(
-        { error: "Ongeldige regels (verwacht version: 1 met verplichte arrays)." },
+        { error: "Ongeldige regels (verwacht version 1 of 2)." },
         { status: 400 }
       );
     }
-    const rules = candidate as ProductDefaultItemsRulesV1;
+    // Accepteer v1 (migratie) of v2; sla altijd v2 op.
+    const rules = normalizeProductDefaultItemsRules(candidate);
 
     const supabase = createServerSupabaseClient();
     const { error } = await supabase.from("product_default_items_rules").upsert(
