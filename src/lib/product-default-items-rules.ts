@@ -350,29 +350,84 @@ const FAMILY_DEAL_SET_C = [
   "Windscherm Qibbel",
 ] as const;
 
-export function getFamilyDealDefaultItems(bikeName: string): string[] {
+type FamilySeatChoice = "beide" | "achter" | "voor";
+
+/**
+ * Shopify line-item property `Kinderzitjes` (zelfde patroon als `Levering`).
+ * Voorbeelden: "Beide", "Alleen achter (-€100)", "Alleen voor (-€100)".
+ */
+export function parseFamilyKinderzitjesChoice(
+  rawProperties: ProductRuleLineProperty[]
+): FamilySeatChoice | null {
+  const raw =
+    rawProperties.find((p) => p.name?.toLowerCase().trim() === "kinderzitjes")
+      ?.value ?? "";
+  const v = String(raw).trim().toLowerCase();
+  if (!v) return null;
+
+  if (/\bbeide\b/.test(v)) return "beide";
+
+  const hasAchter = /\bachter\b/.test(v);
+  const hasVoor = /\bvoor\b/.test(v);
+  if (hasAchter && !hasVoor) return "achter";
+  if (hasVoor && !hasAchter) return "voor";
+  if (/\balleen\s+achter\b/.test(v)) return "achter";
+  if (/\balleen\s+voor\b/.test(v)) return "voor";
+
+  return "beide";
+}
+
+function familyItemRole(label: string): "achter" | "voor" | "windscherm" | "other" {
+  const n = label.toLowerCase();
+  if (n.includes("windscherm")) return "windscherm";
+  if (n.includes("achter")) return "achter";
+  if (n.includes("voor")) return "voor";
+  return "other";
+}
+
+/** Filter family-set op klantkeuze; windscherm hoort bij voorzitje. */
+function filterFamilyItemsBySeatChoice(
+  items: readonly string[],
+  choice: FamilySeatChoice | null
+): string[] {
+  // Geen property (oude/MP orders): volledige set, zoals voorheen.
+  if (!choice || choice === "beide") return [...items];
+
+  return items.filter((label) => {
+    const role = familyItemRole(label);
+    if (choice === "achter") return role === "achter" || role === "other";
+    // alleen voor: voorzitje + windscherm
+    return role === "voor" || role === "windscherm" || role === "other";
+  });
+}
+
+export function getFamilyDealDefaultItems(
+  bikeName: string,
+  rawProperties: ProductRuleLineProperty[] = []
+): string[] {
   const name = String(bikeName ?? "").trim();
   if (!/family/i.test(name)) return [];
+
+  let set: readonly string[] = [];
 
   if (
     /OUXI\s+V8\s+6\.0\s*\(?C80\)?.*Junior\s*6\+/i.test(name) ||
     /ENGWE\s+E26.*Junior\s*6\+\s*&\s*Peuter/i.test(name)
   ) {
-    return [...FAMILY_DEAL_SET_C];
-  }
-
-  if (
+    set = FAMILY_DEAL_SET_C;
+  } else if (
     /OUXI\s+V8\s+6\.0\s*\(?C80\)?/i.test(name) ||
     (/ENGWE\s+E26/i.test(name) && /Peuter/i.test(name))
   ) {
-    return [...FAMILY_DEAL_SET_B];
+    set = FAMILY_DEAL_SET_B;
+  } else if (/V20\s*PRO\s+Fatbike/i.test(name) || /ENGWE\s+L20\s+Boost/i.test(name)) {
+    set = FAMILY_DEAL_SET_A;
+  } else {
+    return [];
   }
 
-  if (/V20\s*PRO\s+Fatbike/i.test(name) || /ENGWE\s+L20\s+Boost/i.test(name)) {
-    return [...FAMILY_DEAL_SET_A];
-  }
-
-  return [];
+  const choice = parseFamilyKinderzitjesChoice(rawProperties);
+  return filterFamilyItemsBySeatChoice(set, choice);
 }
 
 export function getResolvedDefaultItemsForFiets(
@@ -381,7 +436,7 @@ export function getResolvedDefaultItemsForFiets(
   rules: ProductDefaultItemsRulesV2
 ): ResolvedDefaultItem[] {
   const base = applyProductDefaultItemsRulesResolved(naam, rawProperties, rules);
-  const family = getFamilyDealDefaultItems(naam);
+  const family = getFamilyDealDefaultItems(naam, rawProperties);
   if (family.length === 0) return base;
 
   const seen = new Set(base.map((s) => s.label.toLowerCase()));
