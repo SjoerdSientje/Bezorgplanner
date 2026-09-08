@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import Header from "@/components/Header";
+import IncomingDeliveriesModal from "@/components/IncomingDeliveriesModal";
 import {
   LOW_STOCK_THRESHOLD,
   type InventoryMutationGroup,
@@ -93,6 +94,7 @@ export default function VoorraadbeheerPage() {
   const [message, setMessage] = useState<string | null>(null);
 
   const [mutationsOpen, setMutationsOpen] = useState(false);
+  const [incomingOpen, setIncomingOpen] = useState(false);
   const [mutationsLoading, setMutationsLoading] = useState(false);
   const [mutationsError, setMutationsError] = useState<string | null>(null);
   const [mutationGroups, setMutationGroups] = useState<InventoryMutationGroup[]>([]);
@@ -768,14 +770,23 @@ export default function VoorraadbeheerPage() {
                 </p>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => load(true)}
-              disabled={syncing}
-              className="rounded-xl border border-koopje-black/20 bg-white px-4 py-2 text-sm font-medium text-koopje-black hover:bg-koopje-black/5 disabled:opacity-50"
-            >
-              {syncing ? "Synchroniseren…" : "Opnieuw syncen"}
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setIncomingOpen(true)}
+                className="rounded-xl border border-koopje-orange/40 bg-orange-50 px-4 py-2 text-sm font-medium text-koopje-black hover:bg-orange-100"
+              >
+                Inkomende leveringen
+              </button>
+              <button
+                type="button"
+                onClick={() => load(true)}
+                disabled={syncing}
+                className="rounded-xl border border-koopje-black/20 bg-white px-4 py-2 text-sm font-medium text-koopje-black hover:bg-koopje-black/5 disabled:opacity-50"
+              >
+                {syncing ? "Synchroniseren…" : "Opnieuw syncen"}
+              </button>
+            </div>
           </div>
 
           {stats && (
@@ -1138,6 +1149,8 @@ export default function VoorraadbeheerPage() {
           </div>
         </>
       )}
+
+      <IncomingDeliveriesModal open={incomingOpen} onClose={() => setIncomingOpen(false)} />
     </>
   );
 }
