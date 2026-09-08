@@ -22,6 +22,12 @@ import type { ProductDefaultItemsRulesV2 } from "@/lib/product-default-items-rul
 import { getResolvedDefaultItemsForFiets } from "@/lib/product-default-items-rules";
 import { loadProductDefaultItemsRules } from "@/lib/product-rules-server";
 import {
+  fetchMoneybirdProductById,
+  findProductByIdentifier,
+  isMoneybirdConfigured,
+  shopifyProductIdentifier,
+} from "@/lib/moneybird";
+import {
   isExcludedFromInventory,
   resolveBundleDeduction,
   shouldSkipInventoryDeductionLineItem,
@@ -51,6 +57,8 @@ export type InventoryProductRow = {
   model_name: string | null;
   color_name: string | null;
   shopify_variant_ids: number[];
+  /** Moneybird product ids gekoppeld aan deze voorraadrij (via Shopify product sync). */
+  moneybird_product_ids: string[];
   levertijd: string | null;
   opmerking: string | null;
   last_mutation_source: InventorySource | null;
@@ -79,6 +87,8 @@ export type LineItemForDeduction = {
   variant_id?: string | number | null;
   /** Directe koppeling naar inventory_products.id (standaard-inbegrepen met voorraadregel). */
   inventory_product_id?: string | null;
+  /** Moneybird product id (factuurregel) → inventory_products.moneybird_product_ids. */
+  moneybird_product_id?: string | null;
 };
 
 type InventoryGroup = {
@@ -567,6 +577,24 @@ export async function syncInventoryFromShopify(
     removedTotal += excludedByTitle?.length ?? 0;
   }
 
+  try {
+    const links = await backfillMoneybirdProductLinksForOwner(supabase, ownerEmail);
+    if (links.linked > 0) {
+      console.info(
+        "[inventory] moneybird product links backfill",
+        links.checked,
+        "checked,",
+        links.linked,
+        "rows linked"
+      );
+    }
+  } catch (err) {
+    console.warn(
+      "[inventory] moneybird link backfill failed:",
+      err instanceof Error ? err.message : err
+    );
+  }
+
   return { inserted, updated, removed: removedTotal, total: variantCount };
 }
 
@@ -715,6 +743,27 @@ async function findProductForLineItem(
     }
   }
 
+  const moneybirdProductId = String(item.moneybird_product_id ?? "").trim();
+  if (moneybirdProductId) {
+    const { data: byMb } = await supabase
+      .from("inventory_products")
+      .select("*")
+      .eq("owner_email", ownerEmail)
+      .contains("moneybird_product_ids", [moneybirdProductId])
+      .order("stock_quantity", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (byMb) {
+      return (
+        (await resolveCanonicalInventoryProduct(
+          supabase,
+          ownerEmail,
+          byMb as InventoryProductRow
+        )) ?? (byMb as InventoryProductRow)
+      );
+    }
+  }
+
   const variantId = item.variant_id != null ? Number(item.variant_id) : NaN;
   if (Number.isFinite(variantId) && variantId > 0) {
     const { data } = await supabase
@@ -784,6 +833,156 @@ async function resolveCanonicalInventoryProduct(
   return (data as InventoryProductRow | null) ?? row;
 }
 
+function normalizeMoneybirdProductIds(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const v of raw) {
+    const id = String(v ?? "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+/**
+ * Koppel een Moneybird-product-id aan alle voorraadrijen die bij dit Shopify-product horen
+ * (op shopify_product_id én/of gedeelde variant-ids, o.a. family/combi-overlays).
+ */
+export async function attachMoneybirdProductIdToInventory(
+  supabase: SupabaseClient,
+  ownerEmail: string,
+  params: {
+    moneybirdProductId: string;
+    shopifyProductId: number;
+    shopifyVariantIds?: number[];
+  }
+): Promise<number> {
+  const mbId = String(params.moneybirdProductId ?? "").trim();
+  if (!mbId) return 0;
+
+  const rowsById = new Map<string, { id: string; moneybird_product_ids: string[] }>();
+
+  const { data: byProduct } = await supabase
+    .from("inventory_products")
+    .select("id, moneybird_product_ids")
+    .eq("owner_email", ownerEmail)
+    .eq("shopify_product_id", params.shopifyProductId);
+
+  for (const row of byProduct ?? []) {
+    rowsById.set(String(row.id), {
+      id: String(row.id),
+      moneybird_product_ids: normalizeMoneybirdProductIds(row.moneybird_product_ids),
+    });
+  }
+
+  const variantIds = (params.shopifyVariantIds ?? []).filter(
+    (id) => Number.isFinite(id) && id > 0
+  );
+  for (const variantId of variantIds) {
+    const { data } = await supabase
+      .from("inventory_products")
+      .select("id, moneybird_product_ids")
+      .eq("owner_email", ownerEmail)
+      .contains("shopify_variant_ids", [variantId]);
+    for (const row of data ?? []) {
+      const id = String(row.id);
+      if (rowsById.has(id)) continue;
+      rowsById.set(id, {
+        id,
+        moneybird_product_ids: normalizeMoneybirdProductIds(row.moneybird_product_ids),
+      });
+    }
+  }
+
+  let updated = 0;
+  for (const row of Array.from(rowsById.values())) {
+    if (row.moneybird_product_ids.includes(mbId)) continue;
+    const next = [...row.moneybird_product_ids, mbId];
+    const { error } = await supabase
+      .from("inventory_products")
+      .update({ moneybird_product_ids: next })
+      .eq("id", row.id)
+      .eq("owner_email", ownerEmail);
+    if (!error) updated++;
+  }
+  return updated;
+}
+
+export async function detachMoneybirdProductIdFromInventory(
+  supabase: SupabaseClient,
+  ownerEmail: string,
+  moneybirdProductId: string
+): Promise<number> {
+  const mbId = String(moneybirdProductId ?? "").trim();
+  if (!mbId) return 0;
+
+  const { data } = await supabase
+    .from("inventory_products")
+    .select("id, moneybird_product_ids")
+    .eq("owner_email", ownerEmail)
+    .contains("moneybird_product_ids", [mbId]);
+
+  let updated = 0;
+  for (const row of data ?? []) {
+    const current = normalizeMoneybirdProductIds(row.moneybird_product_ids);
+    const next = current.filter((id) => id !== mbId);
+    if (next.length === current.length) continue;
+    const { error } = await supabase
+      .from("inventory_products")
+      .update({ moneybird_product_ids: next })
+      .eq("id", row.id)
+      .eq("owner_email", ownerEmail);
+    if (!error) updated++;
+  }
+  return updated;
+}
+
+/**
+ * Backfill: Moneybird-producten (identifier = Shopify product-id) koppelen aan voorraadrijen
+ * die nog geen moneybird_product_ids hebben voor dat Shopify-product.
+ */
+export async function backfillMoneybirdProductLinksForOwner(
+  supabase: SupabaseClient,
+  ownerEmail: string
+): Promise<{ checked: number; linked: number }> {
+  if (!isMoneybirdConfigured()) return { checked: 0, linked: 0 };
+
+  const { data: rows } = await supabase
+    .from("inventory_products")
+    .select("shopify_product_id, shopify_variant_ids, moneybird_product_ids")
+    .eq("owner_email", ownerEmail);
+
+  const shopifyIds = new Set<number>();
+  for (const row of rows ?? []) {
+    const pid = Number(row.shopify_product_id);
+    if (Number.isFinite(pid) && pid > 0) shopifyIds.add(pid);
+  }
+
+  let checked = 0;
+  let linked = 0;
+  for (const shopifyProductId of Array.from(shopifyIds)) {
+    checked++;
+    try {
+      const mb = await findProductByIdentifier(shopifyProductIdentifier(shopifyProductId));
+      if (!mb?.id) continue;
+      const n = await attachMoneybirdProductIdToInventory(supabase, ownerEmail, {
+        moneybirdProductId: mb.id,
+        shopifyProductId,
+      });
+      linked += n;
+    } catch (err) {
+      console.warn(
+        "[inventory] moneybird link backfill",
+        shopifyProductId,
+        err instanceof Error ? err.message : err
+      );
+    }
+  }
+  return { checked, linked };
+}
+
 /** Eén canoniek product per group_key (voorkomt mutaties op dubbele rijen). */
 export async function resolveCanonicalInventoryProductId(
   supabase: SupabaseClient,
@@ -824,10 +1023,12 @@ function mergeDeductionLineItems(items: LineItemForDeduction[]): LineItemForDedu
 
   for (const item of items) {
     const name = String(item.name ?? "").trim();
-    if (!name && !item.inventory_product_id) continue;
+    if (!name && !item.inventory_product_id && !item.moneybird_product_id) continue;
     const key = item.inventory_product_id
       ? `id:${item.inventory_product_id}`
-      : normalizeDeductionName(name);
+      : item.moneybird_product_id
+        ? `mb:${item.moneybird_product_id}`
+        : normalizeDeductionName(name);
     const qty = Math.max(1, Math.floor(Number(item.quantity ?? 1)));
     const existing = map.get(key);
 
@@ -843,6 +1044,9 @@ function mergeDeductionLineItems(items: LineItemForDeduction[]): LineItemForDedu
     }
     if (!existing.inventory_product_id && item.inventory_product_id) {
       existing.inventory_product_id = item.inventory_product_id;
+    }
+    if (!existing.moneybird_product_id && item.moneybird_product_id) {
+      existing.moneybird_product_id = item.moneybird_product_id;
     }
   }
 
@@ -1730,6 +1934,7 @@ function parseMoneybirdAmount(amount: string | null | undefined): number {
 type MoneybirdInvoiceDetailInput = {
   description?: string | null;
   amount?: string | null;
+  product_id?: string | null;
 };
 
 type MoneybirdInvoiceInput = {
@@ -1756,12 +1961,73 @@ function moneybirdDetailsToLineItems(
     if (!name) continue;
     // Strip " (#1234)" / " (orderName)" suffix we add when creating from Shopify.
     const cleanName = name.replace(/\s*\([^)]*\)\s*$/, "").trim() || name;
+    const mbProductId = String(d.product_id ?? "").trim() || null;
     out.push({
       name: cleanName,
       quantity: parseMoneybirdAmount(d.amount),
+      moneybird_product_id: mbProductId,
     });
   }
   return mergeDeductionLineItems(out);
+}
+
+/**
+ * Als moneybird_product_ids nog niet op de voorraadrij staan: haal Moneybird-product op
+ * (identifier = Shopify product-id) en koppel + vul product_id.
+ */
+async function enrichMoneybirdLineItemsForInventory(
+  supabase: SupabaseClient,
+  ownerEmail: string,
+  lineItems: LineItemForDeduction[]
+): Promise<LineItemForDeduction[]> {
+  if (!isMoneybirdConfigured()) return lineItems;
+
+  const out: LineItemForDeduction[] = [];
+  for (const item of lineItems) {
+    const mbId = String(item.moneybird_product_id ?? "").trim();
+    if (!mbId) {
+      out.push(item);
+      continue;
+    }
+
+    const { data: existing } = await supabase
+      .from("inventory_products")
+      .select("id")
+      .eq("owner_email", ownerEmail)
+      .contains("moneybird_product_ids", [mbId])
+      .limit(1)
+      .maybeSingle();
+
+    if (existing) {
+      out.push(item);
+      continue;
+    }
+
+    try {
+      const mbProduct = await fetchMoneybirdProductById(mbId);
+      const identifier = String(mbProduct?.identifier ?? "").trim();
+      const shopifyProductId = Number(identifier);
+      if (Number.isFinite(shopifyProductId) && shopifyProductId > 0) {
+        await attachMoneybirdProductIdToInventory(supabase, ownerEmail, {
+          moneybirdProductId: mbId,
+          shopifyProductId,
+        });
+        out.push({
+          ...item,
+          product_id: item.product_id ?? shopifyProductId,
+        });
+        continue;
+      }
+    } catch (err) {
+      console.warn(
+        "[inventory] moneybird product resolve",
+        mbId,
+        err instanceof Error ? err.message : err
+      );
+    }
+    out.push(item);
+  }
+  return out;
 }
 
 function moneybirdInvoiceOwnerEmail(): string {
@@ -1805,7 +2071,11 @@ export async function deductInventoryForMoneybirdInvoice(
     }
   }
 
-  const lineItems = moneybirdDetailsToLineItems(invoice.details);
+  const lineItems = await enrichMoneybirdLineItemsForInventory(
+    supabase,
+    ownerEmail,
+    moneybirdDetailsToLineItems(invoice.details)
+  );
   if (lineItems.length === 0) {
     return { deducted: false, skippedReason: "no_line_items" };
   }

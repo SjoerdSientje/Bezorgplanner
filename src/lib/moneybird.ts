@@ -395,17 +395,38 @@ type MoneybirdInvoiceDetailPayload = {
   amount: string;
   tax_rate_id: string;
   ledger_account_id: string;
+  product_id?: string;
 };
 
-function buildInvoiceDetailsFromShopifyOrder(
+async function buildInvoiceDetailsFromShopifyOrder(
   order: ShopifyOrder
-): MoneybirdInvoiceDetailPayload[] | null {
+): Promise<MoneybirdInvoiceDetailPayload[] | null> {
   const shopifyOrderId = String(order.id ?? "").trim();
   const taxRateId = process.env.MONEYBIRD_TAX_RATE_ID!.trim();
   const ledgerAccountId = process.env.MONEYBIRD_LEDGER_ACCOUNT_ID!.trim();
   const orderName = String(order.name ?? shopifyOrderId).trim();
 
   const details: MoneybirdInvoiceDetailPayload[] = [];
+  const mbProductIdByShopifyProduct = new Map<string, string | null>();
+
+  async function moneybirdProductIdForShopifyProduct(
+    shopifyProductId: string | number | null | undefined
+  ): Promise<string | undefined> {
+    const key = String(shopifyProductId ?? "").trim();
+    if (!key || key === "0") return undefined;
+    if (mbProductIdByShopifyProduct.has(key)) {
+      return mbProductIdByShopifyProduct.get(key) || undefined;
+    }
+    try {
+      const mb = await findProductByIdentifier(shopifyProductIdentifier(key));
+      const id = mb?.id ? String(mb.id) : null;
+      mbProductIdByShopifyProduct.set(key, id);
+      return id || undefined;
+    } catch {
+      mbProductIdByShopifyProduct.set(key, null);
+      return undefined;
+    }
+  }
 
   for (const li of order.line_items ?? []) {
     const description = String(li.name ?? "").trim();
@@ -413,12 +434,14 @@ function buildInvoiceDetailsFromShopifyOrder(
     const unitIncl = lineItemUnitPriceIncl(li);
     if (unitIncl < 0.01) continue;
     const amount = Math.max(1, Math.floor(Number(li.quantity ?? 1)));
+    const productId = await moneybirdProductIdForShopifyProduct(li.product_id);
     details.push({
       description: `${description} (${orderName})`,
       price: unitPriceExclApprox(unitIncl),
       amount: String(amount),
       tax_rate_id: taxRateId,
       ledger_account_id: ledgerAccountId,
+      ...(productId ? { product_id: productId } : {}),
     });
   }
 
@@ -553,7 +576,7 @@ export async function updateDraftSalesInvoiceFromShopifyOrder(
     return full;
   }
 
-  const details = buildInvoiceDetailsFromShopifyOrder(order);
+  const details = await buildInvoiceDetailsFromShopifyOrder(order);
   if (!details) {
     console.warn("[moneybird] order update — geen factuurregels", shopifyOrderId);
     return null;
@@ -719,7 +742,7 @@ export async function createSalesInvoiceFromShopifyOrder(
     const contact = await findOrCreateContactForShopifyOrder(order);
     const orderName = String(order.name ?? shopifyOrderId).trim();
 
-    const details = buildInvoiceDetailsFromShopifyOrder(order);
+    const details = await buildInvoiceDetailsFromShopifyOrder(order);
     if (!details) {
       console.warn("[moneybird] geen factuurregels voor order", shopifyOrderId);
       return null;
@@ -789,6 +812,20 @@ export async function findProductByIdentifier(
   }
 }
 
+export async function fetchMoneybirdProductById(
+  productId: string
+): Promise<MoneybirdProduct | null> {
+  const id = String(productId ?? "").trim();
+  if (!id) return null;
+  try {
+    return await moneybirdFetch<MoneybirdProduct>(`/products/${id}.json`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("Moneybird 404")) return null;
+    throw err;
+  }
+}
+
 function firstVariantPrice(product: ShopifyAdminProduct): string {
   const raw = product.variants?.[0]?.price;
   const n = typeof raw === "string" ? parseFloat(raw) : Number(raw ?? 0);
@@ -814,7 +851,10 @@ export async function upsertMoneybirdProductFromShopify(
 
   if (!isShopifyProductActive(product)) {
     const removed = await removeMoneybirdProductForShopifyId(shopifyProductId);
-    return { action: removed ? "removed" : "skipped" };
+    return {
+      action: removed.removed ? "removed" : "skipped",
+      productId: removed.productId,
+    };
   }
 
   const identifier = shopifyProductIdentifier(shopifyProductId);
@@ -853,22 +893,22 @@ export async function upsertMoneybirdProductFromShopify(
 /** Verwijder/deactiveer Moneybird-product gekoppeld aan Shopify product-id. */
 export async function removeMoneybirdProductForShopifyId(
   shopifyProductId: string | number
-): Promise<boolean> {
-  if (!isMoneybirdConfigured()) return false;
+): Promise<{ removed: boolean; productId?: string }> {
+  if (!isMoneybirdConfigured()) return { removed: false };
 
   const identifier = shopifyProductIdentifier(shopifyProductId);
-  if (!identifier) return false;
+  if (!identifier) return { removed: false };
 
   const existing = await findProductByIdentifier(identifier);
-  if (!existing?.id) return false;
+  if (!existing?.id) return { removed: false };
 
   try {
     await moneybirdFetch<unknown>(`/products/${existing.id}.json`, { method: "DELETE" });
     console.info("[moneybird] product verwijderd/gedeactiveerd", existing.id, identifier);
-    return true;
+    return { removed: true, productId: existing.id };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes("Moneybird 404")) return false;
+    if (msg.includes("Moneybird 404")) return { removed: false };
     throw err;
   }
 }

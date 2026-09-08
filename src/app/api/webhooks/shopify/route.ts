@@ -24,6 +24,8 @@ import {
   syncInventoryForShopifyOrderUpdate,
   removeInventoryProductByShopifyId,
   syncInventoryProductFromShopify,
+  attachMoneybirdProductIdToInventory,
+  detachMoneybirdProductIdFromInventory,
 } from "@/lib/inventory";
 import { syncInventoryLevertijdForShopifyProduct } from "@/lib/inventory-levertijd";
 import {
@@ -67,11 +69,16 @@ async function handleProductWebhook(
           : [],
       }
     );
-    let moneybird: { removed: boolean } | { error: string } = { removed: false };
+    let moneybird: { removed: boolean; productId?: string } | { error: string } = {
+      removed: false,
+    };
     if (isMoneybirdConfigured()) {
       try {
-        const ok = await removeMoneybirdProductForShopifyId(productId);
-        moneybird = { removed: ok };
+        const mb = await removeMoneybirdProductForShopifyId(productId);
+        moneybird = { removed: mb.removed, productId: mb.productId };
+        if (mb.productId) {
+          await detachMoneybirdProductIdFromInventory(supabase, ownerEmail, mb.productId);
+        }
       } catch (mbErr) {
         console.error("[webhooks/shopify] moneybird product delete:", mbErr);
         moneybird = {
@@ -119,6 +126,20 @@ async function handleProductWebhook(
   if (isMoneybirdConfigured()) {
     try {
       moneybird = await upsertMoneybirdProductFromShopify(product);
+      const mbProductId =
+        typeof moneybird.productId === "string" ? moneybird.productId : null;
+      if (mbProductId && moneybird.action !== "removed" && moneybird.action !== "skipped") {
+        const linked = await attachMoneybirdProductIdToInventory(supabase, ownerEmail, {
+          moneybirdProductId: mbProductId,
+          shopifyProductId: Number(product.id),
+          shopifyVariantIds: (product.variants ?? [])
+            .map((v) => Number(v.id))
+            .filter((id) => Number.isFinite(id) && id > 0),
+        });
+        moneybird = { ...moneybird, inventoryLinked: linked };
+      } else if (mbProductId && moneybird.action === "removed") {
+        await detachMoneybirdProductIdFromInventory(supabase, ownerEmail, mbProductId);
+      }
     } catch (mbErr) {
       console.error("[webhooks/shopify] moneybird product sync:", mbErr);
       moneybird = {
