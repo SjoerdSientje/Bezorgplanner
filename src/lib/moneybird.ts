@@ -834,6 +834,45 @@ function firstVariantPrice(product: ShopifyAdminProduct): string {
 }
 
 /**
+ * Producten die in Moneybird op 9% btw moeten blijven (niet de standaard 21%).
+ * Match op Shopify-/Moneybird-titel.
+ */
+export function isMoneybirdReducedVatProductTitle(title: string): boolean {
+  const n = String(title ?? "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!n) return false;
+  if (/^volledig rijklaar\b/.test(n)) return true;
+  if (/^arbeidskosten\b/.test(n)) return true;
+  if (n.includes("onderhoudspakket") && /(goud|zilver|brons|bronze)/.test(n)) {
+    return true;
+  }
+  return false;
+}
+
+function moneybirdTaxRateIdForProductTitle(
+  title: string,
+  existingTaxRateId?: string | null
+): string | null {
+  const defaultId = process.env.MONEYBIRD_TAX_RATE_ID?.trim() || "";
+  if (!isMoneybirdReducedVatProductTitle(title)) {
+    return defaultId || null;
+  }
+  const ninePct =
+    process.env.MONEYBIRD_TAX_RATE_ID_9?.trim() ||
+    process.env.MONEYBIRD_TAX_RATE_ID_LOW?.trim() ||
+    "";
+  if (ninePct) return ninePct;
+  // Geen 9%-env: behoud bestaande rate bij update i.p.v. terugzetten naar 21%.
+  const existing = String(existingTaxRateId ?? "").trim();
+  if (existing) return existing;
+  return null;
+}
+
+/**
  * Upsert Moneybird-product voor een actief Shopify-product.
  * Draft/archived → verwijderen/deactiveren.
  */
@@ -859,20 +898,33 @@ export async function upsertMoneybirdProductFromShopify(
 
   const identifier = shopifyProductIdentifier(shopifyProductId);
   const description = String(product.title ?? "").trim() || `Shopify ${identifier}`;
-  const taxRateId = process.env.MONEYBIRD_TAX_RATE_ID!.trim();
   const ledgerAccountId = process.env.MONEYBIRD_LEDGER_ACCOUNT_ID!.trim();
-  const payload = {
-    product: {
-      identifier,
-      description,
-      price: firstVariantPrice(product),
-      currency: "EUR",
-      tax_rate_id: taxRateId,
-      ledger_account_id: ledgerAccountId,
-    },
-  };
-
   const existing = await findProductByIdentifier(identifier);
+  const taxRateId = moneybirdTaxRateIdForProductTitle(
+    description,
+    existing?.tax_rate_id
+  );
+
+  if (isMoneybirdReducedVatProductTitle(description) && !taxRateId) {
+    console.warn(
+      "[moneybird] 9% btw-product zonder MONEYBIRD_TAX_RATE_ID_9 en zonder bestaande tax_rate — tax_rate_id weggelaten:",
+      description
+    );
+  }
+
+  const productBody: Record<string, string> = {
+    identifier,
+    description,
+    price: firstVariantPrice(product),
+    currency: "EUR",
+    ledger_account_id: ledgerAccountId,
+  };
+  if (taxRateId) {
+    productBody.tax_rate_id = taxRateId;
+  }
+
+  const payload = { product: productBody };
+
   if (existing?.id) {
     const updated = await moneybirdFetch<MoneybirdProduct>(`/products/${existing.id}.json`, {
       method: "PATCH",
