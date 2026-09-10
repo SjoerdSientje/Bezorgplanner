@@ -149,6 +149,21 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Order bijwerken mislukt." }, { status: 500 });
     }
 
+    // MP-bezorg: reservering → echte voorraadaftrek bij afronden.
+    if (toMpOrders) {
+      try {
+        const { commitInventoryForMpOrder } = await import("@/lib/inventory-reservations");
+        await commitInventoryForMpOrder(
+          supabase,
+          ownerEmail,
+          orderId,
+          String((order as { order_nummer?: string | null }).order_nummer ?? orderId)
+        );
+      } catch (invErr) {
+        console.error("[api/afronden] inventory commit:", invErr);
+      }
+    }
+
     // Controleer hoeveel slots er zijn vóór delete (voor debuggen).
     const { data: slotsVoor, error: checkErr } = await supabase
       .from("planning_slots")

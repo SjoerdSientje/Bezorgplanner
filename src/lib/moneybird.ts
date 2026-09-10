@@ -14,8 +14,8 @@ import {
 const MONEYBIRD_API_BASE = "https://moneybird.com/api/v2";
 
 /**
- * Drempel voor later opnieuw auto-versturen onder dit bedrag (incl. BTW).
- * Voor nu uit: alles blijft concept — auto-mail gaf dubbele facturen bij klanten.
+ * Drempel (incl. BTW): onder dit bedrag auto-mailen zodra Shopify fulfillment_status = fulfilled.
+ * ≥ deze drempel blijft concept (handmatig versturen, o.a. serienummer).
  */
 export const AUTO_FINALIZE_INVOICE_BELOW_EUR = 498;
 
@@ -496,6 +496,136 @@ function isDraftMoneybirdInvoice(invoice: MoneybirdSalesInvoice): boolean {
   return String(invoice.state ?? "").toLowerCase() === "draft";
 }
 
+/** Shopify-order e-mail voor factuurverzending (leeg = Moneybird contact-default). */
+function shopifyOrderInvoiceEmail(order: ShopifyOrder): string | null {
+  const raw = String(
+    order.email ?? order.contact_email ?? order.customer?.email ?? ""
+  )
+    .trim()
+    .toLowerCase();
+  if (!raw || !raw.includes("@") || raw === "onbekend@koopjefatbike.nl") {
+    return null;
+  }
+  return raw;
+}
+
+/**
+ * Mag de conceptfactuur automatisch gemaild worden?
+ * - niet geannuleerd
+ * - fulfillment_status === fulfilled
+ * - totaal &gt; 0 en &lt; AUTO_FINALIZE_INVOICE_BELOW_EUR
+ */
+export function shouldAutoSendShopifyInvoice(order: ShopifyOrder): boolean {
+  if (order.cancelled_at) return false;
+  const fulfillment = String(order.fulfillment_status ?? "").toLowerCase();
+  if (fulfillment !== "fulfilled") return false;
+  const totalIncl = shopifyOrderBillableTotalIncl(order);
+  if (isZeroInvoiceTotal(totalIncl)) return false;
+  return totalIncl < AUTO_FINALIZE_INVOICE_BELOW_EUR;
+}
+
+/**
+ * Verstuur een Moneybird-factuur per e-mail (draft → open).
+ * @see https://developer.moneybird.com/api/sales_invoices/#patch_sales_invoices_id_send_invoice
+ */
+export async function sendSalesInvoiceByEmail(
+  invoiceId: string,
+  options?: { emailAddress?: string | null }
+): Promise<MoneybirdSalesInvoice> {
+  const id = String(invoiceId ?? "").trim();
+  if (!id) throw new Error("invoiceId ontbreekt.");
+
+  const salesInvoiceSending: Record<string, string> = {
+    delivery_method: "Email",
+  };
+  const email = String(options?.emailAddress ?? "").trim();
+  if (email.includes("@")) {
+    salesInvoiceSending.email_address = email;
+  }
+
+  return moneybirdFetch<MoneybirdSalesInvoice>(
+    `/sales_invoices/${id}/send_invoice.json`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ sales_invoice_sending: salesInvoiceSending }),
+    }
+  );
+}
+
+/**
+ * Na create/update: onder €498 + fulfilled → conceptfactuur e-mailen (idempotent).
+ */
+export async function maybeSendSalesInvoiceAfterShopifyFulfillment(
+  supabase: SupabaseClient,
+  order: ShopifyOrder
+): Promise<{
+  sent: boolean;
+  skipped?: string;
+  invoiceId?: string;
+}> {
+  if (!isMoneybirdConfigured()) {
+    return { sent: false, skipped: "not_configured" };
+  }
+  if (!shouldAutoSendShopifyInvoice(order)) {
+    return { sent: false, skipped: "not_eligible" };
+  }
+
+  const shopifyOrderId = String(order.id ?? "").trim();
+  if (!shopifyOrderId) {
+    return { sent: false, skipped: "missing_order_id" };
+  }
+
+  const reference = shopifyReferenceForOrderId(shopifyOrderId);
+  let invoice = await findSalesInvoiceByReference(reference);
+
+  // Edge case: create miste eerder, order is nu al fulfilled.
+  if (!invoice?.id) {
+    console.info(
+      "[moneybird] fulfilled <498 zonder factuur — create alsnog",
+      reference
+    );
+    invoice = await createSalesInvoiceFromShopifyOrder(supabase, order);
+  }
+  if (!invoice?.id) {
+    return { sent: false, skipped: "no_invoice" };
+  }
+
+  const full = (await fetchSalesInvoiceById(invoice.id)) ?? invoice;
+  if (!isDraftMoneybirdInvoice(full)) {
+    console.info(
+      "[moneybird] auto-send skip — factuur niet meer concept",
+      full.id,
+      full.state ?? "?"
+    );
+    return {
+      sent: false,
+      skipped: `state_${String(full.state ?? "unknown").toLowerCase()}`,
+      invoiceId: full.id,
+    };
+  }
+
+  try {
+    const sent = await sendSalesInvoiceByEmail(full.id, {
+      emailAddress: shopifyOrderInvoiceEmail(order),
+    });
+    console.info(
+      "[moneybird] factuur auto-verzonden (fulfilled <€498)",
+      sent.id ?? full.id,
+      reference,
+      `€${shopifyOrderBillableTotalIncl(order).toFixed(2)}`
+    );
+    return { sent: true, invoiceId: sent.id ?? full.id };
+  } catch (err) {
+    console.error(
+      "[moneybird] auto-send mislukt",
+      full.id,
+      reference,
+      err instanceof Error ? err.message : err
+    );
+    return { sent: false, skipped: "send_failed", invoiceId: full.id };
+  }
+}
+
 /** Vergelijkbare factuurregels (om irrelevante Shopify-pings te skippen). */
 function invoiceDetailsFingerprint(
   details: Array<{
@@ -622,8 +752,9 @@ export async function updateDraftSalesInvoiceFromShopifyOrder(
 
 /**
  * Routeert Moneybird-factuuractie op Shopify-webhook topic.
- * - orders/create → nieuwe factuur (indien van toepassing)
+ * - orders/create → nieuwe conceptfactuur (indien van toepassing)
  * - orders/updated → alleen bestaande conceptfactuur bijwerken
+ * - daarna: auto-mail als fulfilled én totaal < €498
  */
 export async function syncSalesInvoiceFromShopifyOrder(
   supabase: SupabaseClient,
@@ -631,23 +762,42 @@ export async function syncSalesInvoiceFromShopifyOrder(
   topic: string
 ): Promise<MoneybirdSalesInvoice | null> {
   const normalizedTopic = topic.trim().toLowerCase();
+  let invoice: MoneybirdSalesInvoice | null = null;
+
   if (normalizedTopic === "orders/updated") {
-    return updateDraftSalesInvoiceFromShopifyOrder(order);
+    invoice = await updateDraftSalesInvoiceFromShopifyOrder(order);
+  } else if (normalizedTopic === "orders/create") {
+    invoice = await createSalesInvoiceFromShopifyOrder(supabase, order);
+  } else {
+    return null;
   }
-  if (normalizedTopic === "orders/create") {
-    return createSalesInvoiceFromShopifyOrder(supabase, order);
+
+  try {
+    const sendResult = await maybeSendSalesInvoiceAfterShopifyFulfillment(
+      supabase,
+      order
+    );
+    if (sendResult.sent && sendResult.invoiceId) {
+      const fresh = await fetchSalesInvoiceById(sendResult.invoiceId);
+      if (fresh) invoice = fresh;
+    }
+  } catch (err) {
+    console.error(
+      "[moneybird] auto-send na sync mislukt (webhook gaat door):",
+      err instanceof Error ? err.message : err
+    );
   }
-  return null;
+
+  return invoice;
 }
 
 /**
- * Verwijder Moneybird-factuur voor een Shopify-order (reference shopify:{id}).
- * Concepten worden verwijderd; openstaande/verstuurde facturen worden geprobeerd te
- * verwijderen — faalt dat, dan loggen we (handmatig credit/verwijderen in Moneybird).
+ * Verwijder Moneybird-conceptfactuur voor een Shopify-order (reference shopify:{id}).
+ * Alleen state=draft — verstuurde/open facturen blijven staan.
  */
 export async function deleteSalesInvoiceForShopifyOrderId(
   shopifyOrderId: string
-): Promise<{ deleted: boolean; invoiceId?: string; error?: string }> {
+): Promise<{ deleted: boolean; invoiceId?: string; skipped?: string; error?: string }> {
   if (!isMoneybirdConfigured()) {
     return { deleted: false, error: "moneybird_not_configured" };
   }
@@ -660,16 +810,28 @@ export async function deleteSalesInvoiceForShopifyOrderId(
     return { deleted: false };
   }
 
+  const full = (await fetchSalesInvoiceById(existing.id)) ?? existing;
+  if (!isDraftMoneybirdInvoice(full)) {
+    console.info(
+      "[moneybird] factuur niet verwijderd — geen concept meer",
+      full.id,
+      full.state ?? "?",
+      "voor",
+      reference
+    );
+    return { deleted: false, invoiceId: full.id, skipped: `state_${full.state ?? "unknown"}` };
+  }
+
   try {
-    await moneybirdFetch<unknown>(`/sales_invoices/${existing.id}.json`, {
+    await moneybirdFetch<unknown>(`/sales_invoices/${full.id}.json`, {
       method: "DELETE",
     });
-    console.info("[moneybird] factuur verwijderd", existing.id, "voor", reference);
-    return { deleted: true, invoiceId: existing.id };
+    console.info("[moneybird] conceptfactuur verwijderd", full.id, "voor", reference);
+    return { deleted: true, invoiceId: full.id };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error("[moneybird] factuur verwijderen mislukt", existing.id, msg);
-    return { deleted: false, invoiceId: existing.id, error: msg };
+    console.error("[moneybird] conceptfactuur verwijderen mislukt", full.id, msg);
+    return { deleted: false, invoiceId: full.id, error: msg };
   }
 }
 
@@ -677,8 +839,8 @@ export async function deleteSalesInvoiceForShopifyOrderId(
  * Maakt een sales invoice in Moneybird voor een Shopify-order.
  * Reference = shopify:{id} zodat de Moneybird-webhook dubbele voorraadaftrek kan skippen.
  *
- * Voor nu altijd draft (handmatig controleren/versturen), ook onder €498.
- * Auto-mail onder die drempel gaf dubbele facturen. Totaal €0: geen factuur.
+ * Altijd als concept. Auto-mail gebeurt apart bij fulfillment_status=fulfilled
+ * én totaal < €498. Totaal €0: geen factuur.
  */
 export async function createSalesInvoiceFromShopifyOrder(
   supabase: SupabaseClient,

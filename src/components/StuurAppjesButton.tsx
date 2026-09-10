@@ -2,51 +2,51 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { getAmsterdamCalendarDate } from "@/lib/planning-date";
 import { routeStyleForIndex } from "@/lib/route-colors";
 import { isStuurAppjesEligibleOrder } from "@/lib/stuur-appjes-eligibility";
 
 type ActiveRouteOption = {
+  /** UI-/checkbox-id, altijd ≥ 1 */
   routeNummer: number;
+  /**
+   * Waarde voor DB / stuur-appjes.
+   * null = één bus zonder route_nummer (Routific-conventie).
+   */
+  persistRouteNummer: number | null;
   label: string;
   orderCount: number;
 };
 
 type RoutePickOption = {
-  /** null = Overig */
+  id: string;
+  /** null = Overig of unnumbered active bus */
   routeNummer: number | null;
   label: string;
 };
 
-async function fetchActiveRoutesToday(): Promise<ActiveRouteOption[]> {
-  const [planningRes, ritjesRes] = await Promise.all([
-    fetch(`/api/planning?t=${Date.now()}`, { cache: "no-store" }),
-    fetch(`/api/ritjes-vandaag?t=${Date.now()}`, { cache: "no-store" }),
-  ]);
-  const planningJson = await planningRes.json().catch(() => ({}));
-  const ritjesJson = await ritjesRes.json().catch(() => ({}));
+/** Effectieve route voor detectie/filter: null/0 telt als route 1 (één bus). */
+function effectiveRouteNummer(raw: unknown): number {
+  const n = Number(raw ?? 0);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
 
-  const todayKey = getAmsterdamCalendarDate(0);
+async function fetchActiveRoutesToday(): Promise<ActiveRouteOption[]> {
+  const planningRes = await fetch(`/api/planning?t=${Date.now()}`, { cache: "no-store" });
+  const planningJson = await planningRes.json().catch(() => ({}));
+
   const counts = new Map<number, number>();
   const names = new Map<number, string>();
+  /** true als minstens één order op deze effective route géén DB-nummer heeft */
+  const hasUnnumbered = new Map<number, boolean>();
 
+  // /api/planning levert alleen actieve (niet-afgeronde) slots — geen datumfilter nodig.
   for (const row of (planningJson.rows ?? []) as Record<string, unknown>[]) {
-    const datum = String(row.datum ?? "");
-    if (datum !== todayKey) continue;
-    const rn = Number(row.route_nummer ?? 0);
-    if (rn <= 0) continue;
+    const rawRn = row.route_nummer;
+    const numbered = rawRn != null && Number(rawRn) > 0;
+    const rn = effectiveRouteNummer(rawRn);
     counts.set(rn, (counts.get(rn) ?? 0) + 1);
+    if (!numbered) hasUnnumbered.set(rn, true);
     const naam = String(row.route_naam ?? "").trim();
-    if (naam && !names.has(rn)) names.set(rn, naam);
-  }
-
-  for (const o of (ritjesJson.orders ?? []) as Record<string, unknown>[]) {
-    if (o.in_morgen_tab === true) continue;
-    const rn = Number(o.route_nummer ?? 0);
-    if (rn <= 0) continue;
-    if (!counts.has(rn)) counts.set(rn, 0);
-    counts.set(rn, (counts.get(rn) ?? 0) + 1);
-    const naam = String(o.route_naam ?? "").trim();
     if (naam && !names.has(rn)) names.set(rn, naam);
   }
 
@@ -55,8 +55,10 @@ async function fetchActiveRoutesToday(): Promise<ActiveRouteOption[]> {
     .map(([routeNummer, orderCount]) => {
       const custom = names.get(routeNummer);
       const fallback = routeStyleForIndex(routeNummer - 1).label;
+      const unnumberedOnly = counts.size === 1 && hasUnnumbered.get(routeNummer) === true;
       return {
         routeNummer,
+        persistRouteNummer: unnumberedOnly ? null : routeNummer,
         label: custom && custom !== fallback ? custom : fallback,
         orderCount,
       };
@@ -169,12 +171,12 @@ function OrderCard({
             </span>
             {routeOptions!.map((opt) => {
               const active =
-                opt.routeNummer === null
-                  ? pickedRoute === null
-                  : pickedRoute === opt.routeNummer;
+                pickedRoute !== undefined &&
+                ((opt.routeNummer === null && pickedRoute === null) ||
+                  (opt.routeNummer !== null && pickedRoute === opt.routeNummer));
               return (
                 <button
-                  key={opt.routeNummer ?? "overig"}
+                  key={opt.id}
                   type="button"
                   onClick={(e) => {
                     e.preventDefault();
@@ -290,16 +292,20 @@ export default function StuurAppjesButton({
   const [activeRoutes, setActiveRoutes] = useState<ActiveRouteOption[]>([]);
   const [selectedRouteNummers, setSelectedRouteNummers] = useState<Set<number>>(new Set());
 
-  const nieuweOrderRouteOptions = useMemo<RoutePickOption[]>(
-    () => [
-      ...activeRoutes.map((r) => ({
-        routeNummer: r.routeNummer as number | null,
-        label: r.label,
-      })),
-      { routeNummer: null, label: "Overig" },
-    ],
-    [activeRoutes]
-  );
+  const nieuweOrderRouteOptions = useMemo<RoutePickOption[]>(() => {
+    const routes: RoutePickOption[] = activeRoutes.map((r) => ({
+      id: `route-${r.routeNummer}`,
+      routeNummer: r.persistRouteNummer,
+      label: r.label,
+    }));
+    // Overig weglaten als de enige actieve route al "unnumbered" is (zelfde DB-waarde).
+    const onlyUnnumberedActive =
+      activeRoutes.length === 1 && activeRoutes[0]?.persistRouteNummer == null;
+    if (!onlyUnnumberedActive) {
+      routes.push({ id: "overig", routeNummer: null, label: "Overig" });
+    }
+    return routes;
+  }, [activeRoutes]);
 
   const currentByOrderId = useMemo(() => {
     const m = new Map<string, CurrentRitjesOrder>();

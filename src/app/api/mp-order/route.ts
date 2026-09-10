@@ -365,17 +365,33 @@ export async function POST(request: NextRequest) {
       const deductionLineItems = productenLijst.length
         ? buildMpDeductionLineItems(productenLijst, productRules)
         : undefined;
-      await deductInventoryForMpOrder(
-        supabase,
-        ownerEmail,
-        data.id,
-        data.order_nummer ?? "",
-        lineItemsJson,
-        producten,
-        deductionLineItems
-      );
+
+      if (soort === "afhaal") {
+        await deductInventoryForMpOrder(
+          supabase,
+          ownerEmail,
+          data.id,
+          data.order_nummer ?? "",
+          lineItemsJson,
+          producten,
+          deductionLineItems
+        );
+      } else if (deductionLineItems?.length) {
+        const { reserveInventoryForMpOrder } = await import("@/lib/inventory-reservations");
+        await reserveInventoryForMpOrder(
+          supabase,
+          ownerEmail,
+          data.id,
+          data.order_nummer ?? "",
+          deductionLineItems,
+          {
+            customerName: insert.naam ?? null,
+            customerPhone: insert.telefoon_e164 ?? insert.telefoon_nummer ?? null,
+          }
+        );
+      }
     } catch (invErr) {
-      console.error("[api/mp-order] inventory deduct:", invErr);
+      console.error("[api/mp-order] inventory reserve/deduct:", invErr);
     }
 
     // Bij afhaal-order: PDF garantiebewijs genereren, opslaan in Supabase Storage, email met bijlage.

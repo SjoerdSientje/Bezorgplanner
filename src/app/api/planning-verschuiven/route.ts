@@ -109,7 +109,9 @@ export async function POST(request: NextRequest) {
       slotsToShift = slotsToShift.filter((s) => {
         const oid = String(s.order_id ?? "");
         const rn = routeNummerByOrderId.get(oid);
-        return rn != null && allowed.has(rn);
+        // Eén bus zonder route_nummer (null) telt als route 1.
+        const effective = rn != null && Number(rn) > 0 ? Number(rn) : 1;
+        return allowed.has(effective);
       });
       if (slotsToShift.length === 0) {
         return NextResponse.json(

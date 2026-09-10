@@ -58,6 +58,15 @@ function displayLevertijd(product: InventoryProductRow): string {
   return product.levertijd?.trim() || "—";
 }
 
+function reservedOf(product: InventoryProductRow): number {
+  return Math.max(0, Math.floor(Number(product.reserved_quantity ?? 0)));
+}
+
+function sellableOf(product: InventoryProductRow): number {
+  if (typeof product.sellable_quantity === "number") return product.sellable_quantity;
+  return product.stock_quantity - reservedOf(product);
+}
+
 function mutationTypeLabel(t: MutationType): string {
   switch (t) {
     case "inkomend":
@@ -72,7 +81,7 @@ function mutationTypeLabel(t: MutationType): string {
 }
 
 function stockClass(qty: number): string {
-  if (qty === 0) return "text-red-600 font-semibold";
+  if (qty <= 0) return "text-red-600 font-semibold";
   if (qty <= LOW_STOCK_THRESHOLD) return "text-orange-600 font-semibold";
   return "text-green-700 font-semibold";
 }
@@ -166,6 +175,23 @@ export default function VoorraadbeheerPage() {
   const [linksLoadingId, setLinksLoadingId] = useState<string | null>(null);
   const [linksErrorById, setLinksErrorById] = useState<Record<string, string>>({});
 
+  const [stockDetailId, setStockDetailId] = useState<string | null>(null);
+  const [stockDetailLoading, setStockDetailLoading] = useState(false);
+  const [stockDetailError, setStockDetailError] = useState<string | null>(null);
+  const [stockDetail, setStockDetail] = useState<{
+    stockQuantity: number;
+    reservedQuantity: number;
+    sellableQuantity: number;
+    reservations: Array<{
+      reservationId: string;
+      quantity: number;
+      orderNummer: string | null;
+      customerName: string | null;
+      customerPhone: string | null;
+      voorkeursdatum: string | null;
+    }>;
+  } | null>(null);
+
   const load = useCallback(async (runSync = false) => {
     if (runSync) setSyncing(true);
     else setLoading(true);
@@ -214,16 +240,77 @@ export default function VoorraadbeheerPage() {
   const displayedProducts = useMemo(() => {
     return products.filter((p) => {
       if (filter !== "alle" && p.category !== filter) return false;
-      if (stockFilter === "laag" && !(p.stock_quantity > 0 && p.stock_quantity <= LOW_STOCK_THRESHOLD)) {
+      const sellable = sellableOf(p);
+      if (stockFilter === "laag" && !(sellable > 0 && sellable <= LOW_STOCK_THRESHOLD)) {
         return false;
       }
-      if (stockFilter === "uitverkocht" && p.stock_quantity !== 0) return false;
+      if (stockFilter === "uitverkocht" && sellable > 0) return false;
       return matchesInventorySearch(p, inventorySearch);
     });
   }, [products, filter, stockFilter, inventorySearch]);
 
   const toggleStockFilter = (f: StockFilter) => {
     setStockFilter((prev) => (prev === f ? "alle" : f));
+  };
+
+  const openStockDetail = async (product: InventoryProductRow) => {
+    setStockDetailId(product.id);
+    setStockDetailLoading(true);
+    setStockDetailError(null);
+    setStockDetail(null);
+    try {
+      const res = await fetch(
+        `/api/inventory/${product.id}/reservations?t=${Date.now()}`,
+        { cache: "no-store" }
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? "Laden mislukt");
+      setStockDetail({
+        stockQuantity: Number(data.stockQuantity ?? product.stock_quantity),
+        reservedQuantity: Number(data.reservedQuantity ?? 0),
+        sellableQuantity: Number(
+          data.sellableQuantity ?? sellableOf(product)
+        ),
+        reservations: Array.isArray(data.reservations) ? data.reservations : [],
+      });
+    } catch (e) {
+      setStockDetailError(e instanceof Error ? e.message : "Laden mislukt");
+    } finally {
+      setStockDetailLoading(false);
+    }
+  };
+
+  const stockCell = (product: InventoryProductRow) => {
+    const reserved = reservedOf(product);
+    const sellable = sellableOf(product);
+    return (
+      <button
+        type="button"
+        onClick={() => openStockDetail(product)}
+        className="inline-flex items-center gap-1 rounded-md px-1 py-0.5 text-left hover:bg-stone-100 focus:outline-none focus:ring-1 focus:ring-koopje-orange/40"
+        title="Voorraaddetail openen"
+      >
+        <span className={`font-medium tabular-nums ${stockClass(sellable)}`}>
+          {product.stock_quantity}
+        </span>
+        {reserved > 0 && (
+          <span
+            className="inline-flex items-center text-amber-500"
+            title={`${reserved} gereserveerd`}
+            aria-label={`${reserved} gereserveerd`}
+          >
+            <svg
+              viewBox="0 0 20 20"
+              className="h-3.5 w-3.5"
+              fill="currentColor"
+              aria-hidden
+            >
+              <path d="M10 2.5L18 17H2L10 2.5z" />
+            </svg>
+          </span>
+        )}
+      </button>
+    );
   };
 
   const openMutationsModal = async () => {
@@ -1106,9 +1193,7 @@ export default function VoorraadbeheerPage() {
                         </p>
                         {linkedProductsPanel(p.id)}
                       </div>
-                      <span className={`shrink-0 text-base ${stockClass(p.stock_quantity)}`}>
-                        {p.stock_quantity}
-                      </span>
+                      <span className="shrink-0">{stockCell(p)}</span>
                     </div>
                     <div className="mt-3 grid grid-cols-1 gap-2 text-sm">
                       <div className="flex gap-2">
@@ -1188,9 +1273,7 @@ export default function VoorraadbeheerPage() {
                           <td className="px-3 py-3 capitalize text-stone-600">
                             {FILTER_LABELS[p.category as Filter] ?? p.category}
                           </td>
-                          <td className={`px-3 py-3 ${stockClass(p.stock_quantity)}`}>
-                            {p.stock_quantity}
-                          </td>
+                          <td className="px-3 py-3">{stockCell(p)}</td>
                           <td className="max-w-[8rem] px-3 py-3 text-stone-700">
                             <span className="line-clamp-2">{displayLevertijd(p)}</span>
                           </td>
@@ -1365,6 +1448,101 @@ export default function VoorraadbeheerPage() {
         onClose={() => setNewProductsOpen(false)}
         onChanged={() => load(false)}
       />
+
+      {stockDetailId && (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-black/40"
+            onClick={() => setStockDetailId(null)}
+          />
+          <div className="fixed inset-x-4 top-[12%] z-50 mx-auto max-h-[80vh] max-w-lg overflow-y-auto rounded-2xl bg-white p-5 shadow-xl sm:inset-x-auto">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-koopje-black">Voorraaddetail</h2>
+                <p className="mt-0.5 text-sm text-stone-500">
+                  {products.find((p) => p.id === stockDetailId)?.title ?? "Product"}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setStockDetailId(null)}
+                className="rounded-lg px-2 py-1 text-sm text-stone-600 hover:bg-stone-100"
+              >
+                ✕
+              </button>
+            </div>
+
+            {stockDetailLoading ? (
+              <p className="mt-4 text-sm text-stone-500">Laden…</p>
+            ) : stockDetailError ? (
+              <p className="mt-4 text-sm text-red-600">{stockDetailError}</p>
+            ) : stockDetail ? (
+              <>
+                <dl className="mt-4 grid grid-cols-3 gap-2 text-center">
+                  <div className="rounded-xl border border-stone-200 bg-stone-50 px-2 py-3">
+                    <dt className="text-[10px] font-medium uppercase tracking-wide text-stone-400">
+                      Werkelijk
+                    </dt>
+                    <dd className="mt-1 text-xl font-semibold tabular-nums text-koopje-black">
+                      {stockDetail.stockQuantity}
+                    </dd>
+                  </div>
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 px-2 py-3">
+                    <dt className="text-[10px] font-medium uppercase tracking-wide text-amber-700/80">
+                      Gereserveerd
+                    </dt>
+                    <dd className="mt-1 text-xl font-semibold tabular-nums text-amber-800">
+                      {stockDetail.reservedQuantity}
+                    </dd>
+                  </div>
+                  <div className="rounded-xl border border-stone-200 bg-stone-50 px-2 py-3">
+                    <dt className="text-[10px] font-medium uppercase tracking-wide text-stone-400">
+                      Verkoopbaar
+                    </dt>
+                    <dd
+                      className={`mt-1 text-xl font-semibold tabular-nums ${stockClass(stockDetail.sellableQuantity)}`}
+                    >
+                      {stockDetail.sellableQuantity}
+                    </dd>
+                  </div>
+                </dl>
+
+                {stockDetail.reservations.length > 0 ? (
+                  <div className="mt-5">
+                    <h3 className="text-sm font-semibold text-koopje-black">
+                      Reserveringen ({stockDetail.reservations.length})
+                    </h3>
+                    <ul className="mt-2 space-y-2">
+                      {stockDetail.reservations.map((r) => (
+                        <li
+                          key={r.reservationId}
+                          className="rounded-xl border border-stone-200 bg-white px-3 py-2.5 text-sm"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="font-medium text-koopje-black">
+                              {r.orderNummer || "Order"}
+                            </p>
+                            <span className="shrink-0 rounded-md bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-800">
+                              {r.quantity}×
+                            </span>
+                          </div>
+                          <p className="mt-1 text-stone-700">{r.customerName || "—"}</p>
+                          <p className="text-stone-500">{r.customerPhone || "geen telefoon"}</p>
+                          <p className="mt-1 text-xs text-stone-400">
+                            Voorkeursdatum: {r.voorkeursdatum || "—"}
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <p className="mt-4 text-sm text-stone-500">Geen openstaande reserveringen.</p>
+                )}
+              </>
+            ) : null}
+          </div>
+        </>
+      )}
     </>
   );
 }

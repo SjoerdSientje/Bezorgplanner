@@ -50,8 +50,27 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
+    const list = products ?? [];
+    const { getReservedQuantitiesByProductIds } = await import(
+      "@/lib/inventory-reservations"
+    );
+    const reservedMap = await getReservedQuantitiesByProductIds(
+      supabase,
+      ownerEmail,
+      list.map((p: { id: string }) => String(p.id))
+    );
+
+    const productsWithReserved = list.map((p: { id: string; stock_quantity: number }) => {
+      const reserved = reservedMap.get(String(p.id)) ?? 0;
+      return {
+        ...p,
+        reserved_quantity: reserved,
+        sellable_quantity: Number(p.stock_quantity ?? 0) - reserved,
+      };
+    });
+
     return NextResponse.json(
-      { products: products ?? [], stats, pendingCount },
+      { products: productsWithReserved, stats, pendingCount },
       { headers: { "Cache-Control": "no-store" } }
     );
   } catch (e) {

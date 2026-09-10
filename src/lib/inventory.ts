@@ -70,6 +70,10 @@ export type InventoryProductRow = {
   /** YYYY-MM-DD; toekomstige restock → toont als levertijd in de lijst. */
   restock_datum: string | null;
   opmerking: string | null;
+  /** Alleen in API-responses: som van openstaande reserveringen. */
+  reserved_quantity?: number;
+  /** Alleen in API-responses: stock − reserved (mag negatief). */
+  sellable_quantity?: number;
   last_mutation_source: InventorySource | null;
   created_at: string;
   updated_at: string;
@@ -813,15 +817,31 @@ export async function getInventoryStats(
 
   const { data: products } = await supabase
     .from("inventory_products")
-    .select("stock_quantity")
+    .select("id, stock_quantity")
     .eq("owner_email", ownerEmail);
 
   const rows = products ?? [];
   const totalProducts = rows.length;
-  const outOfStock = rows.filter((p) => p.stock_quantity === 0).length;
-  const lowStock = rows.filter(
-    (p) => p.stock_quantity > 0 && p.stock_quantity <= LOW_STOCK_THRESHOLD
-  ).length;
+
+  const { getReservedQuantitiesByProductIds, sellableFrom } = await import(
+    "@/lib/inventory-reservations"
+  );
+  const reservedMap = await getReservedQuantitiesByProductIds(
+    supabase,
+    ownerEmail,
+    rows.map((p) => String(p.id))
+  );
+
+  let outOfStock = 0;
+  let lowStock = 0;
+  for (const p of rows) {
+    const sellable = sellableFrom(
+      Number(p.stock_quantity ?? 0),
+      reservedMap.get(String(p.id)) ?? 0
+    );
+    if (sellable <= 0) outOfStock++;
+    else if (sellable <= LOW_STOCK_THRESHOLD) lowStock++;
+  }
 
   const { count } = await supabase
     .from("inventory_mutations")
@@ -1408,6 +1428,8 @@ export async function applyInventoryMutation(
     note?: string | null;
     orderReference?: string | null;
     orderProducten?: string | null;
+    /** Geen WhatsApp (bv. commit waarbij reservering tegelijk vrijvalt). */
+    skipStockAlert?: boolean;
   }
 ): Promise<{ ok: true; stockAfter: number } | { ok: false; error: string }> {
   const qty = Math.max(0, Math.floor(params.quantity));
@@ -1477,25 +1499,29 @@ export async function applyInventoryMutation(
     return { ok: false, error: logErr.message };
   }
 
-  // Appje naar vast nummer wanneer voorraad precies 3 bereikt of naar 0 gaat.
-  const hitThree = after === LOW_STOCK_THRESHOLD && before !== LOW_STOCK_THRESHOLD;
-  const hitZero = after === 0 && before > 0;
-  if (hitThree || hitZero) {
-    const variant = String(product.variant_title ?? "").trim();
-    const productTitle = variant
-      ? `${String(product.title ?? "").trim()} (${variant})`
-      : String(product.title ?? "").trim();
+  // Appje op verkoopbare voorraad (stock − reserveringen).
+  if (!params.skipStockAlert) {
     try {
-      const { notifyInventoryStockAlert } = await import("@/lib/whatsapp");
-      const wa = await notifyInventoryStockAlert({
+      const { sumReservedForProduct, sellableFrom, maybeNotifySellableStockAlert } =
+        await import("@/lib/inventory-reservations");
+      const reserved = await sumReservedForProduct(
+        supabase,
+        params.ownerEmail,
+        String(product.id)
+      );
+      const beforeSellable = sellableFrom(before, reserved);
+      const afterSellable = sellableFrom(after, reserved);
+      const variant = String(product.variant_title ?? "").trim();
+      const productTitle = variant
+        ? `${String(product.title ?? "").trim()} (${variant})`
+        : String(product.title ?? "").trim();
+      await maybeNotifySellableStockAlert({
         productTitle: productTitle || "Product",
-        stockAfter: after,
+        beforeSellable,
+        afterSellable,
       });
-      if (!wa.ok) {
-        console.warn("[inventory] voorraad-alert WhatsApp mislukt:", wa.error);
-      }
     } catch (e) {
-      console.warn("[inventory] voorraad-alert WhatsApp fout:", e);
+      console.warn("[inventory] voorraad-alert (sellable) fout:", e);
     }
   }
 
@@ -1591,7 +1617,7 @@ export async function getInventoryMutationsForDay(
   return Array.from(groups.values()).sort((a, b) => b.firstMutationAt.localeCompare(a.firstMutationAt));
 }
 
-async function markOrderDeducted(
+export async function markOrderDeducted(
   supabase: SupabaseClient,
   ownerEmail: string,
   source: "shopify" | "marktplaats" | "moneybird",
@@ -1608,7 +1634,7 @@ async function markOrderDeducted(
   return false;
 }
 
-async function hasOrderDeduction(
+export async function hasOrderDeduction(
   supabase: SupabaseClient,
   ownerEmail: string,
   source: "shopify" | "marktplaats" | "moneybird",
@@ -1624,7 +1650,7 @@ async function hasOrderDeduction(
   return Boolean(data);
 }
 
-async function clearOrderDeduction(
+export async function clearOrderDeduction(
   supabase: SupabaseClient,
   ownerEmail: string,
   source: "shopify" | "marktplaats" | "moneybird",
@@ -1959,7 +1985,7 @@ async function canonicalizeDeductionMap(
   return out;
 }
 
-async function desiredDeductionByProduct(
+export async function desiredDeductionByProduct(
   supabase: SupabaseClient,
   ownerEmail: string,
   lineItems: LineItemForDeduction[]
@@ -2246,11 +2272,14 @@ function moneybirdDetailsToLineItems(
 ): LineItemForDeduction[] {
   const out: LineItemForDeduction[] = [];
   for (const d of details ?? []) {
+    // Vrije tekst (geen Moneybird-product) → nooit voorraad aftrekken.
+    const mbProductId = String(d.product_id ?? "").trim();
+    if (!mbProductId) continue;
+
     const name = String(d.description ?? "").trim();
     if (!name) continue;
     // Strip " (#1234)" / " (orderName)" suffix we add when creating from Shopify.
     const cleanName = name.replace(/\s*\([^)]*\)\s*$/, "").trim() || name;
-    const mbProductId = String(d.product_id ?? "").trim() || null;
     out.push({
       name: cleanName,
       quantity: parseMoneybirdAmount(d.amount),
@@ -2274,10 +2303,8 @@ async function enrichMoneybirdLineItemsForInventory(
   const out: LineItemForDeduction[] = [];
   for (const item of lineItems) {
     const mbId = String(item.moneybird_product_id ?? "").trim();
-    if (!mbId) {
-      out.push(item);
-      continue;
-    }
+    // Zonder Moneybird-product nooit aftrekken (ook geen titel-fallback).
+    if (!mbId) continue;
 
     const { data: existing } = await supabase
       .from("inventory_products")
@@ -2327,7 +2354,8 @@ function moneybirdInvoiceOwnerEmail(): string {
 
 /**
  * Voorraadaftrek voor een Moneybird-factuur (aanroepen na verzenden, niet bij concept).
- * Idempotent op invoice-id. Skip stock als reference shopify:{id} al via Shopify is afgetrokken.
+ * Shopify-reference: commit reserveringen (typisch ≥ €498 handmatig verzonden).
+ * Idempotent op invoice-id.
  */
 export async function deductInventoryForMoneybirdInvoice(
   supabase: SupabaseClient,
@@ -2337,27 +2365,29 @@ export async function deductInventoryForMoneybirdInvoice(
   if (!invoiceId) return { deducted: false, skippedReason: "missing_invoice_id" };
 
   const ownerEmail = moneybirdInvoiceOwnerEmail();
+  const orderReference =
+    String(invoice.reference ?? "").trim() ||
+    String(invoice.invoice_id ?? "").trim() ||
+    `moneybird:${invoiceId}`;
 
   const shopifyOrderId = parseShopifyOrderIdFromInvoiceReference(invoice.reference);
   if (shopifyOrderId) {
-    const alreadyViaShopify = await hasOrderDeduction(
-      supabase,
-      ownerEmail,
-      "shopify",
-      shopifyOrderId
+    const { commitShopifyReservationsFromMoneybirdInvoice } = await import(
+      "@/lib/inventory-reservations"
     );
-    if (alreadyViaShopify) {
-      // Mark moneybird id zodat retries geen tweede poging doen.
-      await markOrderDeducted(supabase, ownerEmail, "moneybird", invoiceId);
-      console.info(
-        "[inventory] Moneybird factuur",
-        invoiceId,
-        "skip — Shopify order",
-        shopifyOrderId,
-        "al afgetrokken"
-      );
+    const result = await commitShopifyReservationsFromMoneybirdInvoice(
+      supabase,
+      shopifyOrderId,
+      invoiceId,
+      orderReference || String(shopifyOrderId)
+    );
+    if (result.committed) {
+      return { deducted: true };
+    }
+    if (result.skippedReason === "shopify_already_deducted") {
       return { deducted: false, skippedReason: "shopify_already_deducted" };
     }
+    // Geen reserveringen: val terug op factuurregels hieronder.
   }
 
   const lineItems = await enrichMoneybirdLineItemsForInventory(
@@ -2373,11 +2403,6 @@ export async function deductInventoryForMoneybirdInvoice(
   if (!isNew) {
     return { deducted: false, skippedReason: "already_processed" };
   }
-
-  const orderReference =
-    String(invoice.reference ?? "").trim() ||
-    String(invoice.invoice_id ?? "").trim() ||
-    `moneybird:${invoiceId}`;
 
   await applyOutgoingMutationsForLineItems(supabase, {
     ownerEmail,

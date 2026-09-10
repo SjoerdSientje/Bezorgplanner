@@ -19,14 +19,17 @@ import {
 } from "@/lib/account";
 import { loadProductDefaultItemsRules } from "@/lib/product-rules-server";
 import {
-  deductInventoryForShopifyOrder,
-  restoreInventoryForShopifyOrder,
-  syncInventoryForShopifyOrderUpdate,
   removeInventoryProductByShopifyId,
   syncInventoryProductFromShopify,
   attachMoneybirdProductIdToInventory,
   detachMoneybirdProductIdFromInventory,
 } from "@/lib/inventory";
+import {
+  reserveInventoryForShopifyOrder,
+  syncReservationsForShopifyOrderUpdate,
+  releaseReservationsForShopifyOrder,
+  maybeCommitInventoryOnShopifyFulfilled,
+} from "@/lib/inventory-reservations";
 import {
   isMoneybirdConfigured,
   removeMoneybirdProductForShopifyId,
@@ -140,8 +143,9 @@ async function handleProductWebhook(
 }
 
 /**
- * Verwijder Shopify-order uit ritjes, pakketjes, Moneybird (+ voorraad terugzetten).
- * Gebruikt bij annulering én orders/deleted.
+ * Verwijder Shopify-order uit ritjes/pakketjes.
+ * Conceptfactuur weg; alleen openstaande reserveringen vrijgeven (geen stock-restore
+ * als de factuur al is verzonden / voorraad al is afgeschreven).
  */
 async function removeShopifyOrderEverywhere(
   supabase: SupabaseClient,
@@ -197,9 +201,10 @@ async function removeShopifyOrderEverywhere(
 
   if (orderPayload) {
     try {
-      await restoreInventoryForShopifyOrder(supabase, orderPayload);
+      // Alleen reserveringen; nooit werkelijke voorraad terugboeken na commit/factuur-send.
+      await releaseReservationsForShopifyOrder(supabase, orderPayload);
     } catch (invErr) {
-      console.error("[webhooks/shopify] inventory restore:", invErr);
+      console.error("[webhooks/shopify] inventory reservations release:", invErr);
     }
   }
 
@@ -317,13 +322,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, skipped: "unhandled_topic", topic }, { status: 200 });
     }
 
-    // Voorraad: create = aftrekken; update = hersync (terug + opnieuw); delete/cancel = restore.
+    // Voorraad: create/update = reserveren; fulfilled <€498 = afschrijven; delete/cancel = vrijgeven/restore.
     try {
       if (isCreate) {
-        await deductInventoryForShopifyOrder(supabase, order);
+        await reserveInventoryForShopifyOrder(supabase, order);
       } else if (isUpdate) {
-        await syncInventoryForShopifyOrderUpdate(supabase, order);
+        await syncReservationsForShopifyOrderUpdate(supabase, order);
       }
+      await maybeCommitInventoryOnShopifyFulfilled(supabase, order);
     } catch (invErr) {
       console.error("[webhooks/shopify] inventory:", invErr);
     }
