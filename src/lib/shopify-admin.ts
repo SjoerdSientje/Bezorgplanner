@@ -254,6 +254,23 @@ export async function shopifyAdminGraphql<T>(
   return body.data;
 }
 
+/** Één Shopify-product ophalen (volledig, voor voorraad-group_key e.d.). */
+export async function fetchShopifyProductById(
+  productId: number
+): Promise<ShopifyAdminProduct | null> {
+  const id = Number(productId);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  try {
+    const data = await shopifyAdminJson<{ product?: ShopifyAdminProduct }>(
+      `/products/${id}.json`
+    );
+    return data.product ?? null;
+  } catch (err) {
+    if (err instanceof ShopifyAdminError && err.status === 404) return null;
+    throw err;
+  }
+}
+
 /** Producttitels ophalen op Shopify product-ids (REST ids=…). */
 export async function fetchShopifyProductSummariesByIds(
   productIds: number[]

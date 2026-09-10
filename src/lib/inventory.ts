@@ -34,7 +34,11 @@ import {
   resolveBundleDeduction,
   shouldSkipInventoryDeductionLineItem,
 } from "@/lib/inventory-rules";
-import { rebuildPartsInventoryFromShopifyCollections } from "@/lib/inventory-parts-rebuild";
+import {
+  clearInventoryPendingProduct,
+  enqueueInventoryPendingProduct,
+  isShopifyProductLinkedToInventory,
+} from "@/lib/inventory-pending";
 
 export type InventoryCategory = "fiets" | "onderdeel" | "accessoire" | "overig";
 export type InventorySource = "shopify" | "marktplaats" | "winkel" | "handmatig" | "moneybird";
@@ -235,12 +239,14 @@ async function upsertInventoryGroups(
   ownerEmail: string,
   groups: Map<string, InventoryGroup>,
   categoryMap: InventoryCategoryMap,
-  existingRows: InventoryProductRow[]
+  existingRows: InventoryProductRow[],
+  options?: { createIfMissing?: boolean }
 ): Promise<{ inserted: number; updated: number; existingRows: InventoryProductRow[]; variantCount: number }> {
   let inserted = 0;
   let updated = 0;
   let variantCount = 0;
   let rows = existingRows;
+  const createIfMissing = options?.createIfMissing !== false;
 
   for (const group of Array.from(groups.values())) {
     variantCount += group.entries.length;
@@ -343,6 +349,10 @@ async function upsertInventoryGroups(
             : row
         );
       }
+      continue;
+    }
+
+    if (!createIfMissing) {
       continue;
     }
 
@@ -459,7 +469,7 @@ export async function syncInventoryProductFromShopify(
   supabase: SupabaseClient,
   ownerEmail: string,
   product: ShopifyAdminProduct
-): Promise<{ inserted: number; updated: number; removed: number }> {
+): Promise<{ inserted: number; updated: number; removed: number; enqueued?: boolean }> {
   const shopifyProductId = Number(product.id);
   if (!Number.isFinite(shopifyProductId) || shopifyProductId <= 0) {
     return { inserted: 0, updated: 0, removed: 0 };
@@ -469,8 +479,6 @@ export async function syncInventoryProductFromShopify(
     .map((v) => Number(v.id))
     .filter((id) => Number.isFinite(id) && id > 0);
 
-  const categoryMap = await fetchInventoryCollectionProductIds();
-
   if (!isShopifyProductActive(product) || isExcludedFromInventory(product)) {
     const removed = await removeInventoryProductByShopifyId(
       supabase,
@@ -478,10 +486,32 @@ export async function syncInventoryProductFromShopify(
       shopifyProductId,
       { variantIds, title: product.title }
     );
+    await clearInventoryPendingProduct(supabase, ownerEmail, shopifyProductId);
     return { inserted: 0, updated: 0, removed };
   }
 
-  // Onderdelen/accessoires: niet via fiets-grouping; vaste regels via rebuild/sync.
+  const linked = await isShopifyProductLinkedToInventory(
+    supabase,
+    ownerEmail,
+    shopifyProductId,
+    variantIds
+  );
+
+  // Nieuw actief product → review-wachtrij (geen auto-voorraadrij).
+  if (!linked) {
+    const { enqueued } = await enqueueInventoryPendingProduct(
+      supabase,
+      ownerEmail,
+      product
+    );
+    return { inserted: 0, updated: 0, removed: 0, enqueued };
+  }
+
+  await clearInventoryPendingProduct(supabase, ownerEmail, shopifyProductId);
+
+  const categoryMap = await fetchInventoryCollectionProductIds();
+
+  // Onderdelen/accessoires die al gekoppeld zijn: metadata niet via fiets-grouping forceren.
   if (isPartsCollectionProduct(shopifyProductId, categoryMap)) {
     return { inserted: 0, updated: 0, removed: 0 };
   }
@@ -490,8 +520,6 @@ export async function syncInventoryProductFromShopify(
   const keepGroupKeys = new Set(groups.keys());
   const groupKeys = Array.from(keepGroupKeys);
 
-  // Belangrijk: match op group_key (V8 + kleur), niet alleen op dit Shopify-product-id —
-  // anders krijgt een combideal een eigen voorraadrij i.p.v. onder V8 te hangen.
   let existingRows: InventoryProductRow[] = [];
   if (groupKeys.length > 0) {
     const { data: byGroup } = await supabase
@@ -516,7 +544,6 @@ export async function syncInventoryProductFromShopify(
     }
   }
 
-  // Ook rijen die dit product's variant-ids al bevatten (oude sync-staat).
   if (variantIds.length > 0) {
     const { data: allRows } = await supabase
       .from("inventory_products")
@@ -534,16 +561,25 @@ export async function syncInventoryProductFromShopify(
     }
   }
 
+  // Alleen updaten van bestaande groepen — nooit nieuwe insert via webhook.
+  if (existingRows.length === 0) {
+    const { enqueued } = await enqueueInventoryPendingProduct(
+      supabase,
+      ownerEmail,
+      product
+    );
+    return { inserted: 0, updated: 0, removed: 0, enqueued };
+  }
+
   const { inserted, updated, existingRows: afterUpsert } = await upsertInventoryGroups(
     supabase,
     ownerEmail,
     groups,
     categoryMap,
-    existingRows
+    existingRows,
+    { createIfMissing: false }
   );
 
-  // Alleen wees-rijen van DIT fysieke product opruimen — nooit een gedeelde groep wissen
-  // omdat een deal-product een andere group_key had.
   const orphanIds = afterUpsert
     .filter(
       (row) =>
@@ -584,18 +620,18 @@ export async function syncInventoryFromShopify(
   updated: number;
   removed: number;
   total: number;
-  partsRebuild?: Awaited<ReturnType<typeof rebuildPartsInventoryFromShopifyCollections>>;
+  enqueued: number;
 }> {
   const allProducts = await fetchAllShopifyProducts();
   const categoryMap = await fetchInventoryCollectionProductIds();
 
-  // Onderdelen/accessoires: aparte rebuild met vaste regels — niet via fiets-grouping.
-  const products = allProducts.filter((product) => {
+  // Fietsen e.d.: alleen bestaande groepen bijwerken (geen auto-insert nieuwe regels).
+  const bikeProducts = allProducts.filter((product) => {
     if (!isShopifyProductActive(product) || isExcludedFromInventory(product)) return false;
     if (isPartsCollectionProduct(product.id, categoryMap)) return false;
     return true;
   });
-  const groups = buildInventoryGroups(products);
+  const groups = buildInventoryGroups(bikeProducts);
 
   const { data: existingRowsRaw } = await supabase
     .from("inventory_products")
@@ -609,12 +645,12 @@ export async function syncInventoryFromShopify(
     ownerEmail,
     groups,
     categoryMap,
-    existingRows
+    existingRows,
+    { createIfMissing: false }
   );
 
-  // Alles wat niet meer in de actieve catalogus-groep zit (draft/archief/verwijderd) eruit.
-  // parts:* / onderdeel / accessoire blijven buiten deze prune.
   const keepGroupKeys = new Set(groups.keys());
+  // Behoud parts:-keys en onderdeel/accessoire via prune-filter.
   const removed = await pruneInventoryProductsOutsideGroupKeys(
     supabase,
     ownerEmail,
@@ -635,16 +671,36 @@ export async function syncInventoryFromShopify(
     removedTotal += excludedByTitle?.length ?? 0;
   }
 
-  let partsRebuild:
-    | Awaited<ReturnType<typeof rebuildPartsInventoryFromShopifyCollections>>
-    | undefined;
-  try {
-    partsRebuild = await rebuildPartsInventoryFromShopifyCollections(supabase, ownerEmail);
-  } catch (err) {
-    console.warn(
-      "[inventory] parts rebuild failed:",
-      err instanceof Error ? err.message : err
+  // Vangnet: actieve producten zonder voorraadkoppeling → Nieuwe producten-wachtrij.
+  let enqueued = 0;
+  for (const product of allProducts) {
+    if (!isShopifyProductActive(product) || isExcludedFromInventory(product)) {
+      await clearInventoryPendingProduct(supabase, ownerEmail, Number(product.id));
+      continue;
+    }
+    const vids = (product.variants ?? [])
+      .map((v) => Number(v.id))
+      .filter((id) => Number.isFinite(id) && id > 0);
+    const linked = await isShopifyProductLinkedToInventory(
+      supabase,
+      ownerEmail,
+      Number(product.id),
+      vids
     );
+    if (linked) {
+      await clearInventoryPendingProduct(supabase, ownerEmail, Number(product.id));
+      continue;
+    }
+    try {
+      const result = await enqueueInventoryPendingProduct(supabase, ownerEmail, product);
+      if (result.enqueued) enqueued++;
+    } catch (err) {
+      console.warn(
+        "[inventory] enqueue pending failed",
+        product.id,
+        err instanceof Error ? err.message : err
+      );
+    }
   }
 
   try {
@@ -665,7 +721,13 @@ export async function syncInventoryFromShopify(
     );
   }
 
-  return { inserted, updated, removed: removedTotal, total: variantCount, partsRebuild };
+  return {
+    inserted,
+    updated,
+    removed: removedTotal,
+    total: variantCount,
+    enqueued,
+  };
 }
 
 /**

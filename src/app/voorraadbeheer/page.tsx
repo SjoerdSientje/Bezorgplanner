@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState, Fragment } from "react";
 import Link from "next/link";
 import Header from "@/components/Header";
 import IncomingDeliveriesModal from "@/components/IncomingDeliveriesModal";
+import NewProductsModal from "@/components/NewProductsModal";
 import {
   LOW_STOCK_THRESHOLD,
   type InventoryMutationGroup,
@@ -116,6 +117,8 @@ export default function VoorraadbeheerPage() {
 
   const [mutationsOpen, setMutationsOpen] = useState(false);
   const [incomingOpen, setIncomingOpen] = useState(false);
+  const [newProductsOpen, setNewProductsOpen] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
   const [mutationsLoading, setMutationsLoading] = useState(false);
   const [mutationsError, setMutationsError] = useState<string | null>(null);
   const [mutationGroups, setMutationGroups] = useState<InventoryMutationGroup[]>([]);
@@ -155,10 +158,10 @@ export default function VoorraadbeheerPage() {
         const syncData = await syncRes.json();
         if (!syncRes.ok) throw new Error(syncData?.error ?? "Synchroniseren mislukt");
         setMessage(
-          `Shopify gesynchroniseerd: ${syncData.inserted} nieuw, ${syncData.updated} bijgewerkt` +
+          `Shopify gesynchroniseerd: ${syncData.updated ?? 0} bijgewerkt` +
             (syncData.removed ? `, ${syncData.removed} concept/archief verwijderd` : "") +
-            (syncData.partsRebuild
-              ? `, onderdelen/accessoires: ${syncData.partsRebuild.stockRowsUpserted} voorraadregels`
+            (syncData.enqueued
+              ? `, ${syncData.enqueued} nieuw in wachtrij`
               : "") +
             "."
         );
@@ -169,6 +172,7 @@ export default function VoorraadbeheerPage() {
       if (!res.ok) throw new Error(data?.error ?? "Laden mislukt");
       setProducts(data.products ?? []);
       setStats(data.stats ?? null);
+      setPendingCount(Number(data.pendingCount ?? 0));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Laden mislukt");
     } finally {
@@ -875,6 +879,18 @@ export default function VoorraadbeheerPage() {
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
+                onClick={() => setNewProductsOpen(true)}
+                className="relative rounded-xl border border-koopje-orange/40 bg-orange-50 px-4 py-2 text-sm font-medium text-koopje-black hover:bg-orange-100"
+              >
+                Nieuwe producten
+                {pendingCount > 0 && (
+                  <span className="ml-2 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-koopje-orange px-1.5 py-0.5 text-xs font-semibold text-white">
+                    {pendingCount}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
                 onClick={() => setIncomingOpen(true)}
                 className="rounded-xl border border-koopje-orange/40 bg-orange-50 px-4 py-2 text-sm font-medium text-koopje-black hover:bg-orange-100"
               >
@@ -1287,6 +1303,11 @@ export default function VoorraadbeheerPage() {
       )}
 
       <IncomingDeliveriesModal open={incomingOpen} onClose={() => setIncomingOpen(false)} />
+      <NewProductsModal
+        open={newProductsOpen}
+        onClose={() => setNewProductsOpen(false)}
+        onChanged={() => load(false)}
+      />
     </>
   );
 }

@@ -6,11 +6,12 @@ import {
   syncInventoryFromShopify,
   type InventoryCategory,
 } from "@/lib/inventory";
+import { countInventoryPendingProducts } from "@/lib/inventory-pending";
 import { syncInventoryLevertijdFromShopifyMetafields } from "@/lib/inventory-levertijd";
 import { ShopifyAdminError } from "@/lib/shopify-admin";
 
 export const dynamic = "force-dynamic";
-/** Volledige Shopify-catalogus-sync + onderdelen/accessoires-rebuild kan >10s duren. */
+/** Volledige Shopify-catalogus-sync; nieuwe producten gaan naar de review-wachtrij. */
 export const maxDuration = 120;
 
 export async function GET(request: NextRequest) {
@@ -35,9 +36,10 @@ export async function GET(request: NextRequest) {
       query = query.eq("category", category as InventoryCategory);
     }
 
-    const [{ data: products, error }, stats] = await Promise.all([
+    const [{ data: products, error }, stats, pendingCount] = await Promise.all([
       query,
       getInventoryStats(supabase, ownerEmail),
+      countInventoryPendingProducts(supabase, ownerEmail).catch(() => 0),
     ]);
 
     if (error) {
@@ -45,7 +47,7 @@ export async function GET(request: NextRequest) {
     }
 
     return NextResponse.json(
-      { products: products ?? [], stats },
+      { products: products ?? [], stats, pendingCount },
       { headers: { "Cache-Control": "no-store" } }
     );
   } catch (e) {
@@ -118,8 +120,11 @@ export async function POST(request: NextRequest) {
       console.error("[api/inventory] levertijd metafield sync:", leverErr);
     }
     const stats = await getInventoryStats(supabase, ownerEmail);
+    const pendingCount = await countInventoryPendingProducts(supabase, ownerEmail).catch(
+      () => 0
+    );
 
-    return NextResponse.json({ ok: true, ...result, levertijdSync, stats });
+    return NextResponse.json({ ok: true, ...result, levertijdSync, stats, pendingCount });
   } catch (e) {
     const message =
       e instanceof ShopifyAdminError

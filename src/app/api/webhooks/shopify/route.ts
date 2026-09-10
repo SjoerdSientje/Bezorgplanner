@@ -35,6 +35,7 @@ import {
   deleteSalesInvoiceForShopifyOrderId,
   upsertMoneybirdProductFromShopify,
 } from "@/lib/moneybird";
+import { clearInventoryPendingProduct } from "@/lib/inventory-pending";
 import type { ShopifyAdminProduct } from "@/lib/shopify-admin";
 import {
   inferCompletedStatus,
@@ -69,6 +70,11 @@ async function handleProductWebhook(
           : [],
       }
     );
+    try {
+      await clearInventoryPendingProduct(supabase, ownerEmail, productId);
+    } catch (pendingErr) {
+      console.warn("[webhooks/shopify] clear pending on delete:", pendingErr);
+    }
     let moneybird: { removed: boolean; productId?: string } | { error: string } = {
       removed: false,
     };
