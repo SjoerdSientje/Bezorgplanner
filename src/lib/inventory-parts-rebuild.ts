@@ -506,19 +506,42 @@ export async function rebuildPartsInventoryFromShopifyCollections(
     }
   }
 
-  // Verwijder voorraadrijen van uitgesloten titels (onderdeel/accessoire)
-  for (const title of [
-    "Fietspompje",
-    "Achterzitje Ouxi V8",
-    "Voorrekje voor Fatbikes",
-    "Volledig rijklaar",
-  ]) {
+  // Verwijder voorraadrijen die geen eigen stock mogen hebben.
+  // Oude sync-rijen hebben vaak group_key "product:…" i.p.v. "parts:…" — dus
+  // wissen op shopify_product_id + exacte titel, niet alleen op parts-slug.
+  const nonStockShopifyIds = new Set<number>();
+  const nonStockTitles = new Set<string>();
+
+  for (const product of Array.from(byId.values())) {
+    if (!isPartsNonStockShopifyTitle(product.title)) continue;
+    // Dubbele Koplamp V20: wél voorraad; niet wissen.
+    const dup = partsDuplicateCanonicalTitle(product.title);
+    if (dup && !findPartsComposition(product.title) && !findPartsUnitMap(product.title) && !isPartsExcludedTitle(product.title)) {
+      continue;
+    }
+    nonStockShopifyIds.add(product.id);
+    nonStockTitles.add(String(product.title ?? "").trim());
+  }
+
+  if (nonStockShopifyIds.size > 0) {
+    const ids = Array.from(nonStockShopifyIds);
+    for (let i = 0; i < ids.length; i += 100) {
+      await supabase
+        .from("inventory_products")
+        .delete()
+        .eq("owner_email", ownerEmail)
+        .in("shopify_product_id", ids.slice(i, i + 100));
+    }
+  }
+  for (const title of Array.from(nonStockTitles)) {
+    if (!title) continue;
     await supabase
       .from("inventory_products")
       .delete()
       .eq("owner_email", ownerEmail)
-      .ilike("title", title);
+      .eq("title", title);
   }
+  // Extra titel-filters voor excludes die soms buiten byId vielen
   await supabase
     .from("inventory_products")
     .delete()
@@ -534,26 +557,6 @@ export async function rebuildPartsInventoryFromShopifyCollections(
     .delete()
     .eq("owner_email", ownerEmail)
     .ilike("title", "%Range Rover Velar%");
-
-  // Sets / unit-map sources mogen geen eigen stock-rij houden
-  for (const product of Array.from(byId.values())) {
-    if (!isPartsNonStockShopifyTitle(product.title)) continue;
-    if (isPartsExcludedTitle(product.title)) continue;
-    // Alleen verwijderen als group_key exact parts:slug van dit product is
-    // én niet canonical van iets anders
-    const gk = groupKeyForPartsTitle(product.title);
-    const canonicalDup = partsDuplicateCanonicalTitle(product.title);
-    if (canonicalDup && normalizePartsTitle(canonicalDup) === normalizePartsTitle(product.title)) {
-      continue;
-    }
-    if (findPartsComposition(product.title) || findPartsUnitMap(product.title)) {
-      await supabase
-        .from("inventory_products")
-        .delete()
-        .eq("owner_email", ownerEmail)
-        .eq("group_key", gk);
-    }
-  }
 
   return {
     stockRowsUpserted,
