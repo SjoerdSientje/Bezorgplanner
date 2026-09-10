@@ -171,14 +171,39 @@ function variantIdsForGroup(group: InventoryGroup): number[] {
   return Array.from(new Set(group.entries.map((e) => e.variant.id))).sort((a, b) => a - b);
 }
 
+function groupKeyModelToken(groupKey: string): string {
+  return String(groupKey ?? "")
+    .toLowerCase()
+    .replace(/^product:/, "")
+    .split("|")[0] ?? "";
+}
+
+/** Voorkom merge van fysiek onverenigbare fietsen (bijv. skinny vs fatbike). */
+function isIncompatibleInventoryGroupKeys(a: string, b: string): boolean {
+  const ta = groupKeyModelToken(a);
+  const tb = groupKeyModelToken(b);
+  if (!ta || !tb) return false;
+  const skinnyA = /\bskinny/.test(ta) || ta.includes("skinnybike");
+  const skinnyB = /\bskinny/.test(tb) || tb.includes("skinnybike");
+  if (skinnyA !== skinnyB) return true;
+  return false;
+}
+
 function rowMatchesGroup(
   row: InventoryProductRow,
   groupKey: string,
   variantIds: Set<number>
 ): boolean {
   if (row.group_key === groupKey) return true;
-  if (variantIds.has(row.shopify_variant_id)) return true;
-  return (row.shopify_variant_ids ?? []).some((id) => variantIds.has(id));
+  const sharesVariant =
+    variantIds.has(row.shopify_variant_id) ||
+    (row.shopify_variant_ids ?? []).some((id) => variantIds.has(id));
+  if (!sharesVariant) return false;
+  // Vervuilde variant-ids van een eerdere foute merge mogen geen skinny↔fat merge triggeren.
+  if (isIncompatibleInventoryGroupKeys(String(row.group_key ?? ""), groupKey)) {
+    return false;
+  }
+  return true;
 }
 
 function pickPrimaryRow(

@@ -155,6 +155,7 @@ function normalizeOuxiV8C80(title: string): ModelColor | null {
 
   if (/Ultra\s+Mini/i.test(cleaned)) return null;
   if (/Ultra\s+Fatbike/i.test(cleaned) && !/6\.0|C80/i.test(cleaned)) return null;
+  if (/Skinny/i.test(cleaned)) return null;
   if (/MAX/i.test(cleaned) && /Dubbele/i.test(cleaned)) return null;
 
   if (/24\s*inch/i.test(cleaned)) {
@@ -168,15 +169,21 @@ function normalizeOuxiV8C80(title: string): ModelColor | null {
     return { modelName: "OUXI V8 / C80 Fatbike 24 inch", colorName: color };
   }
 
-  if (/6\.0\s+Fatbike/i.test(cleaned) && /mat[- ]?zwart/i.test(cleaned)) {
-    return { modelName: "OUXI V8 / C80 6.0 Fatbike", colorName: "Zwart" };
+  // Zelfde fysieke fiets: "6.0 Fatbike" én "6.0 (C80) Fatbike" (+ deals/basic/family).
+  const is60Fatbike =
+    /6\.0\s+Fatbike/i.test(cleaned) || /6\.0\s*\(C80\)\s+Fatbike/i.test(cleaned);
+  if (is60Fatbike && !/PRO\s*MAX/i.test(cleaned)) {
+    const color =
+      extractColorFromTitle(cleaned) ??
+      (/mat[- ]?zwart/i.test(cleaned) ? "Zwart" : null);
+    return { modelName: "OUXI V8 / C80 6.0 Fatbike", colorName: color };
   }
 
-  if (
-    (/V8\s*\/\s*C80\s*PRO\s+Fatbike/i.test(cleaned) && !/MAX/i.test(cleaned)) ||
-    /6\.0\s*\(C80\)\s+Fatbike/i.test(cleaned)
-  ) {
-    return { modelName: "OUXI V8 / C80 Fatbike", colorName: extractColorFromTitle(cleaned) };
+  if (/V8\s*\/\s*C80\s*PRO\s+Fatbike/i.test(cleaned) && !/MAX/i.test(cleaned)) {
+    return {
+      modelName: "OUXI V8 / C80 Fatbike",
+      colorName: extractColorFromTitle(cleaned),
+    };
   }
 
   return null;
@@ -185,10 +192,12 @@ function normalizeOuxiV8C80(title: string): ModelColor | null {
 function normalizeV20ProFatbike(title: string): ModelColor | null {
   const cleaned = cleanTitleForGrouping(title);
   if (/Comfort|C28/i.test(cleaned)) return null;
+  if (/Skinny/i.test(cleaned)) return null;
   if (/V20\s*PRO\s+Fatbike/i.test(cleaned) || /V20Pro\s+Fatbike/i.test(cleaned)) {
+    const color = extractColorFromTitle(cleaned) ?? "Zwart";
     return {
       modelName: "V20 PRO Fatbike",
-      colorName: extractColorFromTitle(cleaned),
+      colorName: color,
     };
   }
   return null;
