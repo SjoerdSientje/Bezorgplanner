@@ -229,6 +229,105 @@ export async function shopifyAdminJson<T>(path: string, init: RequestInit = {}):
   return (await res.json()) as T;
 }
 
+export async function shopifyAdminGraphql<T>(
+  query: string,
+  variables?: Record<string, unknown>
+): Promise<T> {
+  const body = await shopifyAdminJson<{
+    data?: T;
+    errors?: Array<{ message?: string }>;
+  }>("/graphql.json", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, variables }),
+  });
+  if (body.errors?.length) {
+    throw new ShopifyAdminError(
+      body.errors.map((e) => e.message ?? "GraphQL-fout").join("; "),
+      undefined,
+      body.errors
+    );
+  }
+  if (!body.data) {
+    throw new ShopifyAdminError("Shopify GraphQL gaf geen data terug.");
+  }
+  return body.data;
+}
+
+/** Producttitels ophalen op Shopify product-ids (REST ids=…). */
+export async function fetchShopifyProductSummariesByIds(
+  productIds: number[]
+): Promise<Array<{ id: number; title: string; status: string }>> {
+  const unique = Array.from(
+    new Set(productIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))
+  );
+  const out: Array<{ id: number; title: string; status: string }> = [];
+  for (let i = 0; i < unique.length; i += 50) {
+    const chunk = unique.slice(i, i + 50);
+    const data = await shopifyAdminJson<{ products?: ShopifyAdminProduct[] }>(
+      `/products.json?ids=${chunk.join(",")}&limit=${chunk.length}&fields=id,title,status`
+    );
+    for (const p of data.products ?? []) {
+      out.push({
+        id: Number(p.id),
+        title: String(p.title ?? ""),
+        status: String(p.status ?? ""),
+      });
+    }
+  }
+  return out;
+}
+
+/** Variant-ids → unieke Shopify product-ids (GraphQL nodes). */
+export async function resolveShopifyProductIdsFromVariantIds(
+  variantIds: number[]
+): Promise<number[]> {
+  const unique = Array.from(
+    new Set(variantIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))
+  );
+  const productIds = new Set<number>();
+
+  for (let i = 0; i < unique.length; i += 40) {
+    const chunk = unique.slice(i, i + 40);
+    const gids = chunk.map((id) => `gid://shopify/ProductVariant/${id}`);
+    try {
+      const data = await shopifyAdminGraphql<{
+        nodes: Array<{ product?: { id?: string } | null } | null>;
+      }>(
+        `query InventoryVariantProducts($ids: [ID!]!) {
+          nodes(ids: $ids) {
+            ... on ProductVariant {
+              product { id }
+            }
+          }
+        }`,
+        { ids: gids }
+      );
+      for (const node of data.nodes ?? []) {
+        const gid = node?.product?.id;
+        if (!gid) continue;
+        const m = String(gid).match(/Product\/(\d+)/);
+        if (m) productIds.add(Number(m[1]));
+      }
+    } catch {
+      // Fallback: REST per variant (langzamer).
+      for (const variantId of chunk) {
+        try {
+          const data = await shopifyAdminJson<{
+            variant?: { product_id?: number };
+          }>(`/variants/${variantId}.json?fields=product_id`);
+          const pid = Number(data.variant?.product_id ?? 0);
+          if (pid > 0) productIds.add(pid);
+        } catch {
+          // skip missing variant
+        }
+      }
+    }
+  }
+
+  return Array.from(productIds);
+}
+
 export async function fetchShopifyProductsPage(options?: {
   limit?: number;
   pageInfo?: string | null;

@@ -2,7 +2,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   fetchAllShopifyProducts,
   fetchInventoryCollectionProductIds,
+  fetchShopifyProductSummariesByIds,
   isShopifyProductActive,
+  resolveShopifyProductIdsFromVariantIds,
   searchShopifyProducts,
   shopifyAdminJson,
   type ShopifyAdminProduct,
@@ -770,6 +772,103 @@ export async function getInventoryStats(
     outOfStock,
     mutationsToday: count ?? 0,
   };
+}
+
+export type InventoryLinkedShopifyProduct = {
+  shopifyProductId: number;
+  title: string;
+  status: string;
+  /** hoofd = representative shopify_product_id op de voorraadrij */
+  role: "hoofd" | "gekoppeld" | "aftrek";
+  /** Bij composition/unit-map: hoeveel stuks per bestelling van dit Shopify-product. */
+  deductQuantity: number | null;
+  note: string | null;
+};
+
+/**
+ * Alle Shopify-producten die aan deze voorraadregel hangen:
+ * - representative + variant_ids (fietsen/deals)
+ * - inventory_shopify_deductions die naar deze rij wijzen (onderdelen/sets)
+ */
+export async function getInventoryLinkedShopifyProducts(
+  supabase: SupabaseClient,
+  ownerEmail: string,
+  inventoryProductId: string
+): Promise<InventoryLinkedShopifyProduct[]> {
+  const { data: row, error } = await supabase
+    .from("inventory_products")
+    .select("id, shopify_product_id, shopify_variant_id, shopify_variant_ids")
+    .eq("owner_email", ownerEmail)
+    .eq("id", inventoryProductId)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  if (!row) throw new Error("Voorraadregel niet gevonden.");
+
+  const productIds = new Set<number>();
+  const headId = Number(row.shopify_product_id ?? 0);
+  if (headId > 0) productIds.add(headId);
+
+  const variantIds = unionVariantIds([
+    Number(row.shopify_variant_id ?? 0),
+    ...(row.shopify_variant_ids ?? []),
+  ]);
+  if (variantIds.length > 0) {
+    const fromVariants = await resolveShopifyProductIdsFromVariantIds(variantIds);
+    for (const id of fromVariants) productIds.add(id);
+  }
+
+  const { data: deductionRows } = await supabase
+    .from("inventory_shopify_deductions")
+    .select("shopify_product_id, quantity, note, kind")
+    .eq("owner_email", ownerEmail)
+    .eq("inventory_product_id", inventoryProductId)
+    .eq("kind", "deduct");
+
+  const deductByProduct = new Map<
+    number,
+    { quantity: number; note: string | null }
+  >();
+  for (const d of deductionRows ?? []) {
+    const pid = Number(d.shopify_product_id ?? 0);
+    if (!(pid > 0)) continue;
+    productIds.add(pid);
+    deductByProduct.set(pid, {
+      quantity: Math.max(1, Math.floor(Number(d.quantity ?? 1))),
+      note: d.note != null ? String(d.note) : null,
+    });
+  }
+
+  const summaries = await fetchShopifyProductSummariesByIds(Array.from(productIds));
+  const byId = new Map(summaries.map((s) => [s.id, s] as const));
+
+  const links: InventoryLinkedShopifyProduct[] = [];
+  for (const pid of Array.from(productIds).sort((a, b) => a - b)) {
+    const summary = byId.get(pid);
+    const deduct = deductByProduct.get(pid) ?? null;
+    let role: InventoryLinkedShopifyProduct["role"] = "gekoppeld";
+    if (pid === headId) role = "hoofd";
+    else if (deduct) role = "aftrek";
+
+    links.push({
+      shopifyProductId: pid,
+      title: summary?.title || `Shopify product #${pid}`,
+      status: summary?.status || "unknown",
+      role,
+      deductQuantity: deduct?.quantity ?? null,
+      note: deduct?.note ?? null,
+    });
+  }
+
+  links.sort((a, b) => {
+    const rank = (r: InventoryLinkedShopifyProduct["role"]) =>
+      r === "hoofd" ? 0 : r === "gekoppeld" ? 1 : 2;
+    const d = rank(a.role) - rank(b.role);
+    if (d !== 0) return d;
+    return a.title.localeCompare(b.title, "nl");
+  });
+
+  return links;
 }
 
 async function findProductByTitleContains(
