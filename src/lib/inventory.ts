@@ -1430,8 +1430,16 @@ export async function applyInventoryMutation(
     orderProducten?: string | null;
     /** Geen WhatsApp (bv. commit waarbij reservering tegelijk vrijvalt). */
     skipStockAlert?: boolean;
+    /**
+     * Geen direct fiets-aanvul-appje; caller batcht (bv. inkomende levering).
+     * bikeRestock wordt wel teruggegeven.
+     */
+    skipBikeRestockAlert?: boolean;
   }
-): Promise<{ ok: true; stockAfter: number } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; stockAfter: number; bikeRestock?: { productTitle: string; quantityAdded: number } }
+  | { ok: false; error: string }
+> {
   const qty = Math.max(0, Math.floor(params.quantity));
   if (qty <= 0 && params.mutationType !== "correctie") {
     return { ok: false, error: "Aantal moet groter dan 0 zijn." };
@@ -1499,6 +1507,11 @@ export async function applyInventoryMutation(
     return { ok: false, error: logErr.message };
   }
 
+  const variant = String(product.variant_title ?? "").trim();
+  const productTitle = variant
+    ? `${String(product.title ?? "").trim()} (${variant})`
+    : String(product.title ?? "").trim();
+
   // Appje op verkoopbare voorraad (stock − reserveringen).
   if (!params.skipStockAlert) {
     try {
@@ -1511,10 +1524,6 @@ export async function applyInventoryMutation(
       );
       const beforeSellable = sellableFrom(before, reserved);
       const afterSellable = sellableFrom(after, reserved);
-      const variant = String(product.variant_title ?? "").trim();
-      const productTitle = variant
-        ? `${String(product.title ?? "").trim()} (${variant})`
-        : String(product.title ?? "").trim();
       await maybeNotifySellableStockAlert({
         productTitle: productTitle || "Product",
         beforeSellable,
@@ -1525,7 +1534,28 @@ export async function applyInventoryMutation(
     }
   }
 
-  return { ok: true, stockAfter: after };
+  let bikeRestock: { productTitle: string; quantityAdded: number } | undefined;
+  const category = String(product.category ?? "");
+  const quantityAdded = after - before;
+  if (category === "fiets" && quantityAdded > 0) {
+    bikeRestock = {
+      productTitle: productTitle || "Fiets",
+      quantityAdded,
+    };
+    if (!params.skipBikeRestockAlert) {
+      try {
+        const { notifyInventoryBikeRestockAlert } = await import("@/lib/whatsapp");
+        const wa = await notifyInventoryBikeRestockAlert([bikeRestock]);
+        if (!wa.ok) {
+          console.warn("[inventory] fiets-aanvul WhatsApp mislukt:", wa.error);
+        }
+      } catch (e) {
+        console.warn("[inventory] fiets-aanvul WhatsApp fout:", e);
+      }
+    }
+  }
+
+  return { ok: true, stockAfter: after, bikeRestock };
 }
 
 export type InventoryMutationDetail = {

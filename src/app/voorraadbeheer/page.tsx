@@ -1442,7 +1442,11 @@ export default function VoorraadbeheerPage() {
         </>
       )}
 
-      <IncomingDeliveriesModal open={incomingOpen} onClose={() => setIncomingOpen(false)} />
+      <IncomingDeliveriesModal
+        open={incomingOpen}
+        onClose={() => setIncomingOpen(false)}
+        onStockChanged={() => void load(false)}
+      />
       <NewProductsModal
         open={newProductsOpen}
         onClose={() => setNewProductsOpen(false)}

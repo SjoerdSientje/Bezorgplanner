@@ -16,12 +16,23 @@ const SPECS = [
   {
     name: "voorraad_laag_3",
     bodyText: "De voorraad van {{productnaam}} is laag (3).",
-    exampleProduct: "Fatbike Zwart",
+    exampleParams: [{ param_name: "productnaam", example: "Fatbike Zwart" }],
   },
   {
     name: "voorraad_uitverkocht",
     bodyText: "Waarschuwing! {{productnaam}} is uitverkocht, bestel bij!",
-    exampleProduct: "Fatbike Zwart",
+    exampleParams: [{ param_name: "productnaam", example: "Fatbike Zwart" }],
+  },
+  {
+    name: "voorraad_fiets_aangevuld",
+    bodyText:
+      "Jo megahead, de voorraad van de volgende bikas is aangevuld: {{fietsenlijst}}. Check voorraadbeheer.",
+    exampleParams: [
+      {
+        param_name: "fietsenlijst",
+        example: "Fatbike V20 Zwart: 10",
+      },
+    ],
   },
 ];
 
@@ -54,9 +65,7 @@ async function main() {
               type: "BODY",
               text: spec.bodyText,
               example: {
-                body_text_named_params: [
-                  { param_name: "productnaam", example: spec.exampleProduct },
-                ],
+                body_text_named_params: spec.exampleParams,
               },
             },
           ],

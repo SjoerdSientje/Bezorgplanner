@@ -3,13 +3,14 @@ import { requireAccountEmail } from "@/lib/account";
 import {
   createInventoryAlertTemplates,
   fetchWhatsAppTemplates,
+  INVENTORY_ALERT_TEMPLATE_BIKE_RESTOCK,
   INVENTORY_ALERT_TEMPLATE_LOW,
   INVENTORY_ALERT_TEMPLATE_OUT,
 } from "@/lib/whatsapp";
 
 /**
  * POST /api/whatsapp/voorraad-template
- * Dient beide Meta-templates in: voorraad_laag_3 + voorraad_uitverkocht.
+ * Dient Meta-templates in: voorraad_laag_3, voorraad_uitverkocht, voorraad_fiets_aangevuld.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -36,11 +37,15 @@ export async function POST(request: NextRequest) {
   }
 }
 
-/** GET: status van beide voorraad-templates. */
+/** GET: status van voorraad-templates. */
 export async function GET(request: NextRequest) {
   try {
     requireAccountEmail(request);
-    const names = [INVENTORY_ALERT_TEMPLATE_LOW, INVENTORY_ALERT_TEMPLATE_OUT];
+    const names = [
+      INVENTORY_ALERT_TEMPLATE_LOW,
+      INVENTORY_ALERT_TEMPLATE_OUT,
+      INVENTORY_ALERT_TEMPLATE_BIKE_RESTOCK,
+    ];
     const fetched = await fetchWhatsAppTemplates();
     if (!fetched.ok) {
       return NextResponse.json({ ok: false, error: fetched.error }, { status: 400 });

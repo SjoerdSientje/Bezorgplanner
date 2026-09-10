@@ -517,6 +517,7 @@ export const INVENTORY_ALERT_PHONE_DEFAULT = "31687139057";
 
 export const INVENTORY_ALERT_TEMPLATE_LOW = "voorraad_laag_3";
 export const INVENTORY_ALERT_TEMPLATE_OUT = "voorraad_uitverkocht";
+export const INVENTORY_ALERT_TEMPLATE_BIKE_RESTOCK = "voorraad_fiets_aangevuld";
 
 /** @deprecated gebruik INVENTORY_ALERT_TEMPLATE_LOW / _OUT */
 export const INVENTORY_ALERT_TEMPLATE_DEFAULT = INVENTORY_ALERT_TEMPLATE_LOW;
@@ -571,19 +572,31 @@ export async function sendWhatsAppText(params: {
 type InventoryTemplateSpec = {
   name: string;
   bodyText: string;
-  exampleProduct: string;
+  /** Named body params → example values for Meta review. */
+  exampleParams: Array<{ param_name: string; example: string }>;
 };
 
 const INVENTORY_ALERT_TEMPLATE_SPECS: InventoryTemplateSpec[] = [
   {
     name: INVENTORY_ALERT_TEMPLATE_LOW,
     bodyText: "De voorraad van {{productnaam}} is laag (3).",
-    exampleProduct: "Fatbike Zwart",
+    exampleParams: [{ param_name: "productnaam", example: "Fatbike Zwart" }],
   },
   {
     name: INVENTORY_ALERT_TEMPLATE_OUT,
     bodyText: "Waarschuwing! {{productnaam}} is uitverkocht, bestel bij!",
-    exampleProduct: "Fatbike Zwart",
+    exampleParams: [{ param_name: "productnaam", example: "Fatbike Zwart" }],
+  },
+  {
+    name: INVENTORY_ALERT_TEMPLATE_BIKE_RESTOCK,
+    bodyText:
+      "Jo megahead, de voorraad van de volgende bikas is aangevuld: {{fietsenlijst}}. Check voorraadbeheer.",
+    exampleParams: [
+      {
+        param_name: "fietsenlijst",
+        example: "Fatbike V20 Zwart: 10",
+      },
+    ],
   },
 ];
 
@@ -603,9 +616,9 @@ async function createNamedUtilityTemplate(params: {
   name: string;
   language: string;
   bodyText: string;
-  exampleProduct: string;
+  exampleParams: Array<{ param_name: string; example: string }>;
 }): Promise<InventoryTemplateCreateResult> {
-  const { wabaId, token, name, language, bodyText, exampleProduct } = params;
+  const { wabaId, token, name, language, bodyText, exampleParams } = params;
 
   const res = await fetch(
     `https://graph.facebook.com/v22.0/${wabaId}/message_templates`,
@@ -626,9 +639,7 @@ async function createNamedUtilityTemplate(params: {
             type: "BODY",
             text: bodyText,
             example: {
-              body_text_named_params: [
-                { param_name: "productnaam", example: exampleProduct },
-              ],
+              body_text_named_params: exampleParams,
             },
           },
         ],
@@ -701,7 +712,7 @@ export async function createInventoryAlertTemplates(): Promise<
         name: spec.name,
         language,
         bodyText: spec.bodyText,
-        exampleProduct: spec.exampleProduct,
+        exampleParams: spec.exampleParams,
       })
     );
   }
@@ -765,6 +776,50 @@ export async function notifyInventoryStockAlert(params: {
   });
   if (tplRes.ok) return tplRes;
   console.warn("[whatsapp] voorraad template mislukt, probeer tekst:", tplRes.error);
+
+  return sendWhatsAppText({ to, text });
+}
+
+export type BikeRestockLine = {
+  productTitle: string;
+  quantityAdded: number;
+};
+
+export function formatBikeRestockList(lines: BikeRestockLine[]): string {
+  return lines
+    .filter((l) => l.quantityAdded > 0)
+    .map((l) => {
+      const title = String(l.productTitle ?? "").trim() || "Fiets";
+      return `${title}: ${Math.floor(l.quantityAdded)}`;
+    })
+    .join("\n");
+}
+
+/**
+ * Appje wanneer fiets-voorraad (category fiets) omhoog gaat.
+ * Meerdere regels → één bericht (bv. bij afronden inkomende levering).
+ */
+export async function notifyInventoryBikeRestockAlert(
+  lines: BikeRestockLine[]
+): Promise<SendWhatsAppResult> {
+  const fietsenlijst = formatBikeRestockList(lines).trim();
+  if (!fietsenlijst) {
+    return { ok: false, error: "Geen fiets-aanvullingen om te melden." };
+  }
+
+  const to = env("WHATSAPP_VOORRAAD_ALERT_TO") || INVENTORY_ALERT_PHONE_DEFAULT;
+  const text = `Jo megahead, de voorraad van de volgende bikas is aangevuld: ${fietsenlijst}. Check voorraadbeheer.`;
+  const templateName =
+    env("WHATSAPP_VOORRAAD_BIKE_RESTOCK_TEMPLATE") || INVENTORY_ALERT_TEMPLATE_BIKE_RESTOCK;
+
+  const tplRes = await sendWhatsAppTemplate({
+    to,
+    templateName,
+    languageCode: env("WHATSAPP_VOORRAAD_ALERT_LANGUAGE") || "nl",
+    bodyNamedVariables: { fietsenlijst: fietsenlijst.slice(0, 1024) },
+  });
+  if (tplRes.ok) return tplRes;
+  console.warn("[whatsapp] fiets-aanvul template mislukt, probeer tekst:", tplRes.error);
 
   return sendWhatsAppText({ to, text });
 }
