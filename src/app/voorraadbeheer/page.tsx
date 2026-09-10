@@ -11,6 +11,7 @@ import {
   type InventoryProductRow,
   type InventorySource,
 } from "@/lib/inventory";
+import { getAmsterdamCalendarDate } from "@/lib/planning-date";
 
 type Stats = {
   totalProducts: number;
@@ -39,6 +40,22 @@ type ProductMutationDraft = {
 
 function defaultMutationDraft(): ProductMutationDraft {
   return { quantity: "1", note: "" };
+}
+
+/** Toon restock-datum (toekomst) of levertijd-tekst. */
+function displayLevertijd(product: InventoryProductRow): string {
+  const restock = String(product.restock_datum ?? "").trim().slice(0, 10);
+  const today = getAmsterdamCalendarDate(0);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(restock) && restock > today) {
+    const [y, m, d] = restock.split("-").map(Number);
+    return new Intl.DateTimeFormat("nl-NL", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+      timeZone: "UTC",
+    }).format(new Date(Date.UTC(y, m - 1, d)));
+  }
+  return product.levertijd?.trim() || "—";
 }
 
 function mutationTypeLabel(t: MutationType): string {
@@ -100,7 +117,7 @@ function linkRoleLabel(role: LinkedShopifyProduct["role"]): string {
 function matchesInventorySearch(product: InventoryProductRow, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
-  const hay = `${product.title} ${product.model_name ?? ""} ${product.color_name ?? ""} ${product.category} ${product.levertijd ?? ""} ${product.opmerking ?? ""}`.toLowerCase();
+  const hay = `${product.title} ${product.model_name ?? ""} ${product.color_name ?? ""} ${product.category} ${product.levertijd ?? ""} ${product.restock_datum ?? ""} ${product.opmerking ?? ""}`.toLowerCase();
   return hay.includes(q);
 }
 
@@ -137,6 +154,7 @@ export default function VoorraadbeheerPage() {
   const [quantity, setQuantity] = useState("0");
   const [note, setNote] = useState("");
   const [editLevertijd, setEditLevertijd] = useState("");
+  const [editRestockDatum, setEditRestockDatum] = useState("");
   const [editOpmerking, setEditOpmerking] = useState("");
   const [saving, setSaving] = useState(false);
   const [savingMeta, setSavingMeta] = useState(false);
@@ -306,6 +324,9 @@ export default function VoorraadbeheerPage() {
   const openEditModal = (product: InventoryProductRow) => {
     setEditProduct(product);
     setEditLevertijd(product.levertijd ?? "");
+    setEditRestockDatum(
+      product.restock_datum ? String(product.restock_datum).slice(0, 10) : ""
+    );
     setEditOpmerking(product.opmerking ?? "");
     resetMutationForm();
     setError(null);
@@ -446,6 +467,7 @@ export default function VoorraadbeheerPage() {
         body: JSON.stringify({
           productId: product.id,
           levertijd: editLevertijd,
+          restock_datum: editRestockDatum.trim() || null,
           opmerking: editOpmerking,
         }),
       });
@@ -454,7 +476,18 @@ export default function VoorraadbeheerPage() {
       const updated = data.product as InventoryProductRow;
       setProducts((prev) => prev.map((p) => (p.id === updated.id ? { ...p, ...updated } : p)));
       if (editProduct?.id === updated.id) setEditProduct({ ...editProduct, ...updated });
-      setMessage("Levertijd en opmerking opgeslagen.");
+      if (data.shopifyPush && data.shopifyPush.ok === false) {
+        setMessage(
+          `Lokaal opgeslagen, maar Shopify-update mislukt: ${data.shopifyPush.detail ?? "onbekend"}`
+        );
+      } else {
+        const n = data.shopifyPush?.updated;
+        setMessage(
+          typeof n === "number"
+            ? `Levertijd/restock opgeslagen op ${n} Shopify-product(en).`
+            : "Levertijd/restock opgeslagen (ook in Shopify)."
+        );
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Opslaan mislukt");
     } finally {
@@ -471,18 +504,24 @@ export default function VoorraadbeheerPage() {
     setSaving(true);
     setError(null);
     try {
-      // Bewaar levertijd/opmerking mee als die gewijzigd zijn.
+      // Bewaar levertijd/restock/opmerking mee als die gewijzigd zijn.
       const metaRes = await fetch("/api/inventory", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           productId: product.id,
           levertijd: editLevertijd,
+          restock_datum: editRestockDatum.trim() || null,
           opmerking: editOpmerking,
         }),
       });
       const metaData = await metaRes.json().catch(() => ({}));
       if (!metaRes.ok) throw new Error(metaData?.error ?? "Opslaan mislukt");
+      if (metaData.shopifyPush && metaData.shopifyPush.ok === false) {
+        throw new Error(
+          `Shopify-update mislukt: ${metaData.shopifyPush.detail ?? "onbekend"}`
+        );
+      }
 
       // Aantal 0 = alleen info opslaan (geen voorraadmutatie), behalve bij correctie → voorraad op 0.
       const skipStockMutation = qty === 0 && mutationType !== "correctie";
@@ -761,16 +800,34 @@ export default function VoorraadbeheerPage() {
         <label className="block text-xs font-medium text-stone-500">
           Levertijd{" "}
           <span className="font-normal normal-case text-stone-400">
-            (uit Shopify metafields; bij product-update)
+            (Shopify metafield custom.levertijd)
           </span>
         </label>
         <input
           type="text"
           value={editLevertijd}
           onChange={(e) => setEditLevertijd(e.target.value)}
-          placeholder="Sync vanuit custom.levertijd / restock_datum"
+          placeholder="Bijv. 3–5 werkdagen"
           className="mt-1 w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm"
         />
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-stone-500">
+          Restock-datum{" "}
+          <span className="font-normal normal-case text-stone-400">
+            (Shopify metafield custom.restock_datum)
+          </span>
+        </label>
+        <input
+          type="date"
+          value={editRestockDatum}
+          onChange={(e) => setEditRestockDatum(e.target.value)}
+          className="mt-1 w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm"
+        />
+        <p className="mt-1 text-xs text-stone-400">
+          Leeg = metafield wissen. Toekomstige datum overschrijft de levertijd-weergave in de
+          lijst.
+        </p>
       </div>
       <div>
         <label className="block text-xs font-medium text-stone-500">Opmerking</label>
@@ -1058,7 +1115,7 @@ export default function VoorraadbeheerPage() {
                         <span className="w-20 shrink-0 text-xs font-medium uppercase text-stone-400">
                           Levertijd
                         </span>
-                        <span className="min-w-0 text-stone-700">{p.levertijd?.trim() || "—"}</span>
+                        <span className="min-w-0 text-stone-700">{displayLevertijd(p)}</span>
                       </div>
                       <div className="flex flex-col gap-1">
                         <span className="text-xs font-medium uppercase text-stone-400">
@@ -1135,7 +1192,7 @@ export default function VoorraadbeheerPage() {
                             {p.stock_quantity}
                           </td>
                           <td className="max-w-[8rem] px-3 py-3 text-stone-700">
-                            <span className="line-clamp-2">{p.levertijd?.trim() || "—"}</span>
+                            <span className="line-clamp-2">{displayLevertijd(p)}</span>
                           </td>
                           <td className="min-w-[12rem] max-w-[16rem] px-3 py-2 xl:max-w-[20rem]">
                             {opmerkingInput(

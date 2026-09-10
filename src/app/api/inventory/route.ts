@@ -3,11 +3,15 @@ import { getInventoryOwnerEmail, requireAccountEmail } from "@/lib/account";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import {
   getInventoryStats,
+  getInventoryLinkedShopifyProducts,
   syncInventoryFromShopify,
   type InventoryCategory,
 } from "@/lib/inventory";
 import { countInventoryPendingProducts } from "@/lib/inventory-pending";
-import { syncInventoryLevertijdFromShopifyMetafields } from "@/lib/inventory-levertijd";
+import {
+  parseIsoDateOnly,
+  pushInventoryLevertijdMetafieldsToShopifyProducts,
+} from "@/lib/inventory-levertijd";
 import { ShopifyAdminError } from "@/lib/shopify-admin";
 
 export const dynamic = "force-dynamic";
@@ -58,7 +62,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
-/** Levertijd / opmerking bijwerken (blijft behouden bij Shopify-sync). */
+/** Levertijd / restock / opmerking bijwerken en naar Shopify-metafields pushen. */
 export async function PATCH(request: NextRequest) {
   try {
     requireAccountEmail(request);
@@ -69,10 +73,30 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: "productId is verplicht." }, { status: 400 });
     }
 
-    const updates: { levertijd?: string | null; opmerking?: string | null } = {};
+    const updates: {
+      levertijd?: string | null;
+      restock_datum?: string | null;
+      opmerking?: string | null;
+    } = {};
+
     if ("levertijd" in body) {
       const v = body.levertijd == null ? "" : String(body.levertijd).trim();
       updates.levertijd = v || null;
+    }
+    if ("restock_datum" in body || "restockDatum" in body) {
+      const raw = body.restock_datum ?? body.restockDatum;
+      if (raw == null || String(raw).trim() === "") {
+        updates.restock_datum = null;
+      } else {
+        const iso = parseIsoDateOnly(String(raw));
+        if (!iso) {
+          return NextResponse.json(
+            { error: "restock_datum moet YYYY-MM-DD zijn." },
+            { status: 400 }
+          );
+        }
+        updates.restock_datum = iso;
+      }
     }
     if ("opmerking" in body) {
       const v = body.opmerking == null ? "" : String(body.opmerking).trim();
@@ -98,7 +122,65 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: "Product niet gevonden." }, { status: 404 });
     }
 
-    return NextResponse.json({ ok: true, product: data });
+    let shopifyPush: {
+      ok: boolean;
+      updated?: number;
+      failed?: Array<{ shopifyProductId: number; error: string }>;
+      detail?: string;
+    } | null = null;
+
+    const shouldPushShopify = "levertijd" in updates || "restock_datum" in updates;
+
+    if (shouldPushShopify) {
+      try {
+        const links = await getInventoryLinkedShopifyProducts(
+          supabase,
+          ownerEmail,
+          productId
+        );
+        const shopifyProductIds = links.map((l) => l.shopifyProductId);
+        // Fallback: alleen hoofd-id als er (nog) geen koppelingen resolven.
+        if (shopifyProductIds.length === 0) {
+          const head = Number(data.shopify_product_id);
+          if (Number.isFinite(head) && head > 0) shopifyProductIds.push(head);
+        }
+
+        if (shopifyProductIds.length === 0) {
+          shopifyPush = { ok: true, updated: 0, detail: "geen_shopify_producten" };
+        } else {
+          const result = await pushInventoryLevertijdMetafieldsToShopifyProducts(
+            shopifyProductIds,
+            {
+              levertijd: data.levertijd == null ? null : String(data.levertijd),
+              restockDatum:
+                data.restock_datum == null ? null : String(data.restock_datum),
+            }
+          );
+          shopifyPush = {
+            ok: result.failed.length === 0,
+            updated: result.updated,
+            failed: result.failed,
+            detail:
+              result.failed.length === 0
+                ? `${result.updated} Shopify-product(en) bijgewerkt`
+                : `${result.updated} ok, ${result.failed.length} mislukt`,
+          };
+        }
+      } catch (pushErr) {
+        console.error("[api/inventory] Shopify metafield push:", pushErr);
+        shopifyPush = {
+          ok: false,
+          detail:
+            pushErr instanceof ShopifyAdminError
+              ? pushErr.message
+              : pushErr instanceof Error
+                ? pushErr.message
+                : "Shopify-update mislukt",
+        };
+      }
+    }
+
+    return NextResponse.json({ ok: true, product: data, shopifyPush });
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "Bijwerken mislukt." },
@@ -113,18 +195,12 @@ export async function POST(request: NextRequest) {
     const ownerEmail = getInventoryOwnerEmail(request);
     const supabase = createServerSupabaseClient();
     const result = await syncInventoryFromShopify(supabase, ownerEmail);
-    let levertijdSync: { checked: number; updated: number; skipped: number } | null = null;
-    try {
-      levertijdSync = await syncInventoryLevertijdFromShopifyMetafields(supabase, ownerEmail);
-    } catch (leverErr) {
-      console.error("[api/inventory] levertijd metafield sync:", leverErr);
-    }
     const stats = await getInventoryStats(supabase, ownerEmail);
     const pendingCount = await countInventoryPendingProducts(supabase, ownerEmail).catch(
       () => 0
     );
 
-    return NextResponse.json({ ok: true, ...result, levertijdSync, stats, pendingCount });
+    return NextResponse.json({ ok: true, ...result, stats, pendingCount });
   } catch (e) {
     const message =
       e instanceof ShopifyAdminError

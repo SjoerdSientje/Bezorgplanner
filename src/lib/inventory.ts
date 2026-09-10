@@ -67,6 +67,8 @@ export type InventoryProductRow = {
   /** Moneybird product ids gekoppeld aan deze voorraadrij (via Shopify product sync). */
   moneybird_product_ids: string[];
   levertijd: string | null;
+  /** YYYY-MM-DD; toekomstige restock → toont als levertijd in de lijst. */
+  restock_datum: string | null;
   opmerking: string | null;
   last_mutation_source: InventorySource | null;
   created_at: string;

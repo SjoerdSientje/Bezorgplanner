@@ -12,10 +12,9 @@ export const maxDuration = 60;
 /**
  * Dagelijks ~07:00 Amsterdam:
  * - inactieve Shopify-producten uit voorraad prune’en
- * - alleen verlopen restock-datums in levertijd herberekenen
+ * - verlopen restock_datum lokaal wissen + metafield in Shopify verwijderen
  *
- * Levertijd zelf sync’t bij products/create|update (alleen schrijven bij wijziging).
- * Geen ochtend-bulk van alle metafields meer.
+ * Levertijd/restock worden vanuit de app naar Shopify gepusht bij opslaan.
  *
  * Auth: Authorization Bearer CRON_SECRET (Vercel Cron), of ?force=1 met secret.
  * Schedule in vercel.json: 05:00 UTC (Hobby: 1× per dag) ≈ 07:00 zomer / 06:00 winter.
