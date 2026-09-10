@@ -20,6 +20,7 @@ const COLOR_PATTERNS: ColorPattern[] = [
   { pattern: /\bsky blauw\b/i, label: "Sky Blauw" },
   { pattern: /\bnardo grey\b/i, label: "Nardo Grey" },
   { pattern: /\barmy green\b/i, label: "Army Green" },
+  { pattern: /\bsea\s*green\b/i, label: "Sea Green" },
   { pattern: /\blichtblauw\b/i, label: "Lichtblauw" },
   { pattern: /\bdonkerblauw\b/i, label: "Donkerblauw" },
   { pattern: /\bblauw\b/i, label: "Blauw" },
@@ -121,7 +122,7 @@ export function extractColorFromTitle(title: string): string | null {
 
 function stripTrailingColorSuffix(title: string): string {
   const patterns = [
-    /\s*[-–|]\s*(morning dew|space grey|donkergrijs|navy blauw|olive groen|sky blauw|lichtblauw|donkerblauw|army green|nardo grey|mat[- ]?zwart|wijn[- ]?rood|blauw|zwart|grijs|groen|rood|oranje|wit|bruin|taupe|geel|roze|paars|grey|black|white|red|green|blue)\s*$/i,
+    /\s*[-–|]\s*(morning dew|space grey|donkergrijs|navy blauw|olive groen|sky blauw|lichtblauw|donkerblauw|army green|nardo grey|sea green|mat[- ]?zwart|wijn[- ]?rood|blauw|zwart|grijs|groen|rood|oranje|wit|bruin|taupe|geel|roze|paars|grey|black|white|red|green|blue)\s*$/i,
     /\s*\((grijs|navy blauw|olive green|oranje|sky blauw|taupe)\)\s*$/i,
   ];
   let result = title.trim();
