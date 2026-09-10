@@ -10,8 +10,8 @@ import { syncInventoryLevertijdFromShopifyMetafields } from "@/lib/inventory-lev
 import { ShopifyAdminError } from "@/lib/shopify-admin";
 
 export const dynamic = "force-dynamic";
-/** Volledige Shopify-catalogus-sync kan >10s duren. */
-export const maxDuration = 60;
+/** Volledige Shopify-catalogus-sync + onderdelen/accessoires-rebuild kan >10s duren. */
+export const maxDuration = 120;
 
 export async function GET(request: NextRequest) {
   try {
@@ -26,7 +26,12 @@ export async function GET(request: NextRequest) {
       .eq("owner_email", ownerEmail)
       .order("title", { ascending: true });
 
-    if (category === "fiets" || category === "onderdeel" || category === "overig") {
+    if (
+      category === "fiets" ||
+      category === "onderdeel" ||
+      category === "accessoire" ||
+      category === "overig"
+    ) {
       query = query.eq("category", category as InventoryCategory);
     }
 

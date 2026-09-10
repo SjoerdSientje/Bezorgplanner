@@ -32,8 +32,9 @@ import {
   resolveBundleDeduction,
   shouldSkipInventoryDeductionLineItem,
 } from "@/lib/inventory-rules";
+import { rebuildPartsInventoryFromShopifyCollections } from "@/lib/inventory-parts-rebuild";
 
-export type InventoryCategory = "fiets" | "onderdeel" | "overig";
+export type InventoryCategory = "fiets" | "onderdeel" | "accessoire" | "overig";
 export type InventorySource = "shopify" | "marktplaats" | "winkel" | "handmatig" | "moneybird";
 export type InventoryMutationType = "inkomend" | "uitgaand" | "correctie";
 
@@ -103,6 +104,7 @@ function normalizeName(value: string): string {
 export type InventoryCategoryMap = {
   fietsProductIds: Set<number>;
   onderdeelProductIds: Set<number>;
+  accessoireProductIds: Set<number>;
 };
 
 export function classifyInventoryCategory(
@@ -110,6 +112,8 @@ export function classifyInventoryCategory(
   categoryMap: InventoryCategoryMap
 ): InventoryCategory {
   if (categoryMap.fietsProductIds.has(product.id)) return "fiets";
+  // Accessoires wint van onderdelen als product in beide collecties staat.
+  if (categoryMap.accessoireProductIds?.has(product.id)) return "accessoire";
   if (categoryMap.onderdeelProductIds.has(product.id)) return "onderdeel";
   return "overig";
 }
@@ -438,6 +442,8 @@ export async function syncInventoryProductFromShopify(
     .map((v) => Number(v.id))
     .filter((id) => Number.isFinite(id) && id > 0);
 
+  const categoryMap = await fetchInventoryCollectionProductIds();
+
   if (!isShopifyProductActive(product) || isExcludedFromInventory(product)) {
     const removed = await removeInventoryProductByShopifyId(
       supabase,
@@ -448,7 +454,11 @@ export async function syncInventoryProductFromShopify(
     return { inserted: 0, updated: 0, removed };
   }
 
-  const categoryMap = await fetchInventoryCollectionProductIds();
+  // Onderdelen/accessoires: niet via fiets-grouping; vaste regels via rebuild/sync.
+  if (isPartsCollectionProduct(shopifyProductId, categoryMap)) {
+    return { inserted: 0, updated: 0, removed: 0 };
+  }
+
   const groups = buildInventoryGroups([product]);
   const keepGroupKeys = new Set(groups.keys());
   const groupKeys = Array.from(keepGroupKeys);
@@ -529,15 +539,35 @@ export async function syncInventoryProductFromShopify(
   return { inserted, updated, removed };
 }
 
+function isPartsCollectionProduct(
+  productId: number,
+  categoryMap: InventoryCategoryMap
+): boolean {
+  return (
+    categoryMap.onderdeelProductIds.has(productId) ||
+    categoryMap.accessoireProductIds.has(productId)
+  );
+}
+
 export async function syncInventoryFromShopify(
   supabase: SupabaseClient,
   ownerEmail: string
-): Promise<{ inserted: number; updated: number; removed: number; total: number }> {
+): Promise<{
+  inserted: number;
+  updated: number;
+  removed: number;
+  total: number;
+  partsRebuild?: Awaited<ReturnType<typeof rebuildPartsInventoryFromShopifyCollections>>;
+}> {
   const allProducts = await fetchAllShopifyProducts();
-  const products = allProducts.filter(
-    (product) => isShopifyProductActive(product) && !isExcludedFromInventory(product)
-  );
   const categoryMap = await fetchInventoryCollectionProductIds();
+
+  // Onderdelen/accessoires: aparte rebuild met vaste regels — niet via fiets-grouping.
+  const products = allProducts.filter((product) => {
+    if (!isShopifyProductActive(product) || isExcludedFromInventory(product)) return false;
+    if (isPartsCollectionProduct(product.id, categoryMap)) return false;
+    return true;
+  });
   const groups = buildInventoryGroups(products);
 
   const { data: existingRowsRaw } = await supabase
@@ -556,6 +586,7 @@ export async function syncInventoryFromShopify(
   );
 
   // Alles wat niet meer in de actieve catalogus-groep zit (draft/archief/verwijderd) eruit.
+  // parts:* / onderdeel / accessoire blijven buiten deze prune.
   const keepGroupKeys = new Set(groups.keys());
   const removed = await pruneInventoryProductsOutsideGroupKeys(
     supabase,
@@ -568,13 +599,25 @@ export async function syncInventoryFromShopify(
     .delete()
     .eq("owner_email", ownerEmail)
     .or(
-      "title.ilike.%onderhoudspakket%,title.ilike.%2x anti-lekbanden + montage%,title.eq.Volledig rijklaar"
+      "title.ilike.%onderhoudspakket%,title.ilike.%2x anti-lekbanden + montage%,title.eq.Volledig rijklaar,title.ilike.%graag verzekeren%,title.ilike.%Range Rover Velar%"
     )
     .select("id");
 
   let removedTotal = removed;
   if (!titleDeleteErr) {
     removedTotal += excludedByTitle?.length ?? 0;
+  }
+
+  let partsRebuild:
+    | Awaited<ReturnType<typeof rebuildPartsInventoryFromShopifyCollections>>
+    | undefined;
+  try {
+    partsRebuild = await rebuildPartsInventoryFromShopifyCollections(supabase, ownerEmail);
+  } catch (err) {
+    console.warn(
+      "[inventory] parts rebuild failed:",
+      err instanceof Error ? err.message : err
+    );
   }
 
   try {
@@ -595,7 +638,7 @@ export async function syncInventoryFromShopify(
     );
   }
 
-  return { inserted, updated, removed: removedTotal, total: variantCount };
+  return { inserted, updated, removed: removedTotal, total: variantCount, partsRebuild };
 }
 
 /**
@@ -609,7 +652,7 @@ export async function pruneInventoryProductsOutsideGroupKeys(
 ): Promise<number> {
   const { data: rows, error } = await supabase
     .from("inventory_products")
-    .select("id, group_key")
+    .select("id, group_key, category")
     .eq("owner_email", ownerEmail);
 
   if (error) {
@@ -618,7 +661,13 @@ export async function pruneInventoryProductsOutsideGroupKeys(
   }
 
   const orphanIds = (rows ?? [])
-    .filter((row) => !keepGroupKeys.has(String(row.group_key ?? "")))
+    .filter((row) => {
+      const groupKey = String(row.group_key ?? "");
+      if (groupKey.startsWith("parts:")) return false;
+      const category = String(row.category ?? "");
+      if (category === "onderdeel" || category === "accessoire") return false;
+      return !keepGroupKeys.has(groupKey);
+    })
     .map((row) => row.id as string);
 
   if (orphanIds.length === 0) return 0;
@@ -645,9 +694,12 @@ export async function pruneInactiveInventoryProducts(
   supabase: SupabaseClient,
   ownerEmail: string
 ): Promise<number> {
-  const products = (await fetchAllShopifyProducts({ status: "active" })).filter(
-    (product) => !isExcludedFromInventory(product)
-  );
+  const categoryMap = await fetchInventoryCollectionProductIds();
+  const products = (await fetchAllShopifyProducts({ status: "active" })).filter((product) => {
+    if (isExcludedFromInventory(product)) return false;
+    if (isPartsCollectionProduct(product.id, categoryMap)) return false;
+    return true;
+  });
   const groups = buildInventoryGroups(products);
   return pruneInventoryProductsOutsideGroupKeys(
     supabase,
@@ -941,13 +993,14 @@ export async function detachMoneybirdProductIdFromInventory(
 
 /**
  * Backfill: Moneybird-producten (identifier = Shopify product-id) koppelen aan voorraadrijen
- * die nog geen moneybird_product_ids hebben voor dat Shopify-product.
+ * die nog geen moneybird_product_ids hebben.
+ * Alleen ontbrekende links — anders timeout bij volledige voorraad-sync (~250+ API-calls).
  */
 export async function backfillMoneybirdProductLinksForOwner(
   supabase: SupabaseClient,
   ownerEmail: string
-): Promise<{ checked: number; linked: number }> {
-  if (!isMoneybirdConfigured()) return { checked: 0, linked: 0 };
+): Promise<{ checked: number; linked: number; skipped: number }> {
+  if (!isMoneybirdConfigured()) return { checked: 0, linked: 0, skipped: 0 };
 
   const { data: rows } = await supabase
     .from("inventory_products")
@@ -955,14 +1008,22 @@ export async function backfillMoneybirdProductLinksForOwner(
     .eq("owner_email", ownerEmail);
 
   const shopifyIds = new Set<number>();
+  let skipped = 0;
   for (const row of rows ?? []) {
+    const existing = normalizeMoneybirdProductIds(row.moneybird_product_ids);
+    if (existing.length > 0) {
+      skipped++;
+      continue;
+    }
     const pid = Number(row.shopify_product_id);
     if (Number.isFinite(pid) && pid > 0) shopifyIds.add(pid);
   }
 
   let checked = 0;
   let linked = 0;
-  for (const shopifyProductId of Array.from(shopifyIds)) {
+  // Hard limiet per sync-run: voorkomt Vercel/gateway-timeouts.
+  const MAX_LOOKUPS = 40;
+  for (const shopifyProductId of Array.from(shopifyIds).slice(0, MAX_LOOKUPS)) {
     checked++;
     try {
       const mb = await findProductByIdentifier(shopifyProductIdentifier(shopifyProductId));
@@ -980,7 +1041,7 @@ export async function backfillMoneybirdProductLinksForOwner(
       );
     }
   }
-  return { checked, linked };
+  return { checked, linked, skipped };
 }
 
 /** Eén canoniek product per group_key (voorkomt mutaties op dubbele rijen). */
@@ -1392,6 +1453,89 @@ async function clearOrderDeduction(
   }
 }
 
+async function resolveShopifyDeductionTargets(
+  supabase: SupabaseClient,
+  ownerEmail: string,
+  item: LineItemForDeduction
+): Promise<
+  | { type: "exclude" }
+  | { type: "deduct"; targets: { inventoryProductId: string; quantity: number }[] }
+  | { type: "none" }
+> {
+  const productId = item.product_id != null ? Number(item.product_id) : NaN;
+  if (!Number.isFinite(productId) || productId <= 0) return { type: "none" };
+
+  const variantId = item.variant_id != null ? Number(item.variant_id) : NaN;
+
+  let query = supabase
+    .from("inventory_shopify_deductions")
+    .select("kind, inventory_product_id, quantity, shopify_variant_id")
+    .eq("owner_email", ownerEmail)
+    .eq("shopify_product_id", productId);
+
+  const { data, error } = await query;
+  if (error) {
+    console.warn("[inventory] shopify deductions lookup:", error.message);
+    return { type: "none" };
+  }
+  const rows = data ?? [];
+  if (rows.length === 0) return { type: "none" };
+
+  if (rows.some((r) => r.kind === "exclude")) return { type: "exclude" };
+
+  const deductRows = rows.filter((r) => r.kind === "deduct" && r.inventory_product_id);
+  if (deductRows.length === 0) return { type: "none" };
+
+  // Prefer variant-specific rows when present; else product-level (variant null).
+  const variantSpecific =
+    Number.isFinite(variantId) && variantId > 0
+      ? deductRows.filter((r) => Number(r.shopify_variant_id) === variantId)
+      : [];
+  const productLevel = deductRows.filter(
+    (r) => r.shopify_variant_id == null || r.shopify_variant_id === 0
+  );
+  const chosen = variantSpecific.length > 0 ? variantSpecific : productLevel;
+  if (chosen.length === 0) return { type: "none" };
+
+  const lineQty = Math.max(1, Math.floor(Number(item.quantity ?? 1)));
+  return {
+    type: "deduct",
+    targets: chosen.map((r) => ({
+      inventoryProductId: String(r.inventory_product_id),
+      quantity: Math.max(1, Math.floor(Number(r.quantity ?? 1))) * lineQty,
+    })),
+  };
+}
+
+/** Shopify-mapping → bundelregel → titel/variant-match. */
+async function resolveLineItemDeductionTargets(
+  supabase: SupabaseClient,
+  ownerEmail: string,
+  item: LineItemForDeduction
+): Promise<{ inventoryProductId: string; quantity: number }[]> {
+  const mapped = await resolveShopifyDeductionTargets(supabase, ownerEmail, item);
+  if (mapped.type === "exclude") return [];
+  if (mapped.type === "deduct") return mapped.targets;
+
+  const bundle = resolveBundleDeduction(item);
+  if (bundle) {
+    const product = await findProductByTitleContains(
+      supabase,
+      ownerEmail,
+      bundle.targetTitleContains
+    );
+    if (!product) return [];
+    const canonical =
+      (await resolveCanonicalInventoryProduct(supabase, ownerEmail, product)) ?? product;
+    return [{ inventoryProductId: canonical.id, quantity: bundle.quantity }];
+  }
+
+  const qty = Math.max(1, Math.floor(Number(item.quantity ?? 1)));
+  const product = await findProductForLineItem(supabase, ownerEmail, item);
+  if (!product) return [];
+  return [{ inventoryProductId: product.id, quantity: qty }];
+}
+
 async function applyOutgoingMutationsForLineItems(
   supabase: SupabaseClient,
   params: {
@@ -1404,42 +1548,26 @@ async function applyOutgoingMutationsForLineItems(
   const orderProducten = formatLineItemsForSnapshot(params.lineItems);
 
   for (const item of params.lineItems) {
-    const bundle = resolveBundleDeduction(item);
-    if (bundle) {
-      const product = await findProductByTitleContains(
-        supabase,
-        params.ownerEmail,
-        bundle.targetTitleContains
-      );
-      if (product) {
-        await applyInventoryMutation(supabase, {
-          ownerEmail: params.ownerEmail,
-          productId: product.id,
-          mutationType: "uitgaand",
-          quantity: bundle.quantity,
-          source: params.source,
-          note: `Bundel-aftrek (${item.name}) order ${params.orderReference}`,
-          orderReference: params.orderReference,
-          orderProducten,
-        });
-      }
-      continue;
+    const targets = await resolveLineItemDeductionTargets(
+      supabase,
+      params.ownerEmail,
+      item
+    );
+    for (const target of targets) {
+      await applyInventoryMutation(supabase, {
+        ownerEmail: params.ownerEmail,
+        productId: target.inventoryProductId,
+        mutationType: "uitgaand",
+        quantity: target.quantity,
+        source: params.source,
+        note:
+          targets.length > 1
+            ? `Automatische aftrek (${item.name}) order ${params.orderReference}`
+            : `Automatische aftrek order ${params.orderReference}`,
+        orderReference: params.orderReference,
+        orderProducten,
+      });
     }
-
-    const qty = Math.max(1, Math.floor(Number(item.quantity ?? 1)));
-    const product = await findProductForLineItem(supabase, params.ownerEmail, item);
-    if (!product) continue;
-
-    await applyInventoryMutation(supabase, {
-      ownerEmail: params.ownerEmail,
-      productId: product.id,
-      mutationType: "uitgaand",
-      quantity: qty,
-      source: params.source,
-      note: `Automatische aftrek order ${params.orderReference}`,
-      orderReference: params.orderReference,
-      orderProducten,
-    });
   }
 }
 
@@ -1455,42 +1583,26 @@ async function applyIncomingMutationsForLineItems(
   const orderProducten = formatLineItemsForSnapshot(params.lineItems);
 
   for (const item of params.lineItems) {
-    const bundle = resolveBundleDeduction(item);
-    if (bundle) {
-      const product = await findProductByTitleContains(
-        supabase,
-        params.ownerEmail,
-        bundle.targetTitleContains
-      );
-      if (product) {
-        await applyInventoryMutation(supabase, {
-          ownerEmail: params.ownerEmail,
-          productId: product.id,
-          mutationType: "inkomend",
-          quantity: bundle.quantity,
-          source: params.source,
-          note: `Bundel-terugboeking annulering (${item.name}) order ${params.orderReference}`,
-          orderReference: params.orderReference,
-          orderProducten,
-        });
-      }
-      continue;
+    const targets = await resolveLineItemDeductionTargets(
+      supabase,
+      params.ownerEmail,
+      item
+    );
+    for (const target of targets) {
+      await applyInventoryMutation(supabase, {
+        ownerEmail: params.ownerEmail,
+        productId: target.inventoryProductId,
+        mutationType: "inkomend",
+        quantity: target.quantity,
+        source: params.source,
+        note:
+          targets.length > 1
+            ? `Terugboeking annulering (${item.name}) order ${params.orderReference}`
+            : `Terugboeking annulering order ${params.orderReference}`,
+        orderReference: params.orderReference,
+        orderProducten,
+      });
     }
-
-    const qty = Math.max(1, Math.floor(Number(item.quantity ?? 1)));
-    const product = await findProductForLineItem(supabase, params.ownerEmail, item);
-    if (!product) continue;
-
-    await applyInventoryMutation(supabase, {
-      ownerEmail: params.ownerEmail,
-      productId: product.id,
-      mutationType: "inkomend",
-      quantity: qty,
-      source: params.source,
-      note: `Terugboeking annulering order ${params.orderReference}`,
-      orderReference: params.orderReference,
-      orderProducten,
-    });
   }
 }
 
@@ -1666,24 +1778,13 @@ async function desiredDeductionByProduct(
 ): Promise<Map<string, number>> {
   const desired = new Map<string, number>();
   for (const item of lineItems) {
-    const bundle = resolveBundleDeduction(item);
-    if (bundle) {
-      const product = await findProductByTitleContains(
-        supabase,
-        ownerEmail,
-        bundle.targetTitleContains
+    const targets = await resolveLineItemDeductionTargets(supabase, ownerEmail, item);
+    for (const target of targets) {
+      desired.set(
+        target.inventoryProductId,
+        (desired.get(target.inventoryProductId) ?? 0) + target.quantity
       );
-      if (product) {
-        const canonical =
-          (await resolveCanonicalInventoryProduct(supabase, ownerEmail, product)) ?? product;
-        desired.set(canonical.id, (desired.get(canonical.id) ?? 0) + bundle.quantity);
-      }
-      continue;
     }
-    const qty = Math.max(1, Math.floor(Number(item.quantity ?? 1)));
-    const product = await findProductForLineItem(supabase, ownerEmail, item);
-    if (!product) continue;
-    desired.set(product.id, (desired.get(product.id) ?? 0) + qty);
   }
   return desired;
 }

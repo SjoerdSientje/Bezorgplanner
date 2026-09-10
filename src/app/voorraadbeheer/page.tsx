@@ -18,11 +18,12 @@ type Stats = {
   mutationsToday: number;
 };
 
-type Filter = "alle" | "fiets" | "onderdeel" | "overig";
+type Filter = "alle" | "fiets" | "onderdeel" | "accessoire" | "overig";
 const FILTER_LABELS: Record<Filter, string> = {
   alle: "Alle producten",
   fiets: "Fietsen",
   onderdeel: "Onderdelen",
+  accessoire: "Accessoires",
   overig: "Overige",
 };
 
@@ -130,6 +131,9 @@ export default function VoorraadbeheerPage() {
         setMessage(
           `Shopify gesynchroniseerd: ${syncData.inserted} nieuw, ${syncData.updated} bijgewerkt` +
             (syncData.removed ? `, ${syncData.removed} concept/archief verwijderd` : "") +
+            (syncData.partsRebuild
+              ? `, onderdelen/accessoires: ${syncData.partsRebuild.stockRowsUpserted} voorraadregels`
+              : "") +
             "."
         );
       }
@@ -879,7 +883,7 @@ export default function VoorraadbeheerPage() {
           </div>
 
           <div className="mb-4 flex flex-wrap gap-2">
-            {(["alle", "fiets", "onderdeel", "overig"] as Filter[]).map((f) => (
+            {(["alle", "fiets", "onderdeel", "accessoire", "overig"] as Filter[]).map((f) => (
               <button
                 key={f}
                 type="button"
@@ -917,7 +921,9 @@ export default function VoorraadbeheerPage() {
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
                         <p className="font-medium leading-snug text-koopje-black">{p.title}</p>
-                        <p className="mt-0.5 text-xs capitalize text-stone-500">{p.category}</p>
+                        <p className="mt-0.5 text-xs capitalize text-stone-500">
+                          {FILTER_LABELS[p.category as Filter] ?? p.category}
+                        </p>
                       </div>
                       <span className={`shrink-0 text-base ${stockClass(p.stock_quantity)}`}>
                         {p.stock_quantity}
@@ -986,7 +992,9 @@ export default function VoorraadbeheerPage() {
                         <td className="max-w-[14rem] px-4 py-3 font-medium text-koopje-black xl:max-w-xs">
                           <span className="line-clamp-2">{p.title}</span>
                         </td>
-                        <td className="px-3 py-3 capitalize text-stone-600">{p.category}</td>
+                        <td className="px-3 py-3 capitalize text-stone-600">
+                          {FILTER_LABELS[p.category as Filter] ?? p.category}
+                        </td>
                         <td className={`px-3 py-3 ${stockClass(p.stock_quantity)}`}>
                           {p.stock_quantity}
                         </td>

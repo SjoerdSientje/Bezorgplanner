@@ -321,6 +321,7 @@ export type ShopifyCustomCollection = {
 /** Shopify custom collection handles voor voorraadcategorieën. */
 export const INVENTORY_FIETS_COLLECTION_HANDLE = "alle-fatbikes";
 export const INVENTORY_ONDERDEEL_COLLECTION_HANDLE = "onderdelen";
+export const INVENTORY_ACCESSOIRE_COLLECTION_HANDLE = "accessoires";
 
 export async function fetchCustomCollections(): Promise<ShopifyCustomCollection[]> {
   const data = await shopifyAdminJson<{ custom_collections?: ShopifyCustomCollection[] }>(
@@ -358,21 +359,58 @@ export async function fetchProductIdsInCollection(collectionId: number): Promise
   return ids;
 }
 
+/** Volledige productobjecten in een collectie (actief + draft; filter zelf). */
+export async function fetchProductsInCollection(
+  collectionId: number
+): Promise<ShopifyAdminProduct[]> {
+  const products: ShopifyAdminProduct[] = [];
+  let pageInfo: string | null = null;
+
+  for (let page = 0; page < 50; page++) {
+    const params = new URLSearchParams({
+      limit: "250",
+      collection_id: String(collectionId),
+    });
+    if (pageInfo) {
+      params.delete("collection_id");
+      params.set("page_info", pageInfo);
+    }
+
+    const res = await shopifyAdminFetch(`/products.json?${params.toString()}`);
+    const data = (await res.json()) as { products?: ShopifyAdminProduct[] };
+    for (const product of data.products ?? []) {
+      products.push(product);
+    }
+
+    const nextPageInfo = parseNextPageInfo(res.headers.get("link"));
+    if (!nextPageInfo || (data.products ?? []).length === 0) break;
+    pageInfo = nextPageInfo;
+  }
+
+  return products;
+}
+
 export async function fetchInventoryCollectionProductIds(): Promise<{
   fietsProductIds: Set<number>;
   onderdeelProductIds: Set<number>;
+  accessoireProductIds: Set<number>;
 }> {
   const collections = await fetchCustomCollections();
   const fatbikes = collections.find((c) => c.handle === INVENTORY_FIETS_COLLECTION_HANDLE);
   const onderdelen = collections.find((c) => c.handle === INVENTORY_ONDERDEEL_COLLECTION_HANDLE);
+  const accessoires = collections.find(
+    (c) => c.handle === INVENTORY_ACCESSOIRE_COLLECTION_HANDLE
+  );
 
-  const [fietsIds, onderdeelIds] = await Promise.all([
+  const [fietsIds, onderdeelIds, accessoireIds] = await Promise.all([
     fatbikes ? fetchProductIdsInCollection(fatbikes.id) : Promise.resolve([]),
     onderdelen ? fetchProductIdsInCollection(onderdelen.id) : Promise.resolve([]),
+    accessoires ? fetchProductIdsInCollection(accessoires.id) : Promise.resolve([]),
   ]);
 
   return {
     fietsProductIds: new Set(fietsIds),
     onderdeelProductIds: new Set(onderdeelIds),
+    accessoireProductIds: new Set(accessoireIds),
   };
 }

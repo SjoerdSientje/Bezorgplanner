@@ -1,4 +1,5 @@
 import type { ShopifyAdminProduct } from "@/lib/shopify-admin";
+import { isPartsNonStockShopifyTitle } from "@/lib/inventory-parts-rules";
 
 export type InventoryBundleRule = {
   /** Herken line-item naam (orderregel). */
@@ -15,14 +16,18 @@ export const INVENTORY_BUNDLE_RULES: InventoryBundleRule[] = [
     targetTitleContains: "Anti-lek Band 20x4",
     unitsPerLineItem: 2,
   },
+  {
+    lineItemMatch: /handvaten geschikt voor v8/i,
+    targetTitleContains: "Handvat 1x geschikt voor V8 - H9 - V20",
+    unitsPerLineItem: 2,
+  },
 ];
 
 export function isExcludedFromInventory(product: ShopifyAdminProduct): boolean {
   const title = product.title.trim();
-  const lower = title.toLowerCase();
 
-  if (lower.includes("onderhoudspakket")) return true;
-  if (/^volledig rijklaar$/i.test(title)) return true;
+  // Sets / unit-maps / expliciete excludes krijgen geen eigen voorraadrij.
+  if (isPartsNonStockShopifyTitle(title)) return true;
 
   for (const rule of INVENTORY_BUNDLE_RULES) {
     if (rule.lineItemMatch.test(title)) return true;
@@ -37,7 +42,12 @@ export function shouldSkipInventoryDeductionLineItem(name: string): boolean {
   if (!n) return true;
   if (n === "volledig rijklaar" || n === "rijklaar" || n === "in doos") return true;
   if (n.includes("onderhoudspakket")) return true;
+  if (n.includes("graag verzekeren")) return true;
   if (n.includes("opladerdoosje") || n.includes("opladerdoos")) return true;
+  if (n === "fietspompje") return true;
+  if (n.includes("achterzitje ouxi v8")) return true;
+  if (n.includes("voorrekje voor fatbikes")) return true;
+  if (n.includes("range rover velar")) return true;
   return false;
 }
 
