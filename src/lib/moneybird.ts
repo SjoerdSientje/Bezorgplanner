@@ -514,14 +514,11 @@ function shopifyOrderInvoiceEmail(order: ShopifyOrder): string | null {
  * - niet geannuleerd
  * - fulfillment_status === fulfilled
  * - totaal &gt; 0 en &lt; AUTO_FINALIZE_INVOICE_BELOW_EUR
+ *
+ * Tijdelijk uit: boekhouding nog niet live — facturen blijven concept.
  */
-export function shouldAutoSendShopifyInvoice(order: ShopifyOrder): boolean {
-  if (order.cancelled_at) return false;
-  const fulfillment = String(order.fulfillment_status ?? "").toLowerCase();
-  if (fulfillment !== "fulfilled") return false;
-  const totalIncl = shopifyOrderBillableTotalIncl(order);
-  if (isZeroInvoiceTotal(totalIncl)) return false;
-  return totalIncl < AUTO_FINALIZE_INVOICE_BELOW_EUR;
+export function shouldAutoSendShopifyInvoice(_order: ShopifyOrder): boolean {
+  return false;
 }
 
 /**

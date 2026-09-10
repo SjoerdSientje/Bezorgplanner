@@ -64,10 +64,15 @@ export function buildIncomingOpmerkingBlock(
   trackUrl: string,
   expectedDelivery: string | null
 ): string {
-  const parts = [`Track & trace: ${trackUrl.trim()}`];
+  const lines = [
+    `Inkomend ${deliveryId.slice(0, 8)}`,
+    `track en trace: ${trackUrl.trim()}`,
+  ];
   const expected = expectedDelivery?.trim();
-  if (expected) parts.push(`Verwachte levertijd: ${expected}`);
-  return `[inkomend:${deliveryId}] ${parts.join(" · ")}`;
+  if (expected) {
+    lines.push(`Verwachte levertijd: ${expected}`);
+  }
+  return lines.join("\n");
 }
 
 export function appendIncomingOpmerking(
@@ -75,21 +80,59 @@ export function appendIncomingOpmerking(
   block: string
 ): string {
   const base = String(opmerking ?? "").trim();
-  return base ? `${base}\n${block}` : block;
+  return base ? `${base}\n\n${block}` : block;
 }
 
 export function stripIncomingOpmerkingBlock(
   opmerking: string | null | undefined,
-  deliveryId: string
+  deliveryId: string,
+  trackUrl?: string | null,
+  expectedDelivery?: string | null
 ): string | null {
-  const raw = String(opmerking ?? "");
-  if (!raw.trim()) return null;
-  const marker = `[inkomend:${deliveryId}]`;
-  const next = raw
-    .split("\n")
-    .filter((line) => !line.includes(marker))
-    .join("\n")
-    .trim();
+  let next = String(opmerking ?? "");
+  if (!next.trim()) return null;
+
+  // Nieuw multilijn-blok (exacte match)
+  if (trackUrl != null && String(trackUrl).trim()) {
+    const block = buildIncomingOpmerkingBlock(deliveryId, trackUrl, expectedDelivery ?? null);
+    if (block && next.includes(block)) {
+      next = next.split(block).join("");
+      next = next.replace(/\n{3,}/g, "\n\n").trim();
+      return next || null;
+    }
+  }
+
+  // Fallback: blok starten met "Inkomend {shortId}"
+  const shortId = deliveryId.slice(0, 8);
+  const header = `Inkomend ${shortId}`;
+  const headerIdx = next.indexOf(header);
+  if (headerIdx !== -1) {
+    const afterHeader = next.slice(headerIdx);
+    const lines = afterHeader.split("\n");
+    let consume = 1;
+    if (lines[1]?.toLowerCase().startsWith("track en trace:")) consume = 2;
+    if (consume >= 2 && lines[2]?.toLowerCase().startsWith("verwachte levertijd:")) {
+      consume = 3;
+    }
+    const removed = lines.slice(0, consume).join("\n");
+    next = next.slice(0, headerIdx) + next.slice(headerIdx + removed.length);
+  }
+
+  // Oude éénregelige / marker-variant
+  const start = `[inkomend:${deliveryId}]`;
+  const end = `[/inkomend:${deliveryId}]`;
+  const startIdx = next.indexOf(start);
+  const endIdx = next.indexOf(end);
+  if (startIdx !== -1 && endIdx !== -1 && endIdx >= startIdx) {
+    next = next.slice(0, startIdx) + next.slice(endIdx + end.length);
+  } else if (next.includes(start)) {
+    next = next
+      .split("\n")
+      .filter((line) => !line.includes(start))
+      .join("\n");
+  }
+
+  next = next.replace(/\n{3,}/g, "\n\n").trim();
   return next || null;
 }
 
@@ -169,6 +212,8 @@ export async function clearIncomingNotesFromProducts(
   params: {
     ownerEmail: string;
     deliveryId: string;
+    trackUrl?: string | null;
+    expectedDelivery?: string | null;
     productIds: string[];
   }
 ): Promise<void> {
@@ -185,7 +230,12 @@ export async function clearIncomingNotesFromProducts(
 
   for (const row of data ?? []) {
     const id = String(row.id);
-    const next = stripIncomingOpmerkingBlock(row.opmerking as string | null, params.deliveryId);
+    const next = stripIncomingOpmerkingBlock(
+      row.opmerking as string | null,
+      params.deliveryId,
+      params.trackUrl,
+      params.expectedDelivery
+    );
     await patchProductOpmerking(supabase, params.ownerEmail, id, next);
   }
 }
@@ -237,6 +287,8 @@ export async function receiveIncomingDelivery(
     await clearIncomingNotesFromProducts(supabase, {
       ownerEmail: params.ownerEmail,
       deliveryId: params.delivery.id,
+      trackUrl: params.delivery.track_trace_url,
+      expectedDelivery: params.delivery.expected_delivery,
       productIds,
     });
   } catch (e) {
@@ -274,6 +326,8 @@ export async function cancelIncomingDelivery(
     await clearIncomingNotesFromProducts(supabase, {
       ownerEmail: params.ownerEmail,
       deliveryId: params.delivery.id,
+      trackUrl: params.delivery.track_trace_url,
+      expectedDelivery: params.delivery.expected_delivery,
       productIds,
     });
   } catch (e) {

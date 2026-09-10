@@ -24,7 +24,7 @@ export default function BezorgplannerPage() {
             Overzicht van de sheets, regels en hulppagina&apos;s.
           </p>
 
-          <ul className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-4">
+          <ul className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <li>
               <Link
                 href="/bezorgplanner/ritjes-vandaag"
@@ -50,17 +50,6 @@ export default function BezorgplannerPage() {
               >
                 <span className="font-medium text-koopje-black">WhatsApp template debug</span>
                 <span className="mt-1 block text-sm text-koopje-black/60">Controleer template-keuze per flow en ordertype</span>
-              </Link>
-            </li>
-            <li>
-              <Link
-                href="/bezorgplanner/product-regels"
-                className="block rounded-xl border border-koopje-black/10 bg-white p-5 shadow-sm transition hover:border-koopje-orange hover:shadow"
-              >
-                <span className="font-medium text-koopje-black">Standaard inbegrepen</span>
-                <span className="mt-1 block text-sm text-koopje-black/60">
-                  Wat hoort automatisch bij een fiets (levering en model)
-                </span>
               </Link>
             </li>
           </ul>
