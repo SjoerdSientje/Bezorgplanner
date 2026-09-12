@@ -104,6 +104,7 @@ export default function RitjesVandaagPage() {
       }>;
     }) => {
       const updates = payload?.orderUpdates;
+      // Optimistisch toepassen; daarna server-fetch zodat Lijst Sjoerd = database.
       if (updates && updates.length > 0) {
         const byId = new Map(updates.map((u) => [u.id, u]));
         setOrders((prev) =>
@@ -563,6 +564,7 @@ export default function RitjesVandaagPage() {
             </div>
             <RitjesRouteControls
               onRouteGenerated={handleRouteGenerated}
+              onBeforeGoedkeuren={fetchRitjes}
               sjoerdOrders={sjoerdOrders}
             />
           </div>

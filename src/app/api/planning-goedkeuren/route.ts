@@ -73,21 +73,60 @@ export async function POST(request: NextRequest) {
       (activeSlots ?? []).map((s: { order_id: string }) => String(s.order_id))
     );
 
+    const skippedAlreadyPlanned: string[] = [];
+    const skippedNoSlot: string[] = [];
+
     const rows = (orders ?? []).filter((o) => {
-      if ((o.aankomsttijd_slot ?? "").toString().trim().length === 0) return false;
-      if (alreadyPlannedIds.has(String(o.id ?? ""))) return false;
+      const label = String(o.order_nummer ?? o.id ?? "?");
+      if (alreadyPlannedIds.has(String(o.id ?? ""))) {
+        skippedAlreadyPlanned.push(label);
+        return false;
+      }
+      if ((o.aankomsttijd_slot ?? "").toString().trim().length === 0) {
+        skippedNoSlot.push(label);
+        return false;
+      }
       return true;
     });
 
+    console.info("[api/planning-goedkeuren] batch filter", {
+      ownerEmail,
+      targetDate,
+      isRitjesVoorMorgen,
+      eligibleReady: orders.length,
+      batch: rows.length,
+      skippedAlreadyPlanned: skippedAlreadyPlanned.length,
+      skippedNoSlot: skippedNoSlot.length,
+      skippedAlreadyPlannedOrders: skippedAlreadyPlanned.slice(0, 20),
+      skippedNoSlotOrders: skippedNoSlot.slice(0, 20),
+    });
+
     if (rows.length === 0) {
+      const skipHintParts: string[] = [];
+      if (skippedNoSlot.length > 0) {
+        skipHintParts.push(
+          `${skippedNoSlot.length} zonder tijdslot (${skippedNoSlot.slice(0, 8).join(", ")}${skippedNoSlot.length > 8 ? "…" : ""})`
+        );
+      }
+      if (skippedAlreadyPlanned.length > 0) {
+        skipHintParts.push(
+          `${skippedAlreadyPlanned.length} al in actieve planning (${skippedAlreadyPlanned.slice(0, 8).join(", ")}${skippedAlreadyPlanned.length > 8 ? "…" : ""})`
+        );
+      }
+      const skipHint =
+        skipHintParts.length > 0 ? ` Overgeslagen: ${skipHintParts.join("; ")}.` : "";
       return NextResponse.json({
         ok: true,
         message: isRitjesVoorMorgen
-          ? "Geen orders voor morgen om goed te keuren (lopende ritjes van vandaag blijven staan)."
-          : "Geen orders om goed te keuren (geen orders met tijdslot die voldoen aan de criteria).",
+          ? `Geen orders voor morgen om goed te keuren (lopende ritjes van vandaag blijven staan).${skipHint}`
+          : `Geen orders om goed te keuren (geen orders met tijdslot die voldoen aan de criteria).${skipHint}`,
         count: 0,
         planningDate: targetDate,
         isRitjesVoorMorgen,
+        skipped: {
+          alreadyPlanned: skippedAlreadyPlanned,
+          noSlot: skippedNoSlot,
+        },
       });
     }
 
@@ -215,12 +254,30 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       ok: true,
-      message: isRitjesVoorMorgen
-        ? `${batchOrders.length} order(s) als ritjes voor morgen toegevoegd.`
-        : `${batchOrders.length} order(s) in de planning gezet.`,
+      message: (() => {
+        const base = isRitjesVoorMorgen
+          ? `${batchOrders.length} order(s) als ritjes voor morgen toegevoegd.`
+          : `${batchOrders.length} order(s) in de planning gezet.`;
+        const skipParts: string[] = [];
+        if (skippedNoSlot.length > 0) {
+          skipParts.push(
+            `${skippedNoSlot.length} zonder tijdslot overgeslagen (${skippedNoSlot.slice(0, 8).join(", ")}${skippedNoSlot.length > 8 ? "…" : ""})`
+          );
+        }
+        if (skippedAlreadyPlanned.length > 0) {
+          skipParts.push(
+            `${skippedAlreadyPlanned.length} al in planning overgeslagen (${skippedAlreadyPlanned.slice(0, 8).join(", ")}${skippedAlreadyPlanned.length > 8 ? "…" : ""})`
+          );
+        }
+        return skipParts.length > 0 ? `${base} Let op: ${skipParts.join("; ")}.` : base;
+      })(),
       count: batchOrders.length,
       planningDate: targetDate,
       isRitjesVoorMorgen,
+      skipped: {
+        alreadyPlanned: skippedAlreadyPlanned,
+        noSlot: skippedNoSlot,
+      },
       whatsapp: {
         sent: whatsappSent,
         failed: whatsappFailed,

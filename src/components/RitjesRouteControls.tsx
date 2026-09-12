@@ -163,11 +163,14 @@ interface Props {
       leg_nummer: number | null;
     }>;
   }) => void | Promise<void>;
+  /** Voor goedkeuren: herlaad Lijst Sjoerd zodat we niet op stale slots klikken. */
+  onBeforeGoedkeuren?: () => void | Promise<void>;
   sjoerdOrders: RoutePickOrder[];
 }
 
 export default function RitjesRouteControls({
   onRouteGenerated,
+  onBeforeGoedkeuren,
   sjoerdOrders,
 }: Props) {
   const [loading, setLoading] = useState(false);
@@ -247,6 +250,9 @@ export default function RitjesRouteControls({
       if (!res.ok) {
         const errText = [data.error, data.detail].filter(Boolean).join(" — ");
         setMessage({ type: "error", text: errText || "Route kon niet worden gegenereerd." });
+        // Altijd herladen: een mislukte run kan in de DB al slots gewist/gedeeltelijk
+        // geschreven hebben terwijl Lijst Sjoerd nog de vorige (visuele) slots toont.
+        await onRouteGenerated?.({});
         return;
       }
       const slotsWritten = Number(data.slotsWritten ?? 0);
@@ -258,6 +264,7 @@ export default function RitjesRouteControls({
             data.warning ||
             "Geen tijdsloten geschreven — oude slots zijn niet overschreven.",
         });
+        await onRouteGenerated?.({});
         return;
       }
       const warn = typeof data.warning === "string" ? data.warning.trim() : "";
@@ -286,6 +293,9 @@ export default function RitjesRouteControls({
     setGoedkeurenLoading(true);
     setGoedkeurenMessage(null);
     try {
+      // Sync Lijst Sjoerd met DB vóór goedkeuren — voorkomt “ik zie 6 slots” terwijl
+      // de server er maar 2 heeft (na mislukte/gedeeltelijke route-run).
+      await onBeforeGoedkeuren?.();
       const res = await fetch("/api/planning-goedkeuren", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -298,6 +308,13 @@ export default function RitjesRouteControls({
         return;
       }
       const wa = data?.whatsapp;
+      const skippedNoSlot = Array.isArray(data?.skipped?.noSlot)
+        ? (data.skipped.noSlot as string[])
+        : [];
+      const skippedAlready = Array.isArray(data?.skipped?.alreadyPlanned)
+        ? (data.skipped.alreadyPlanned as string[])
+        : [];
+      const hasSkips = skippedNoSlot.length > 0 || skippedAlready.length > 0;
       if (wa && typeof wa.sent === "number") {
         const suffix =
           wa.failed > 0
@@ -306,11 +323,14 @@ export default function RitjesRouteControls({
         const details = Array.isArray(wa.details) ? (wa.details as string[]) : [];
         const detailBlock = details.length > 0 ? "\n\n" + details.join("\n") : "";
         setGoedkeurenMessage({
-          type: wa.failed > 0 ? "error" : "ok",
+          type: wa.failed > 0 || hasSkips ? "error" : "ok",
           text: (data.message || "Planning goedgekeurd.") + suffix + detailBlock,
         });
       } else {
-        setGoedkeurenMessage({ type: "ok", text: data.message || "Planning goedgekeurd." });
+        setGoedkeurenMessage({
+          type: hasSkips ? "error" : "ok",
+          text: data.message || "Planning goedgekeurd.",
+        });
       }
       // Na goedkeuren: handmatige adreskeuze wissen, zodat morgen niet gisteren's pins blijven hangen.
       setRoutes((prev) => {

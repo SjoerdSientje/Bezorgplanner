@@ -326,7 +326,6 @@ export async function POST(request: NextRequest) {
       return error;
     };
 
-    const meerDanEenRoute = parallelRoutes.length > 1;
     const ordersById = new Map(rowsGeocoded.map((o) => [o.id, o]));
 
     // Pins worden als hard `type`-constraint aan Routific meegegeven.
@@ -350,12 +349,10 @@ export async function POST(request: NextRequest) {
       const routeNum = vi + 1;
       const customNaam = String(parallelRoutes[vi]?.naam ?? "").trim();
       const defaultLabel = `Route ${routeNum}`;
-      const hasMeaningfulName = Boolean(customNaam) && customNaam !== defaultLabel;
-      // Eén route zonder eigen naam → geen route_nummer (bestaand gedrag).
-      // Meerdere routes of een custom naam → wel nummer + weergavenaam.
-      const routeNummerDb = meerDanEenRoute || hasMeaningfulName ? routeNum : null;
-      const routeNaamDb =
-        customNaam || (routeNummerDb != null ? defaultLabel : null);
+      // Altijd route_nummer ≥ 1 (ook bij één bus). Null zorgde ervoor dat goedkeuren/
+      // planning een deel in "Overig" zette terwijl Lijst Sjoerd ze als één route toonde.
+      const routeNummerDb = routeNum;
+      const routeNaamDb = customNaam || defaultLabel;
 
       // Bij "meerdere ritten": legs apart houden, daarna tijdlijn met depot-return + herladen.
       const keys = routeVehicleKeys.get(routeNum) ?? [`vehicle_${routeNum}`];
@@ -428,29 +425,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Altijd alle orders in de batch resetten (ook aankomsttijd_slot), zodat geen
-    // verouderde tijdsloten van een vorige run zichtbaar blijven voor unserved orders.
-    const clearErrors: string[] = [];
-    for (const o of rowsForRouting) {
-      const err = await patchOrder(o.id, {
-        aankomsttijd_slot: null,
-        rit_nummer: null,
-        route_nummer: null,
-        route_naam: null,
-        leg_nummer: null,
-      });
-      if (err) clearErrors.push(`${o.id}: ${err.message}`);
-    }
-    if (clearErrors.length > 0) {
-      console.error("[api/routific/route] orders reset:", clearErrors.slice(0, 5));
-      return NextResponse.json(
-        {
-          error: "Tijdsloten konden niet worden gewist op orders (database).",
-          detail: clearErrors[0],
-        },
-        { status: 500 }
-      );
-    }
+    // Eerst served orders schrijven, daarna pas unserved legen.
+    // (Voorheen: alles eerst wissen → bij gedeeltelijke oplossing of write-fout bleven
+    // orders zonder tijdslot in de UI-route hangen; goedkeuren nam die stilzwijgend niet mee.)
+    const servedIds = new Set(slotsToInsert.map((s) => s.order_id));
 
     if (slotsToInsert.length > 0) {
       const writeErrors: string[] = [];
@@ -483,10 +461,25 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const clearErrors: string[] = [];
+    for (const o of rowsForRouting) {
+      if (servedIds.has(o.id)) continue;
+      const err = await patchOrder(o.id, {
+        aankomsttijd_slot: null,
+        rit_nummer: null,
+        route_nummer: null,
+        route_naam: null,
+        leg_nummer: null,
+      });
+      if (err) clearErrors.push(`${o.id}: ${err.message}`);
+    }
+    if (clearErrors.length > 0) {
+      console.error("[api/routific/route] unserved reset:", clearErrors.slice(0, 5));
+    }
+
     const unserved = output?.unserved as Record<string, string | unknown> | null | undefined;
     const warningParts: string[] = [];
 
-    const servedIds = new Set(slotsToInsert.map((s) => s.order_id));
     const notPlanned = rowsForRouting.filter((o) => !servedIds.has(o.id));
     if (notPlanned.length > 0) {
       // Restcapaciteit per route (inclusief extra ritten bij "meerdere ritten"), zodat we
