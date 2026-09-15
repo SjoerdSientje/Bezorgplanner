@@ -58,7 +58,11 @@ function formatLabel(iso: string, scope?: string): string {
   const hh = String(d.getHours()).padStart(2, "0");
   const min = String(d.getMinutes()).padStart(2, "0");
   const scopeLabel =
-    scope === "planning" ? "Planning" : scope === "sjoerd" ? "Lijst Sjoerd" : null;
+    scope === "planning"
+      ? "Planning"
+      : scope === "sjoerd"
+        ? "Orders voor morgen"
+        : null;
   return scopeLabel
     ? `Paklijst ${scopeLabel} ${dd}-${mm} ${hh}:${min}`
     : `Paklijst ${dd}-${mm} ${hh}:${min}`;
@@ -241,6 +245,7 @@ export default function PaklijstPage() {
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<SavedPaklijst[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [showScopePicker, setShowScopePicker] = useState(false);
 
   // Print state: welke paklijst wordt geprint?
   const [printEntry, setPrintEntry] = useState<SavedPaklijst | null>(null);
@@ -287,6 +292,7 @@ export default function PaklijstPage() {
   }, []);
 
   const genereer = useCallback(async (scope: "sjoerd" | "planning") => {
+    setShowScopePicker(false);
     setLoading(true);
     setError(null);
     try {
@@ -346,7 +352,7 @@ export default function PaklijstPage() {
         <div className="mx-auto max-w-2xl px-4 py-8 sm:px-6 sm:py-12">
 
           {/* Topbalk */}
-          <div className="mb-8 flex flex-col gap-4">
+          <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-4">
               <Link
                 href="/paklijst-keuze"
@@ -364,35 +370,91 @@ export default function PaklijstPage() {
                 <p className="text-sm text-koopje-black/50 capitalize">{formatDatum()}</p>
               </div>
             </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <button
-                type="button"
-                onClick={() => void genereer("sjoerd")}
-                disabled={loading}
-                className="flex flex-col items-start rounded-xl border border-koopje-orange/40 bg-orange-50 px-4 py-3 text-left transition hover:bg-orange-100 disabled:opacity-60"
-              >
-                <span className="text-sm font-semibold text-koopje-black">
-                  {loading ? "Genereren…" : "Lijst Sjoerd"}
-                </span>
-                <span className="mt-0.5 text-xs text-koopje-black/60">
-                  Orders die klaarstaan voor route (nog niet in planning)
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => void genereer("planning")}
-                disabled={loading}
-                className="flex flex-col items-start rounded-xl border border-stone-200 bg-white px-4 py-3 text-left transition hover:border-koopje-orange/50 hover:bg-stone-50 disabled:opacity-60"
-              >
-                <span className="text-sm font-semibold text-koopje-black">
-                  {loading ? "Genereren…" : "Orders in planning"}
-                </span>
-                <span className="mt-0.5 text-xs text-koopje-black/60">
-                  Alle orders die al in een actieve planning staan
-                </span>
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() => setShowScopePicker(true)}
+              disabled={loading}
+              className="flex items-center gap-2 rounded-xl bg-koopje-orange px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-koopje-orange/90 disabled:opacity-60"
+            >
+              {loading ? (
+                <>
+                  <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                  </svg>
+                  Genereren…
+                </>
+              ) : (
+                <>
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  Paklijst genereren
+                </>
+              )}
+            </button>
           </div>
+
+          {showScopePicker && (
+            <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4">
+              <div
+                role="dialog"
+                aria-labelledby="paklijst-scope-title"
+                className="w-full max-w-md rounded-t-2xl bg-white p-5 shadow-xl sm:rounded-2xl"
+              >
+                <div className="mb-4 flex items-start justify-between gap-3">
+                  <div>
+                    <h2
+                      id="paklijst-scope-title"
+                      className="text-base font-semibold text-koopje-black"
+                    >
+                      Welke orders?
+                    </h2>
+                    <p className="mt-1 text-sm text-stone-500">
+                      Kies de bron voor deze paklijst.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowScopePicker(false)}
+                    className="rounded-lg px-2 py-1 text-sm text-stone-500 hover:bg-stone-100"
+                    aria-label="Sluiten"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => void genereer("sjoerd")}
+                    disabled={loading}
+                    className="flex w-full flex-col items-start rounded-xl border border-koopje-orange/40 bg-orange-50 px-4 py-3 text-left transition hover:bg-orange-100 disabled:opacity-60"
+                  >
+                    <span className="text-sm font-semibold text-koopje-black">
+                      Orders voor morgen
+                    </span>
+                    <span className="mt-0.5 text-xs text-koopje-black/60">
+                      Orders die klaarstaan voor route (nog niet in planning)
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void genereer("planning")}
+                    disabled={loading}
+                    className="flex w-full flex-col items-start rounded-xl border border-stone-200 bg-white px-4 py-3 text-left transition hover:border-koopje-orange/50 hover:bg-stone-50 disabled:opacity-60"
+                  >
+                    <span className="text-sm font-semibold text-koopje-black">
+                      Orders in planning
+                    </span>
+                    <span className="mt-0.5 text-xs text-koopje-black/60">
+                      Alle orders die al in een actieve planning staan
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Foutmelding */}
           {error && (
@@ -412,7 +474,7 @@ export default function PaklijstPage() {
               </div>
               <p className="font-medium text-koopje-black">Nog geen paklijst</p>
               <p className="mt-1 text-sm text-koopje-black/50">
-                Kies hierboven Lijst Sjoerd of Orders in planning
+                Klik op &lsquo;Paklijst genereren&rsquo; om te beginnen
               </p>
             </div>
           )}
