@@ -36,6 +36,7 @@ interface PaklijstData {
   items: PaklijstItem[];
   orderCount: number;
   generatedAt: string;
+  scope?: "sjoerd" | "planning";
 }
 
 interface SavedPaklijst {
@@ -50,13 +51,17 @@ interface HistoryEntryFromApi {
   data: PaklijstData;
 }
 
-function formatLabel(iso: string): string {
+function formatLabel(iso: string, scope?: string): string {
   const d = new Date(iso);
   const dd = String(d.getDate()).padStart(2, "0");
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const hh = String(d.getHours()).padStart(2, "0");
   const min = String(d.getMinutes()).padStart(2, "0");
-  return `Paklijst ${dd}-${mm} ${hh}:${min}`;
+  const scopeLabel =
+    scope === "planning" ? "Planning" : scope === "sjoerd" ? "Lijst Sjoerd" : null;
+  return scopeLabel
+    ? `Paklijst ${scopeLabel} ${dd}-${mm} ${hh}:${min}`
+    : `Paklijst ${dd}-${mm} ${hh}:${min}`;
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -250,7 +255,7 @@ export default function PaklijstPage() {
         const entries = Array.isArray(json?.entries) ? (json.entries as HistoryEntryFromApi[]) : [];
         const mapped: SavedPaklijst[] = entries.map((e) => ({
           id: String(e.id),
-          label: formatLabel(e.generated_at),
+          label: formatLabel(e.generated_at, e.data?.scope),
           data: e.data,
         }));
         setHistory(mapped);
@@ -281,13 +286,15 @@ export default function PaklijstPage() {
     setPrintEntry(entry);
   }, []);
 
-  const genereer = useCallback(async () => {
+  const genereer = useCallback(async (scope: "sjoerd" | "planning") => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/paklijst?t=${Date.now()}`, { cache: "no-store" });
+      const res = await fetch(`/api/paklijst?scope=${scope}&t=${Date.now()}`, {
+        cache: "no-store",
+      });
       if (!res.ok) throw new Error("Ophalen mislukt");
-      const json = await res.json() as PaklijstData;
+      const json = (await res.json()) as PaklijstData;
       setData(json);
       const saveRes = await fetch("/api/paklijst-history", {
         method: "POST",
@@ -299,7 +306,7 @@ export default function PaklijstPage() {
       if (saveRes.ok && saved) {
         const newEntry: SavedPaklijst = {
           id: String(saved.id),
-          label: formatLabel(saved.generated_at),
+          label: formatLabel(saved.generated_at, saved.data?.scope ?? scope),
           data: saved.data,
         };
         setHistory((prev) => [newEntry, ...prev].slice(0, 3));
@@ -339,42 +346,52 @@ export default function PaklijstPage() {
         <div className="mx-auto max-w-2xl px-4 py-8 sm:px-6 sm:py-12">
 
           {/* Topbalk */}
-          <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="mb-8 flex flex-col gap-4">
             <div className="flex items-center gap-4">
-              <Link href="/" className="text-koopje-black/60 transition hover:text-koopje-black" aria-label="Terug">
+              <Link
+                href="/paklijst-keuze"
+                className="text-koopje-black/60 transition hover:text-koopje-black"
+                aria-label="Terug"
+              >
                 <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                 </svg>
               </Link>
               <div>
-                <h1 className="text-xl font-semibold text-koopje-black sm:text-2xl">Paklijst</h1>
+                <h1 className="text-xl font-semibold text-koopje-black sm:text-2xl">
+                  Paklijst bezorging
+                </h1>
                 <p className="text-sm text-koopje-black/50 capitalize">{formatDatum()}</p>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={genereer}
-              disabled={loading}
-              className="flex items-center gap-2 rounded-xl bg-koopje-orange px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-koopje-orange/90 disabled:opacity-60"
-            >
-              {loading ? (
-                <>
-                  <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
-                  </svg>
-                  Genereren…
-                </>
-              ) : (
-                <>
-                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                  </svg>
-                  Paklijst genereren
-                </>
-              )}
-            </button>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => void genereer("sjoerd")}
+                disabled={loading}
+                className="flex flex-col items-start rounded-xl border border-koopje-orange/40 bg-orange-50 px-4 py-3 text-left transition hover:bg-orange-100 disabled:opacity-60"
+              >
+                <span className="text-sm font-semibold text-koopje-black">
+                  {loading ? "Genereren…" : "Lijst Sjoerd"}
+                </span>
+                <span className="mt-0.5 text-xs text-koopje-black/60">
+                  Orders die klaarstaan voor route (nog niet in planning)
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => void genereer("planning")}
+                disabled={loading}
+                className="flex flex-col items-start rounded-xl border border-stone-200 bg-white px-4 py-3 text-left transition hover:border-koopje-orange/50 hover:bg-stone-50 disabled:opacity-60"
+              >
+                <span className="text-sm font-semibold text-koopje-black">
+                  {loading ? "Genereren…" : "Orders in planning"}
+                </span>
+                <span className="mt-0.5 text-xs text-koopje-black/60">
+                  Alle orders die al in een actieve planning staan
+                </span>
+              </button>
+            </div>
           </div>
 
           {/* Foutmelding */}
@@ -395,7 +412,7 @@ export default function PaklijstPage() {
               </div>
               <p className="font-medium text-koopje-black">Nog geen paklijst</p>
               <p className="mt-1 text-sm text-koopje-black/50">
-                Klik op &lsquo;Paklijst genereren&rsquo; om de lijst op te bouwen
+                Kies hierboven Lijst Sjoerd of Orders in planning
               </p>
             </div>
           )}
