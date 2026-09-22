@@ -13,14 +13,29 @@ type PakketjesOrder = {
   adres: string;
   totaal_prijs: number;
   fulfillment_status: string;
+  shopify_created_at: string | null;
   items: PakketjesOrderItem[];
 };
 type PakketjesResponse = {
   orders: PakketjesOrder[];
   summary: { name: string; count: number }[];
   count: number;
+  maxPrijs?: number;
   generatedAt: string;
 };
+
+function formatBesteldOp(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "—";
+  return new Date(t).toLocaleString("nl-NL", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 export default function PakketjesPaklijstPage() {
   const [loading, setLoading] = useState(true);
@@ -32,7 +47,7 @@ export default function PakketjesPaklijstPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/paklijst/pakketjes?t=${Date.now()}`, { cache: "no-store" });
+      const res = await fetch(`/api/paklijst/pakketjes?sync=1&t=${Date.now()}`, { cache: "no-store" });
       const json = (await res.json().catch(() => ({}))) as Partial<PakketjesResponse> & { error?: string };
       if (!res.ok) throw new Error(json.error ?? "Laden mislukt");
       setData(json as PakketjesResponse);
@@ -51,7 +66,7 @@ export default function PakketjesPaklijstPage() {
   async function pakketjesAfgerond() {
     if (
       !window.confirm(
-        "Alle pakketjes voor dit account wissen? Alleen nieuwe orders vanaf nu komen weer op de lijst (via Shopify-webhook)."
+        "Alle pakketjes voor dit account wissen? Alleen nieuwe orders vanaf nu komen weer op de lijst (via Shopify-webhook of Vernieuwen)."
       )
     ) {
       return;
@@ -73,6 +88,8 @@ export default function PakketjesPaklijstPage() {
     }
   }
 
+  const maxPrijs = data?.maxPrijs ?? 450;
+
   return (
     <>
       <Header />
@@ -88,7 +105,7 @@ export default function PakketjesPaklijstPage() {
               <div>
                 <h1 className="text-xl font-semibold text-koopje-black sm:text-2xl">Paklijst Pakketjes</h1>
                 <p className="text-sm text-koopje-black/60">
-                  Orders onder €450 komen automatisch binnen via de Shopify-webhook
+                  Open Shopify-orders onder €{maxPrijs} (plus naleveren/garantie €0). Vernieuwen sync’t met Shopify.
                 </p>
               </div>
             </div>
@@ -130,7 +147,7 @@ export default function PakketjesPaklijstPage() {
 
               {data.orders.length === 0 ? (
                 <div className="rounded-2xl border-2 border-dashed border-stone-200 py-16 text-center text-sm text-stone-500">
-                  Nog geen pakketjes in de wachtrij. Nieuwe Shopify-orders onder €450 verschijnen hier automatisch.
+                  Nog geen pakketjes in de wachtrij. Open Shopify-orders onder €{maxPrijs} verschijnen hier na Vernieuwen.
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -143,6 +160,9 @@ export default function PakketjesPaklijstPage() {
                           </span>
                           <span className="font-semibold text-koopje-black">{o.naam || "—"}</span>
                           <span className="rounded bg-stone-100 px-2 py-0.5 text-xs text-stone-600">{o.order_nummer}</span>
+                          <span className="text-xs text-stone-500">
+                            Besteld {formatBesteldOp(o.shopify_created_at)}
+                          </span>
                         </div>
                         <span className="text-sm font-semibold text-koopje-black">€{o.totaal_prijs.toFixed(2)}</span>
                       </div>

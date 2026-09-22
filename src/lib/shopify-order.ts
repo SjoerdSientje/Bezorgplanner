@@ -108,7 +108,8 @@ export function isShowroomShippingOrder(order: ShopifyOrder): boolean {
   });
 }
 
-const PAKKETJES_MAX_PRIJS = 450;
+/** Pakketjes-wachtrij: orders met totaal onder dit bedrag (excl. €0 speciale service). */
+export const PAKKETJES_MAX_PRIJS = 450;
 
 function parseSpecialServiceProductFromNote(note: string | null | undefined): string {
   const text = String(note ?? "");
@@ -161,6 +162,9 @@ export function qualifiesForPakketjes(order: ShopifyOrder): boolean {
     (kw) => tags.includes(kw) || lineItemNames.some((n) => n.includes(kw))
   );
   if (hasServiceKeyword) return false;
+  // Fietslevering (unitprijs > €500 of Levering-property) hoort in ritjes, ook bij laag restantbedrag.
+  const hasFietsLine = (order.line_items ?? []).some((li) => isFietsShopifyLineItem(li));
+  if (hasFietsLine) return false;
   const total = parseFloat(String(order.total_price ?? 0));
   const hasSpecialServiceItem = Boolean(getSpecialServiceProduct(order));
   const qualifiesByTotal = total > 0 && total < PAKKETJES_MAX_PRIJS;
@@ -997,6 +1001,7 @@ export function pakketjesShopifyRelevantFieldsEqual(
     items?: unknown;
     totaal_prijs?: number | null;
     fulfillment_status?: string | null;
+    shopify_created_at?: string | null;
   },
   next: {
     order_nummer: string;
@@ -1005,6 +1010,7 @@ export function pakketjesShopifyRelevantFieldsEqual(
     items: { name: string; quantity: number }[];
     totaal_prijs: number;
     fulfillment_status: string | null;
+    shopify_created_at?: string | null;
   }
 ): boolean {
   return (
@@ -1013,7 +1019,8 @@ export function pakketjesShopifyRelevantFieldsEqual(
     strFieldEq(existing.adres, next.adres) &&
     jsonFieldEq(existing.items, next.items) &&
     numFieldEq(existing.totaal_prijs, next.totaal_prijs) &&
-    strFieldEq(existing.fulfillment_status, next.fulfillment_status)
+    strFieldEq(existing.fulfillment_status, next.fulfillment_status) &&
+    strFieldEq(existing.shopify_created_at, next.shopify_created_at ?? null)
   );
 }
 

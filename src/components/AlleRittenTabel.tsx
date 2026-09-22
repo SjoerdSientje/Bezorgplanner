@@ -3,6 +3,11 @@
 import { useState, useCallback, useRef } from "react";
 import ProductenCell from "@/components/ProductenCell";
 import OpmerkingKlantCell from "@/components/OpmerkingKlantCell";
+import {
+  TableFillerBodyCells,
+  TableFillerHeaderCells,
+  useTableFillerCols,
+} from "@/lib/use-table-filler-cols";
 
 export type PlanningKleur = "groen" | "oranje" | "rood" | null;
 
@@ -188,6 +193,10 @@ export default function AlleRittenTabel({
     [onPatch]
   );
 
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const tableRef = useRef<HTMLTableElement | null>(null);
+  const fillerCols = useTableFillerCols(wrapperRef, tableRef, [orders.length]);
+
   const headers = [
     "", // kleur
     "Voorkeursdatum",
@@ -219,8 +228,13 @@ export default function AlleRittenTabel({
           onClose={() => setPopup(null)}
         />
       )}
-      <div className="overflow-x-auto rounded-xl border-2 border-stone-200 bg-white shadow-sm">
-        <table className="w-full min-w-max border-collapse text-left text-sm">
+      <div
+        ref={wrapperRef}
+        className="overflow-x-auto rounded-xl border-2 border-stone-200 bg-white shadow-sm"
+        style={{ scrollbarGutter: "stable both-edges" }}
+      >
+        <div className="mobile-table-scale">
+        <table ref={tableRef} className="w-full min-w-max border-collapse text-left text-sm">
           <thead>
             <tr className="bg-stone-100">
               {headers.map((h, i) => (
@@ -231,6 +245,7 @@ export default function AlleRittenTabel({
                   {h}
                 </th>
               ))}
+              <TableFillerHeaderCells count={fillerCols} />
             </tr>
           </thead>
           <tbody>
@@ -409,11 +424,13 @@ export default function AlleRittenTabel({
                       </svg>
                     </button>
                   </td>
+                  <TableFillerBodyCells count={fillerCols} />
                 </tr>
               );
             })}
           </tbody>
         </table>
+        </div>
       </div>
     </>
   );

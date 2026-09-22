@@ -44,7 +44,7 @@ export default function PaklijstKeuzePage() {
             >
               <h2 className="text-base font-semibold text-koopje-black">Pakketjes</h2>
               <p className="mt-1 text-sm text-koopje-black/60">
-                Automatisch via Shopify-webhook: orders onder €500 in de wachtrij.
+                Automatisch via Shopify-webhook: orders onder €450 in de wachtrij.
               </p>
             </Link>
           </div>

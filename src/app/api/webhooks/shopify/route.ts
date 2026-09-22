@@ -370,12 +370,37 @@ export async function POST(request: NextRequest) {
           continue;
         }
 
-        const { data: existingPakket } = await supabase
-          .from("pakketjes_orders")
-          .select("id, order_nummer, naam, adres, items, totaal_prijs, fulfillment_status")
-          .eq("owner_email", ownerEmail)
-          .eq("shopify_order_id", shopifyOrderId)
-          .maybeSingle();
+        let existingPakket: {
+          id: string;
+          order_nummer?: string | null;
+          naam?: string | null;
+          adres?: string | null;
+          items?: unknown;
+          totaal_prijs?: number | null;
+          fulfillment_status?: string | null;
+          shopify_created_at?: string | null;
+        } | null = null;
+        {
+          const first = await supabase
+            .from("pakketjes_orders")
+            .select(
+              "id, order_nummer, naam, adres, items, totaal_prijs, fulfillment_status, shopify_created_at"
+            )
+            .eq("owner_email", ownerEmail)
+            .eq("shopify_order_id", shopifyOrderId)
+            .maybeSingle();
+          if (first.error?.message?.includes("shopify_created_at")) {
+            const fallback = await supabase
+              .from("pakketjes_orders")
+              .select("id, order_nummer, naam, adres, items, totaal_prijs, fulfillment_status")
+              .eq("owner_email", ownerEmail)
+              .eq("shopify_order_id", shopifyOrderId)
+              .maybeSingle();
+            existingPakket = fallback.data;
+          } else {
+            existingPakket = first.data;
+          }
+        }
 
         if (qualifiesForPakketjes(order)) {
           const total = parseFloat(String(order.total_price ?? 0));
@@ -388,31 +413,26 @@ export async function POST(request: NextRequest) {
             items: extractPakketjesLineItems(order),
             totaal_prijs: total,
             fulfillment_status: order.fulfillment_status ?? null,
+            shopify_created_at: shopifyOrderCreatedAt(order).toISOString(),
           };
 
-          if (isCreate) {
-            const { error: pErr } = await supabase.from("pakketjes_orders").upsert(row, {
-              onConflict: "owner_email,shopify_order_id",
-            });
-            if (pErr) console.error("[webhooks/shopify] pakketjes upsert:", pErr.message);
-          } else if (existingPakket?.id) {
-            // Update: alleen als de pakketjes-rij al bestaat én Shopify-data wijzigt.
-            if (pakketjesShopifyRelevantFieldsEqual(existingPakket, row)) {
-              continue;
-            }
-            const { error: pErr } = await supabase
-              .from("pakketjes_orders")
-              .update({
-                order_nummer: row.order_nummer,
-                naam: row.naam,
-                adres: row.adres,
-                items: row.items,
-                totaal_prijs: row.totaal_prijs,
-                fulfillment_status: row.fulfillment_status,
-              })
-              .eq("id", existingPakket.id);
-            if (pErr) console.error("[webhooks/shopify] pakketjes update:", pErr.message);
+          // Create én update: upsert zodat gemiste creates (of latere kwalificatie) alsnog binnenkomen.
+          if (
+            existingPakket?.id &&
+            pakketjesShopifyRelevantFieldsEqual(existingPakket, row)
+          ) {
+            continue;
           }
+          let { error: pErr } = await supabase.from("pakketjes_orders").upsert(row, {
+            onConflict: "owner_email,shopify_order_id",
+          });
+          if (pErr?.message?.includes("shopify_created_at")) {
+            const { shopify_created_at: _c, ...withoutCreated } = row;
+            ({ error: pErr } = await supabase.from("pakketjes_orders").upsert(withoutCreated, {
+              onConflict: "owner_email,shopify_order_id",
+            }));
+          }
+          if (pErr) console.error("[webhooks/shopify] pakketjes upsert:", pErr.message);
         } else if (existingPakket?.id) {
           // Voldoet niet meer → verwijderen (alleen als rij al bestond).
           await supabase.from("pakketjes_orders").delete().eq("id", existingPakket.id);

@@ -1,6 +1,11 @@
 "use client";
 
-import React, { useState, useCallback, useEffect, useRef, useLayoutEffect } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
+import {
+  TableFillerBodyCells,
+  TableFillerHeaderCells,
+  useTableFillerCols,
+} from "@/lib/use-table-filler-cols";
 
 const MIN_ROWS = 50;
 
@@ -78,29 +83,12 @@ export default function EditableSheetTable({
 
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const tableRef = useRef<HTMLTableElement | null>(null);
-  const [fillerCols, setFillerCols] = useState(0);
-  const FILLER_CELL_PX = 64; // 4rem
-
-  useLayoutEffect(() => {
-    const wrapper = wrapperRef.current;
-    const table = tableRef.current;
-    if (!wrapper || !table) return;
-
-    const recompute = () => {
-      const wrapperWidth = wrapper.clientWidth;
-      const tableWidth = table.getBoundingClientRect().width;
-      const contentWidth = Math.max(0, tableWidth - fillerCols * FILLER_CELL_PX);
-      const need = Math.max(0, Math.floor((wrapperWidth - contentWidth) / FILLER_CELL_PX));
-      if (need !== fillerCols) setFillerCols(need);
-    };
-
-    recompute();
-    const ro = new ResizeObserver(() => recompute());
-    ro.observe(wrapper);
-    ro.observe(table);
-    return () => ro.disconnect();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fillerCols, colCount, rowCount, showRowNumbers, readOnly]);
+  const fillerCols = useTableFillerCols(wrapperRef, tableRef, [
+    colCount,
+    rowCount,
+    showRowNumbers,
+    readOnly,
+  ]);
 
   function focusFirstInteractiveCell(cell: HTMLElement) {
     const focusable = cell.querySelector<HTMLElement>(
@@ -217,12 +205,11 @@ export default function EditableSheetTable({
                   {h}
                 </th>
               ))}
-              {Array.from({ length: fillerCols }).map((_, idx) => (
-                <th
-                  key={`__fill_h_${idx}`}
-                  className="whitespace-nowrap border border-stone-300 px-2 py-2 font-medium text-stone-800 w-16 min-w-[4rem]"
-                />
-              ))}
+              <TableFillerHeaderCells
+                count={fillerCols}
+                borderClass="border-stone-300"
+                bgClass="bg-stone-100"
+              />
             </tr>
           </thead>
           )}
@@ -299,13 +286,7 @@ export default function EditableSheetTable({
                       </td>
                     );
                   })}
-                  {Array.from({ length: fillerCols }).map((_, idx) => (
-                    <td
-                      key={`__fill_${i}_${idx}`}
-                      className="w-16 min-w-[4rem] border border-stone-300 p-0 align-top"
-                      aria-hidden="true"
-                    />
-                  ))}
+                  <TableFillerBodyCells count={fillerCols} borderClass="border-stone-300" />
                 </tr>
               );
             })}
