@@ -5,8 +5,6 @@ import {
   fetchShopifyProductSummariesByIds,
   isShopifyProductActive,
   resolveShopifyProductIdsFromVariantIds,
-  searchShopifyProducts,
-  shopifyAdminJson,
   type ShopifyAdminProduct,
   type ShopifyAdminProductVariant,
 } from "@/lib/shopify-admin";
@@ -39,10 +37,6 @@ import {
   enqueueInventoryPendingProduct,
   isShopifyProductLinkedToInventory,
 } from "@/lib/inventory-pending";
-import {
-  partsDuplicateCanonicalTitle,
-  partsGroupKeyFromTitle,
-} from "@/lib/inventory-parts-rules";
 
 export type InventoryCategory = "fiets" | "onderdeel" | "accessoire" | "overig";
 export type InventorySource = "shopify" | "marktplaats" | "winkel" | "handmatig" | "moneybird";
@@ -256,7 +250,7 @@ async function upsertInventoryGroups(
   let updated = 0;
   let variantCount = 0;
   let rows = existingRows;
-  const createIfMissing = options?.createIfMissing !== false;
+  const createIfMissing = options?.createIfMissing === true;
 
   for (const group of Array.from(groups.values())) {
     variantCount += group.entries.length;
@@ -2508,12 +2502,7 @@ export async function searchProductsForInventory(
   const q = query.trim();
   if (q.length < 2) return [];
 
-  const results: ShopifySearchResult[] = [];
-  const seenGroupKeys = new Set<string>();
-  const seenShopifyProductIds = new Set<number>();
-
-  // Eerst lokale voorraad (snel, betrouwbaar voor gesyncte producten).
-  // Prefer parts: boven legacy product:-rijen bij hetzelfde Shopify-product.
+  // Alleen lokale voorraadregels — geen live Shopify, geen auto-aanmaak.
   const { data: localRows } = await supabase
     .from("inventory_products")
     .select("id, title, stock_quantity, group_key, shopify_product_id, shopify_variant_id, image_url")
@@ -2522,6 +2511,11 @@ export async function searchProductsForInventory(
     .order("title", { ascending: true })
     .limit(50);
 
+  const results: ShopifySearchResult[] = [];
+  const seenGroupKeys = new Set<string>();
+  const seenShopifyProductIds = new Set<number>();
+  const seenInventoryIds = new Set<string>();
+
   const sortedLocal = [...(localRows ?? [])].sort((a, b) => {
     const aParts = String(a.group_key ?? "").startsWith("parts:") ? 0 : 1;
     const bParts = String(b.group_key ?? "").startsWith("parts:") ? 0 : 1;
@@ -2529,14 +2523,17 @@ export async function searchProductsForInventory(
   });
 
   for (const row of sortedLocal) {
-    const groupKey = row.group_key as string;
+    const id = row.id as string;
+    if (seenInventoryIds.has(id)) continue;
+    const groupKey = String(row.group_key ?? "");
     const shopifyProductId = Number(row.shopify_product_id);
-    if (seenGroupKeys.has(groupKey)) continue;
+    if (groupKey && seenGroupKeys.has(groupKey)) continue;
     if (Number.isFinite(shopifyProductId) && shopifyProductId > 0) {
       if (seenShopifyProductIds.has(shopifyProductId)) continue;
       seenShopifyProductIds.add(shopifyProductId);
     }
-    seenGroupKeys.add(groupKey);
+    if (groupKey) seenGroupKeys.add(groupKey);
+    seenInventoryIds.add(id);
     results.push({
       shopify_product_id: row.shopify_product_id as number,
       shopify_variant_id: row.shopify_variant_id as number,
@@ -2545,195 +2542,10 @@ export async function searchProductsForInventory(
       image_url: (row.image_url as string | null) ?? null,
       price: null,
       stock_quantity: row.stock_quantity as number,
-      inventory_product_id: row.id as string,
+      inventory_product_id: id,
     });
     if (results.length >= 25) break;
   }
 
-  if (results.length >= 25) {
-    return enrichSearchResultsWithShopifyPrices(results);
-  }
-
-  const shopifyProducts = await searchShopifyProducts(q, 20, { status: "active" });
-  const categoryMap = await fetchInventoryCollectionProductIds();
-
-  for (const product of shopifyProducts) {
-    if (isExcludedFromInventory(product)) continue;
-    if (seenShopifyProductIds.has(product.id)) continue;
-
-    const imageUrl = productImageUrl(product);
-    const isParts = isPartsCollectionProduct(product.id, categoryMap);
-    const partsKey = isParts
-      ? partsGroupKeyFromTitle(
-          partsDuplicateCanonicalTitle(product.title) ?? String(product.title ?? "")
-        )
-      : null;
-
-    for (const variant of product.variants ?? []) {
-      const stockInfo = buildInventoryStockKeyInfo(product, variant);
-      if (seenGroupKeys.has(stockInfo.groupKey)) continue;
-      if (partsKey && seenGroupKeys.has(partsKey)) continue;
-
-      // Bestaande rij: fiets-key, parts-key, of shopify_product_id (nooit een tweede regel).
-      let inventoryProductId: string | null = null;
-      let stockQuantity: number | null = null;
-
-      const groupKeysToTry = [stockInfo.groupKey, ...(partsKey ? [partsKey] : [])];
-      for (const gk of groupKeysToTry) {
-        const { data: localMatches } = await supabase
-          .from("inventory_products")
-          .select("id, stock_quantity, group_key, created_at")
-          .eq("owner_email", ownerEmail)
-          .eq("group_key", gk)
-          .order("created_at", { ascending: true });
-        const localRowsForGroup = (localMatches ?? []) as Pick<
-          InventoryProductRow,
-          "id" | "stock_quantity" | "group_key" | "created_at"
-        >[];
-        if (localRowsForGroup.length > 0) {
-          const primary = pickPrimaryRow(
-            localRowsForGroup as InventoryProductRow[],
-            gk
-          );
-          inventoryProductId = primary.id;
-          stockQuantity = primary.stock_quantity;
-          break;
-        }
-      }
-
-      if (!inventoryProductId) {
-        const { data: byShopify } = await supabase
-          .from("inventory_products")
-          .select("id, stock_quantity, group_key, created_at")
-          .eq("owner_email", ownerEmail)
-          .eq("shopify_product_id", product.id)
-          .order("created_at", { ascending: true });
-        const byShopifyRows = (byShopify ?? []) as InventoryProductRow[];
-        if (byShopifyRows.length > 0) {
-          // Prefer parts: als die er is.
-          const preferred =
-            byShopifyRows.find((r) => String(r.group_key).startsWith("parts:")) ??
-            byShopifyRows[0]!;
-          inventoryProductId = preferred.id;
-          stockQuantity = preferred.stock_quantity;
-        }
-      }
-
-      if (!inventoryProductId && isParts) {
-        // Onderdelen/accessoires: geen auto-aanmaak via zoeken (voorkomt product:/parts: dubbels).
-        // Nieuwe regels gaan via pending/rebuild.
-        seenShopifyProductIds.add(product.id);
-        if (partsKey) seenGroupKeys.add(partsKey);
-        results.push({
-          shopify_product_id: product.id,
-          shopify_variant_id: variant.id,
-          title: String(product.title ?? stockInfo.displayTitle),
-          variant_title: stockInfo.trimLabel,
-          image_url: imageUrl,
-          price: variant.price ?? null,
-          stock_quantity: null,
-          inventory_product_id: null,
-        });
-        break;
-      }
-
-      if (!inventoryProductId) {
-        const category = classifyInventoryCategory(product, categoryMap);
-        const { data: inserted } = await supabase
-          .from("inventory_products")
-          .insert({
-            owner_email: ownerEmail,
-            shopify_product_id: product.id,
-            shopify_variant_id: variant.id,
-            shopify_variant_ids: [variant.id],
-            group_key: stockInfo.groupKey,
-            title: stockInfo.displayTitle,
-            variant_title: stockInfo.trimLabel,
-            model_name: stockInfo.modelName,
-            color_name: stockInfo.colorName,
-            product_type: product.product_type || null,
-            vendor: product.vendor || null,
-            tags: product.tags || null,
-            category,
-            stock_quantity: INITIAL_STOCK,
-            image_url: imageUrl,
-          })
-          .select("id, stock_quantity")
-          .single();
-
-        if (inserted) {
-          inventoryProductId = inserted.id;
-          stockQuantity = inserted.stock_quantity;
-        } else {
-          const { data: existingAfterConflict } = await supabase
-            .from("inventory_products")
-            .select("id, stock_quantity, group_key, created_at")
-            .eq("owner_email", ownerEmail)
-            .eq("group_key", stockInfo.groupKey)
-            .order("created_at", { ascending: true });
-
-          const conflictRows = (existingAfterConflict ?? []) as InventoryProductRow[];
-          if (conflictRows.length > 0) {
-            const primary = pickPrimaryRow(conflictRows, stockInfo.groupKey);
-            inventoryProductId = primary.id;
-            stockQuantity = primary.stock_quantity;
-          }
-        }
-      }
-
-      seenShopifyProductIds.add(product.id);
-      seenGroupKeys.add(stockInfo.groupKey);
-      if (partsKey) seenGroupKeys.add(partsKey);
-
-      results.push({
-        shopify_product_id: product.id,
-        shopify_variant_id: variant.id,
-        title: isParts
-          ? String(product.title ?? stockInfo.displayTitle)
-          : stockInfo.displayTitle,
-        variant_title: stockInfo.trimLabel,
-        image_url: imageUrl,
-        price: variant.price ?? null,
-        stock_quantity: stockQuantity,
-        inventory_product_id: inventoryProductId,
-      });
-      // Eén zoekresultaat per Shopify-product (niet per variant).
-      break;
-    }
-  }
-
-  const enriched = await enrichSearchResultsWithShopifyPrices(results);
-  return enriched.slice(0, 25);
-}
-
-/** Vul ontbrekende prijzen aan via Shopify variant-data (lokale voorraad heeft geen prijskolom). */
-async function enrichSearchResultsWithShopifyPrices(
-  results: ShopifySearchResult[]
-): Promise<ShopifySearchResult[]> {
-  const missing = results.filter((r) => (r.price == null || r.price === "") && r.shopify_variant_id);
-  if (missing.length === 0) return results;
-
-  const productIds = Array.from(new Set(missing.map((r) => r.shopify_product_id)));
-  const priceByVariant = new Map<number, string>();
-
-  await Promise.all(
-    productIds.map(async (productId) => {
-      try {
-        const data = await shopifyAdminJson<{ product?: ShopifyAdminProduct }>(
-          `/products/${productId}.json`
-        );
-        for (const v of data.product?.variants ?? []) {
-          priceByVariant.set(v.id, v.price);
-        }
-      } catch (e) {
-        console.warn("[inventory] variant price fetch", productId, e);
-      }
-    })
-  );
-
-  return results.map((r) =>
-    r.price == null || r.price === ""
-      ? { ...r, price: priceByVariant.get(r.shopify_variant_id) ?? null }
-      : r
-  );
+  return results;
 }

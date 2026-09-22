@@ -348,6 +348,8 @@ export async function listInventoryPendingProducts(
   supabase: SupabaseClient,
   ownerEmail: string
 ): Promise<InventoryPendingProductRow[]> {
+  await pruneLinkedInventoryPendingProducts(supabase, ownerEmail);
+
   const { data, error } = await supabase
     .from("inventory_pending_products")
     .select("*")
@@ -361,12 +363,50 @@ export async function countInventoryPendingProducts(
   supabase: SupabaseClient,
   ownerEmail: string
 ): Promise<number> {
+  await pruneLinkedInventoryPendingProducts(supabase, ownerEmail);
+
   const { count, error } = await supabase
     .from("inventory_pending_products")
     .select("id", { count: "exact", head: true })
     .eq("owner_email", ownerEmail);
   if (error) throw new Error(error.message);
   return count ?? 0;
+}
+
+/**
+ * Verwijder pending-items die al een voorraadregel hebben (bijv. via zoeken/sync
+ * aangemaakt zonder de wachtrij te legen).
+ */
+export async function pruneLinkedInventoryPendingProducts(
+  supabase: SupabaseClient,
+  ownerEmail: string
+): Promise<number> {
+  const { data: pendingRows, error } = await supabase
+    .from("inventory_pending_products")
+    .select("id, shopify_product_id, shopify_variant_ids")
+    .eq("owner_email", ownerEmail);
+  if (error) throw new Error(error.message);
+  if (!pendingRows?.length) return 0;
+
+  let removed = 0;
+  for (const row of pendingRows) {
+    const shopifyProductId = Number(row.shopify_product_id);
+    const variantIds = (row.shopify_variant_ids ?? [])
+      .map((id: number) => Number(id))
+      .filter((id: number) => Number.isFinite(id) && id > 0);
+    if (
+      await isShopifyProductLinkedToInventory(
+        supabase,
+        ownerEmail,
+        shopifyProductId,
+        variantIds
+      )
+    ) {
+      await clearInventoryPendingProduct(supabase, ownerEmail, shopifyProductId);
+      removed++;
+    }
+  }
+  return removed;
 }
 
 type ApplyMode = "new_rule" | "link_existing";

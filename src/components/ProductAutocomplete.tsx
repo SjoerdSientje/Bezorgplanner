@@ -23,7 +23,7 @@ interface Props {
   onChange: (naam: string, prijs?: string, meta?: ProductAutocompleteMeta) => void;
   placeholder?: string;
   required?: boolean;
-  /** inventory = voorraadgroepen; shopify = live Shopify-producten (MP-orders). */
+  /** inventory = alleen voorraadregels; shopify = live Shopify (MP-orders). */
   searchSource?: SearchSource;
 }
 
@@ -107,17 +107,6 @@ export default function ProductAutocomplete({
           ? item.price
           : undefined;
     onChange(item.title, prijs, meta);
-
-    if (prijs == null && searchSource === "inventory") {
-      fetch(`/api/inventory/search?q=${encodeURIComponent(item.title)}`)
-        .then((res) => res.json())
-        .then((data: { results?: SearchResult[] }) => {
-          const match =
-            (data.results ?? []).find((r) => r.title === item.title) ?? (data.results ?? [])[0];
-          if (match?.price) onChange(item.title, match.price, meta);
-        })
-        .catch(() => {});
-    }
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
