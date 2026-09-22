@@ -5,6 +5,7 @@ import {
   cleanTitleForGrouping,
 } from "@/lib/inventory-stock-key";
 import { isExcludedFromInventory } from "@/lib/inventory-rules";
+import { partsGroupKeyFromTitle } from "@/lib/inventory-parts-rules";
 import {
   fetchInventoryCollectionProductIds,
   isShopifyProductActive,
@@ -60,13 +61,7 @@ function variantIdsOf(product: ShopifyAdminProduct): number[] {
 }
 
 function partsGroupKey(title: string): string {
-  const slug = cleanTitleForGrouping(title)
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return `parts:${slug || "unknown"}`;
+  return partsGroupKeyFromTitle(title);
 }
 
 export function resolveCollectionMeta(
@@ -516,6 +511,68 @@ export async function applyPendingInventoryProduct(
     groupKey = partsGroupKey(ruleTitle);
     displayTitle = ruleTitle;
     modelName = ruleTitle;
+  }
+
+  // Hergebruik bestaande regel op shopify_product_id / parts-key (voorkom product:/parts: dubbels).
+  if (category === "onderdeel" || category === "accessoire") {
+    const { data: existingByShopify } = await supabase
+      .from("inventory_products")
+      .select("*")
+      .eq("owner_email", ownerEmail)
+      .eq("shopify_product_id", shopifyProductId)
+      .order("created_at", { ascending: true });
+    const shopifyRows = existingByShopify ?? [];
+    const preferred =
+      shopifyRows.find((r) => String(r.group_key).startsWith("parts:")) ??
+      shopifyRows[0] ??
+      null;
+    let existing = preferred;
+    if (!existing) {
+      const { data: byPartsKey } = await supabase
+        .from("inventory_products")
+        .select("*")
+        .eq("owner_email", ownerEmail)
+        .eq("group_key", groupKey)
+        .maybeSingle();
+      existing = byPartsKey ?? null;
+    }
+    if (existing) {
+      const merged = Array.from(
+        new Set(
+          [
+            Number(existing.shopify_variant_id),
+            ...(existing.shopify_variant_ids ?? []).map(Number),
+            ...variantIds,
+          ].filter((id) => id > 0)
+        )
+      );
+      await supabase
+        .from("inventory_products")
+        .update({
+          group_key: groupKey,
+          shopify_variant_ids: merged,
+          title: displayTitle,
+          category,
+          stock_quantity: Number(existing.stock_quantity ?? 0) + stock,
+        })
+        .eq("id", existing.id);
+      await supabase
+        .from("inventory_shopify_deductions")
+        .delete()
+        .eq("owner_email", ownerEmail)
+        .eq("shopify_product_id", shopifyProductId);
+      await supabase.from("inventory_shopify_deductions").insert({
+        owner_email: ownerEmail,
+        shopify_product_id: shopifyProductId,
+        shopify_variant_id: null,
+        kind: "deduct",
+        inventory_product_id: existing.id,
+        quantity: 1,
+        note: "pending_new_rule_merged",
+      });
+      await clearInventoryPendingProduct(supabase, ownerEmail, shopifyProductId);
+      return { inventoryProductId: existing.id };
+    }
   }
 
   const { data: inserted, error: iErr } = await supabase

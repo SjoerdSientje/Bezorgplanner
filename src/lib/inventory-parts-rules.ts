@@ -148,6 +148,14 @@ export function normalizePartsTitle(title: string): string {
     .trim();
 }
 
+/** Stabiele group_key voor onderdelen/accessoires (één voorraadregel per titel-groep). */
+export function partsGroupKeyFromTitle(title: string): string {
+  const slug = normalizePartsTitle(title)
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `parts:${slug || "unknown"}`;
+}
+
 export function isPartsExcludedTitle(title: string): boolean {
   const n = normalizePartsTitle(title);
   if (!n) return true;

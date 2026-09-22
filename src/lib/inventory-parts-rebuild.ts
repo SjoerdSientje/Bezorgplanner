@@ -17,6 +17,7 @@ import {
   isPartsNonStockShopifyTitle,
   normalizePartsTitle,
   partsDuplicateCanonicalTitle,
+  partsGroupKeyFromTitle,
 } from "@/lib/inventory-parts-rules";
 import type { InventoryCategory, InventoryProductRow } from "@/lib/inventory";
 
@@ -37,10 +38,7 @@ function allVariantIds(product: ShopifyAdminProduct): number[] {
 }
 
 function groupKeyForPartsTitle(title: string): string {
-  const slug = normalizePartsTitle(title)
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return `parts:${slug || "unknown"}`;
+  return partsGroupKeyFromTitle(title);
 }
 
 type StockBucket = {
@@ -557,6 +555,71 @@ export async function rebuildPartsInventoryFromShopifyCollections(
     .delete()
     .eq("owner_email", ownerEmail)
     .ilike("title", "%Range Rover Velar%");
+
+  // Legacy product:-rijen die naast een parts:-regel bestaan (zelfde Shopify-id of titel).
+  const { data: afterRowsRaw } = await supabase
+    .from("inventory_products")
+    .select("id, title, group_key, shopify_product_id, category")
+    .eq("owner_email", ownerEmail);
+  const afterRows = (afterRowsRaw ?? []) as Pick<
+    InventoryProductRow,
+    "id" | "title" | "group_key" | "shopify_product_id" | "category"
+  >[];
+  const partsByShopify = new Set<number>();
+  const partsByTitle = new Set<string>();
+  for (const row of afterRows) {
+    if (!String(row.group_key ?? "").startsWith("parts:")) continue;
+    const pid = Number(row.shopify_product_id);
+    if (Number.isFinite(pid) && pid > 0) partsByShopify.add(pid);
+    partsByTitle.add(normalizePartsTitle(row.title));
+  }
+  const legacyOrphanIds = afterRows
+    .filter((row) => {
+      const gk = String(row.group_key ?? "");
+      if (gk.startsWith("parts:")) return false;
+      if (!gk.startsWith("product:")) return false;
+      const cat = String(row.category ?? "");
+      if (cat !== "onderdeel" && cat !== "accessoire") return false;
+      const pid = Number(row.shopify_product_id);
+      if (Number.isFinite(pid) && pid > 0 && partsByShopify.has(pid)) return true;
+      return partsByTitle.has(normalizePartsTitle(row.title));
+    })
+    .map((row) => row.id);
+
+  // Herschrijf inkomende-levering regels naar de parts:-rij vóór delete
+  // (ON DELETE SET NULL botst met incoming_delivery_items_line_check).
+  if (legacyOrphanIds.length > 0) {
+    const partsIdByTitle = new Map<string, string>();
+    const partsIdByShopify = new Map<number, string>();
+    for (const row of afterRows) {
+      if (!String(row.group_key ?? "").startsWith("parts:")) continue;
+      partsIdByTitle.set(normalizePartsTitle(row.title), row.id);
+      const pid = Number(row.shopify_product_id);
+      if (Number.isFinite(pid) && pid > 0) partsIdByShopify.set(pid, row.id);
+    }
+    const orphanById = new Map(afterRows.map((r) => [r.id, r] as const));
+    for (const orphanId of legacyOrphanIds) {
+      const orphan = orphanById.get(orphanId);
+      if (!orphan) continue;
+      const targetId =
+        partsIdByShopify.get(Number(orphan.shopify_product_id)) ??
+        partsIdByTitle.get(normalizePartsTitle(orphan.title)) ??
+        null;
+      if (!targetId || targetId === orphanId) continue;
+      await supabase
+        .from("incoming_delivery_items")
+        .update({ product_id: targetId })
+        .eq("owner_email", ownerEmail)
+        .eq("product_id", orphanId);
+    }
+    for (let i = 0; i < legacyOrphanIds.length; i += 100) {
+      await supabase
+        .from("inventory_products")
+        .delete()
+        .eq("owner_email", ownerEmail)
+        .in("id", legacyOrphanIds.slice(i, i + 100));
+    }
+  }
 
   return {
     stockRowsUpserted,
