@@ -65,12 +65,13 @@ function depotPartAfter(stopIds: string[], depotIndex: number): number {
   return depots + 1;
 }
 
+/** Compacte kolommen (zoals Alle ritten) — geen 1fr, anders rekken ze over de hele viewport. */
 const GRID_COLS =
-  "grid-cols-[2.5rem_minmax(9rem,1fr)_minmax(7rem,0.8fr)_minmax(12rem,1.4fr)_minmax(9rem,1fr)_minmax(9rem,1fr)_minmax(9rem,1fr)]";
+  "grid-cols-[2.5rem_minmax(6.5rem,8rem)_minmax(6.5rem,8rem)_minmax(8rem,14rem)_minmax(8rem,12rem)_minmax(8rem,14rem)_minmax(8rem,12rem)]";
 
 /** Extra kolommen op touch/mobiel: pijltjes + route-dropdown i.p.v. slepen. */
 const GRID_COLS_TOUCH =
-  "grid-cols-[2.75rem_minmax(5.5rem,6.5rem)_2rem_minmax(9rem,1fr)_minmax(7rem,0.8fr)_minmax(12rem,1.4fr)_minmax(9rem,1fr)_minmax(9rem,1fr)_minmax(9rem,1fr)]";
+  "grid-cols-[2.75rem_minmax(5rem,6.5rem)_2rem_minmax(6.5rem,8rem)_minmax(6.5rem,8rem)_minmax(8rem,14rem)_minmax(8rem,12rem)_minmax(8rem,14rem)_minmax(8rem,12rem)]";
 
 const HEADERS_TOUCH = [
   "Volgorde",
@@ -1134,7 +1135,7 @@ export default function LijstSjoerd({
   const activeOrder = activeId ? orderById.get(activeId) : null;
 
   const dragListInner = (
-    <div className="min-w-max">
+    <div className="w-max max-w-none">
       <div
         className={`grid ${GRID_COLS} border-b border-stone-200 bg-stone-100 text-xs font-medium text-stone-700`}
       >
@@ -1174,7 +1175,7 @@ export default function LijstSjoerd({
   );
 
   const touchListInner = (
-    <div className="min-w-max">
+    <div className="w-max max-w-none">
       <div
         className={`grid ${GRID_COLS_TOUCH} border-b border-stone-200 bg-stone-100 text-xs font-medium text-stone-700`}
       >
