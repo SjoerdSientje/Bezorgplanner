@@ -319,13 +319,16 @@ export async function findOrCreateContactForShopifyOrder(
   });
 }
 
-function unitPriceExclApprox(price: string | number | null | undefined): string {
+function unitPriceExclApprox(
+  price: string | number | null | undefined,
+  vatMultiplier = 1.21
+): string {
   const n =
     typeof price === "string" ? parseFloat(price) : Number(price ?? 0);
   if (!Number.isFinite(n) || n < 0) return "0.00";
-  // Shopify prices in NL shop are typically incl. BTW; Moneybird price is excl.
-  // Gebruik 21% standaardaftrek zodat factuurtotaal ongeveer klopt.
-  const excl = n / 1.21;
+  // Shopify-prijzen zijn typisch incl. BTW; Moneybird-regelprijs is excl.
+  const mul = vatMultiplier > 1 ? vatMultiplier : 1.21;
+  const excl = n / mul;
   return excl.toFixed(2);
 }
 
@@ -362,9 +365,40 @@ function shippingLineNetTotalIncl(line: ShopifyShippingLine): number {
   return Number.isFinite(price) ? Math.max(0, price) : 0;
 }
 
+function moneybirdNinePercentTaxRateId(): string {
+  return (
+    process.env.MONEYBIRD_TAX_RATE_ID_9?.trim() ||
+    process.env.MONEYBIRD_TAX_RATE_ID_LOW?.trim() ||
+    ""
+  );
+}
+
+/** Incl.-factor voor een Moneybird tax_rate_id (9% of standaard 21%). */
+function vatMultiplierForTaxRateId(taxRateId: string): number {
+  const nine = moneybirdNinePercentTaxRateId();
+  if (nine && taxRateId === nine) return 1.09;
+  return 1.21;
+}
+
+/**
+ * Zelfde BTW-keuze als product-sync: gereduceerd (rijklaar e.d.) → 9%, anders 21%.
+ * Factuurregels kunnen per regel een ander tarief hebben.
+ */
+function resolveInvoiceTaxForTitle(title: string): {
+  taxRateId: string;
+  vatMultiplier: number;
+} {
+  const defaultId = process.env.MONEYBIRD_TAX_RATE_ID!.trim();
+  const taxRateId = moneybirdTaxRateIdForProductTitle(title) || defaultId;
+  return {
+    taxRateId,
+    vatMultiplier: vatMultiplierForTaxRateId(taxRateId),
+  };
+}
+
 function invoiceDetailLineTotalIncl(detail: MoneybirdInvoiceDetailPayload): number {
   const excl = (parseFloat(detail.price) || 0) * (parseFloat(detail.amount) || 0);
-  return excl * 1.21;
+  return excl * vatMultiplierForTaxRateId(detail.tax_rate_id);
 }
 
 /** Ordertotaal incl. BTW — total_price, current_total_price of som van regels. */
@@ -402,7 +436,7 @@ async function buildInvoiceDetailsFromShopifyOrder(
   order: ShopifyOrder
 ): Promise<MoneybirdInvoiceDetailPayload[] | null> {
   const shopifyOrderId = String(order.id ?? "").trim();
-  const taxRateId = process.env.MONEYBIRD_TAX_RATE_ID!.trim();
+  const taxRateId21 = process.env.MONEYBIRD_TAX_RATE_ID!.trim();
   const ledgerAccountId = process.env.MONEYBIRD_LEDGER_ACCOUNT_ID!.trim();
   const orderName = String(order.name ?? shopifyOrderId).trim();
 
@@ -435,9 +469,19 @@ async function buildInvoiceDetailsFromShopifyOrder(
     if (unitIncl < 0.01) continue;
     const amount = Math.max(1, Math.floor(Number(li.quantity ?? 1)));
     const productId = await moneybirdProductIdForShopifyProduct(li.product_id);
+    const { taxRateId, vatMultiplier } = resolveInvoiceTaxForTitle(description);
+    if (
+      isMoneybirdReducedVatProductTitle(description) &&
+      !moneybirdNinePercentTaxRateId()
+    ) {
+      console.warn(
+        "[moneybird] factuurregel 9%-product zonder MONEYBIRD_TAX_RATE_ID_9 — valt terug op 21%:",
+        description
+      );
+    }
     details.push({
       description: `${description} (${orderName})`,
-      price: unitPriceExclApprox(unitIncl),
+      price: unitPriceExclApprox(unitIncl, vatMultiplier),
       amount: String(amount),
       tax_rate_id: taxRateId,
       ledger_account_id: ledgerAccountId,
@@ -451,9 +495,9 @@ async function buildInvoiceDetailsFromShopifyOrder(
     const title = String(sl.title ?? "Verzendkosten").trim() || "Verzendkosten";
     details.push({
       description: `${title} (${orderName})`,
-      price: unitPriceExclApprox(shippingIncl),
+      price: unitPriceExclApprox(shippingIncl, 1.21),
       amount: "1",
-      tax_rate_id: taxRateId,
+      tax_rate_id: taxRateId21,
       ledger_account_id: ledgerAccountId,
     });
   }
@@ -464,12 +508,13 @@ async function buildInvoiceDetailsFromShopifyOrder(
   if (targetIncl >= 0.01) {
     const builtIncl = details.reduce((sum, d) => sum + invoiceDetailLineTotalIncl(d), 0);
     const diffIncl = Math.round((builtIncl - targetIncl) * 100) / 100;
+    // Restbedrag op standaard 21% (geen productregel).
     if (diffIncl > 0.01) {
       details.push({
         description: `Korting (${orderName})`,
         price: (-diffIncl / 1.21).toFixed(2),
         amount: "1",
-        tax_rate_id: taxRateId,
+        tax_rate_id: taxRateId21,
         ledger_account_id: ledgerAccountId,
       });
     } else if (diffIncl < -0.01) {
@@ -477,7 +522,7 @@ async function buildInvoiceDetailsFromShopifyOrder(
         description: `Aanpassing (${orderName})`,
         price: (-diffIncl / 1.21).toFixed(2),
         amount: "1",
-        tax_rate_id: taxRateId,
+        tax_rate_id: taxRateId21,
         ledger_account_id: ledgerAccountId,
       });
     }
@@ -1020,10 +1065,7 @@ function moneybirdTaxRateIdForProductTitle(
   if (!isMoneybirdReducedVatProductTitle(title)) {
     return defaultId || null;
   }
-  const ninePct =
-    process.env.MONEYBIRD_TAX_RATE_ID_9?.trim() ||
-    process.env.MONEYBIRD_TAX_RATE_ID_LOW?.trim() ||
-    "";
+  const ninePct = moneybirdNinePercentTaxRateId();
   if (ninePct) return ninePct;
   // Geen 9%-env: behoud bestaande rate bij update i.p.v. terugzetten naar 21%.
   const existing = String(existingTaxRateId ?? "").trim();
