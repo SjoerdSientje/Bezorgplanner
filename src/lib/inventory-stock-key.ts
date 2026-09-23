@@ -85,6 +85,8 @@ export function isInventoryMarketingOverlayTitle(title: string): boolean {
   const t = title.trim();
   if (!t) return false;
   if (/family[- ]?deal/i.test(t)) return true;
+  // "… Family Fatbike" = zelfde fiets als zonder Family (zitje/deal-variant in titel).
+  if (/\bfamily\b/i.test(t)) return true;
   if (/combi[- ]?deal/i.test(t)) return true;
   // "Basic" als deal-laag, niet als modelnaam elders
   if (/\bbasic\b/i.test(t)) return true;
@@ -104,6 +106,7 @@ export function cleanTitleForGrouping(title: string): string {
     .replace(/family[- ]?deal\s*\+\s*combi[- ]?deal/gi, "")
     .replace(/family[- ]?deal/gi, "")
     .replace(/combi[- ]?deal/gi, "")
+    .replace(/\bfamily\b/gi, "")
     .replace(/\bjunior\s*6\+?\s*(&\s*peuter)?/gi, "")
     .replace(/\bpeuter\b/gi, "")
     .replace(/\s*\+\s*ringslot/gi, "")
