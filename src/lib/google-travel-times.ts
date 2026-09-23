@@ -11,6 +11,7 @@ type DistanceMatrixResponse = {
     elements?: {
       status: string;
       duration?: { value: number };
+      distance?: { value: number; text?: string };
     }[];
   }[];
 };
@@ -95,4 +96,29 @@ export async function getPointToPointTravelMinutes(
     throw new Error(`Geen reistijd gevonden voor: ${from} → ${to}`);
   }
   return Math.max(1, Math.ceil(el.duration.value / 60));
+}
+
+/** Enkele etappe A→B in kilometers (rijden), afronden op 1 decimaal. */
+export async function getPointToPointDistanceKm(
+  fromAddress: string,
+  toAddress: string
+): Promise<number> {
+  const from = String(fromAddress ?? "").trim();
+  const to = String(toAddress ?? "").trim();
+  if (!from || !to) {
+    throw new Error("Van- en naar-adres verplicht voor afstand.");
+  }
+  if (from.toLowerCase() === to.toLowerCase()) return 0;
+
+  const data = await fetchDistanceMatrix([from], [to]);
+  if (data.status !== "OK") {
+    throw new Error(
+      `Google Distance Matrix: ${data.status}${data.error_message ? ` — ${data.error_message}` : ""}`
+    );
+  }
+  const el = data.rows?.[0]?.elements?.[0];
+  if (!el || el.status !== "OK" || el.distance?.value == null) {
+    throw new Error(`Geen afstand gevonden voor: ${from} → ${to}`);
+  }
+  return Math.round((el.distance.value / 1000) * 10) / 10;
 }

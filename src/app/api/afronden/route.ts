@@ -41,6 +41,9 @@ export async function POST(request: NextRequest) {
         ? null
         : parseFloat(String(betaalBedragRaw).replace(",", "."));
     const serienummerInput = String(body.serienummer ?? "").trim();
+    const reparatieRegels = Array.isArray(body.reparatie_regels)
+      ? body.reparatie_regels
+      : null;
 
     if (!orderId) {
       return NextResponse.json({ error: "Order-id ontbreekt." }, { status: 400 });
@@ -66,7 +69,7 @@ export async function POST(request: NextRequest) {
     // Haal order op om MP-tag te bepalen
     const { data: order, error: orderErr } = await supabase
       .from("orders")
-      .select("id, source, mp_tags, order_nummer, naam, aankomsttijd_slot, bestelling_totaal_prijs, telefoon_e164, telefoon_nummer, type, betaald, datum, opmerkingen_klant, bezorgtijd_voorkeur, email, producten, model, serienummer, aantal_fietsen, link_aankoopbewijs")
+      .select("*")
       .eq("owner_email", ownerEmail)
       .eq("id", orderId)
       .maybeSingle();
@@ -76,6 +79,102 @@ export async function POST(request: NextRequest) {
     }
     if (!order) {
       return NextResponse.json({ error: "Order niet gevonden." }, { status: 404 });
+    }
+
+    // Reparatie aan huis met onbekende producten: verplicht invullen vóór afronden.
+    if (
+      order.type === "reparatie_deur" &&
+      Boolean(order.producten_nog_niet_bekend)
+    ) {
+      if (!reparatieRegels?.length) {
+        return NextResponse.json(
+          {
+            error:
+              "Vul eerst de gebruikte producten en arbeidsuren in (producten waren nog niet bekend).",
+          },
+          { status: 400 }
+        );
+      }
+      const {
+        buildReparatieShopifyLineItems,
+        buildReparatieLineItemsJson,
+        productenTekstFromLineItems,
+        sumLineItemsIncl,
+      } = await import("@/lib/reparaties");
+      const { upsertReparatieSalesInvoice } = await import("@/lib/moneybird");
+
+      const expanded = reparatieRegels.map((r: Record<string, unknown>) => ({
+        kind: "custom" as const,
+        naam: String(r.naam ?? r.onderdeel_naam ?? "Reparatie"),
+        onderdeel_naam: String(r.onderdeel_naam ?? r.naam ?? ""),
+        onderdeel_prijs_incl: Number(r.onderdeel_prijs_incl) || 0,
+        shopify_product_id: r.shopify_product_id != null ? Number(r.shopify_product_id) : null,
+        shopify_variant_id: r.shopify_variant_id != null ? Number(r.shopify_variant_id) : null,
+        arbeid_uren: Number(r.arbeid_uren) || 0,
+      }));
+      if (order.voorrij_bedrag != null && Number(order.voorrij_bedrag) >= 0.01) {
+        expanded.push({
+          kind: "voorrijkosten" as const,
+          naam: "Voorrijkosten",
+          onderdeel_naam: "",
+          onderdeel_prijs_incl: 0,
+          shopify_product_id: null,
+          shopify_variant_id: null,
+          arbeid_uren: 0,
+          voorrij_bedrag: Number(order.voorrij_bedrag),
+        } as any);
+      }
+
+      const lineItems = buildReparatieShopifyLineItems(expanded as any);
+      const totaal = sumLineItemsIncl(lineItems);
+      const regelsForStore = expanded.filter(
+        (r: { kind: string }) => r.kind !== "voorrijkosten"
+      );
+      await supabase
+        .from("orders")
+        .update({
+          producten: productenTekstFromLineItems(lineItems),
+          line_items_json: buildReparatieLineItemsJson(lineItems),
+          bestelling_totaal_prijs: Math.round(totaal * 100) / 100,
+          producten_nog_niet_bekend: false,
+          reparatie_regels_json: regelsForStore,
+        })
+        .eq("id", orderId)
+        .eq("owner_email", ownerEmail);
+
+      if (order.reparatie_betaalwijze === "factuur") {
+        try {
+          const inv = await upsertReparatieSalesInvoice({
+            orderId,
+            orderNummer: String(order.order_nummer ?? orderId),
+            existingInvoiceId: order.moneybird_invoice_id,
+            contact: {
+              email: String(order.email ?? "onbekend@koopjefatbike.nl"),
+              lastname: String(order.naam ?? "Klant"),
+              phone: String(order.telefoon_e164 ?? order.telefoon_nummer ?? ""),
+              address1: String(order.volledig_adres ?? ""),
+            },
+            lines: lineItems
+              .filter((li) => String(li.name).toLowerCase() !== "producten nog niet bekend")
+              .map((li) => ({
+                description: String(li.name ?? ""),
+                priceIncl:
+                  typeof li.price === "number"
+                    ? li.price
+                    : parseFloat(String(li.price ?? 0)) || 0,
+                quantity: Math.max(1, Math.floor(Number(li.quantity ?? 1))),
+              })),
+          });
+          if (inv?.id) {
+            await supabase
+              .from("orders")
+              .update({ moneybird_invoice_id: inv.id })
+              .eq("id", orderId);
+          }
+        } catch (mbErr) {
+          console.error("[api/afronden] reparatie moneybird:", mbErr);
+        }
+      }
     }
 
     const toMpOrders =

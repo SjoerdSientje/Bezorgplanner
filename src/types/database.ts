@@ -2,7 +2,7 @@
  * Database types – kolommen zoals in de sheets
  */
 
-export type OrderSource = 'shopify' | 'mp';
+export type OrderSource = 'shopify' | 'mp' | 'reparatie';
 export type OrderType =
   | 'verkoop'
   | 'reparatie_ophalen'
@@ -52,6 +52,12 @@ export interface Order {
   betaalmethode: string | null;
   betaald_bedrag: number | null;
   afgerond_at: string | null;
+  reparatie_betaalwijze?: 'contant' | 'factuur' | null;
+  producten_nog_niet_bekend?: boolean;
+  moneybird_invoice_id?: string | null;
+  voorrij_km?: number | null;
+  voorrij_bedrag?: number | null;
+  reparatie_regels_json?: unknown;
 
   created_at: string;
   updated_at: string;

@@ -1165,3 +1165,187 @@ export async function removeMoneybirdProductForShopifyId(
     throw err;
   }
 }
+
+/** Reference voor reparatie-orders (geen Shopify-id). */
+export function reparatieReferenceForOrderId(orderId: string): string {
+  return `reparatie:${String(orderId ?? "").trim()}`;
+}
+
+export function parseReparatieOrderIdFromReference(
+  reference: string | null | undefined
+): string | null {
+  const raw = String(reference ?? "").trim();
+  const m = raw.match(/^reparatie:([0-9a-f-]{36})\b/i);
+  return m?.[1] ?? null;
+}
+
+export type ReparatieInvoiceContactInput = {
+  email: string;
+  firstname?: string;
+  lastname?: string;
+  phone?: string;
+  address1?: string;
+  zipcode?: string;
+  city?: string;
+};
+
+export type ReparatieInvoiceLineInput = {
+  description: string;
+  /** Prijs incl. BTW. */
+  priceIncl: number;
+  quantity?: number;
+  shopifyProductId?: number | null;
+};
+
+/**
+ * Bouw Moneybird-factuurdetails vanuit reparatie-regels (mixed 9%/21%).
+ */
+export function buildInvoiceDetailsFromReparatieLines(
+  lines: ReparatieInvoiceLineInput[],
+  orderLabel: string
+): MoneybirdInvoiceDetailPayload[] {
+  const ledgerAccountId = process.env.MONEYBIRD_LEDGER_ACCOUNT_ID!.trim();
+  const details: MoneybirdInvoiceDetailPayload[] = [];
+  const label = String(orderLabel ?? "").trim() || "reparatie";
+
+  for (const line of lines) {
+    const description = String(line.description ?? "").trim();
+    if (!description) continue;
+    const qty = Math.max(1, Math.floor(Number(line.quantity ?? 1)));
+    const unitIncl = Number(line.priceIncl);
+    if (!Number.isFinite(unitIncl) || unitIncl < 0.01) continue;
+    const { taxRateId, vatMultiplier } = resolveInvoiceTaxForTitle(description);
+    details.push({
+      description: `${description} (${label})`,
+      price: unitPriceExclApprox(unitIncl, vatMultiplier),
+      amount: String(qty),
+      tax_rate_id: taxRateId,
+      ledger_account_id: ledgerAccountId,
+    });
+  }
+  return details;
+}
+
+/**
+ * Maak of update conceptfactuur voor een reparatie-order.
+ * Reference = reparatie:{uuid}. Contant-pad: niet aanroepen / deleteReparatieInvoice.
+ */
+export async function upsertReparatieSalesInvoice(params: {
+  orderId: string;
+  orderNummer: string;
+  contact: ReparatieInvoiceContactInput;
+  lines: ReparatieInvoiceLineInput[];
+  existingInvoiceId?: string | null;
+}): Promise<MoneybirdSalesInvoice | null> {
+  if (!isMoneybirdConfigured()) {
+    console.warn("[moneybird] niet geconfigureerd — reparatie-factuur overgeslagen.");
+    return null;
+  }
+
+  const orderId = String(params.orderId ?? "").trim();
+  if (!orderId) return null;
+
+  const details = buildInvoiceDetailsFromReparatieLines(
+    params.lines,
+    params.orderNummer || orderId
+  );
+  if (details.length === 0) return null;
+
+  const email =
+    String(params.contact.email ?? "").trim().toLowerCase() ||
+    "onbekend@koopjefatbike.nl";
+  let contact = await findContactByEmail(email);
+  if (!contact) {
+    contact = await createContact({
+      email,
+      firstname: params.contact.firstname ?? "",
+      lastname: params.contact.lastname ?? "Klant",
+      phone: params.contact.phone ?? "",
+      address1: params.contact.address1 ?? "",
+      zipcode: params.contact.zipcode ?? "",
+      city: params.contact.city ?? "",
+      country: "NL",
+    });
+  }
+
+  const reference = reparatieReferenceForOrderId(orderId);
+  const existingId = String(params.existingInvoiceId ?? "").trim();
+  let existing: MoneybirdSalesInvoice | null = null;
+  if (existingId) {
+    existing = await fetchSalesInvoiceById(existingId);
+  }
+  if (!existing) {
+    existing = await findSalesInvoiceByReference(reference);
+  }
+
+  if (existing?.id) {
+    if (!isDraftMoneybirdInvoice(existing)) {
+      console.info(
+        "[moneybird] reparatie-factuur niet meer concept — skip update",
+        existing.id,
+        existing.state
+      );
+      return existing;
+    }
+    const updated = await moneybirdFetch<MoneybirdSalesInvoice>(
+      `/sales_invoices/${existing.id}.json`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          sales_invoice: {
+            contact_id: contact.id,
+            reference,
+            details_attributes: details,
+          },
+        }),
+      }
+    );
+    console.info("[moneybird] reparatie conceptfactuur bijgewerkt", updated.id, reference);
+    return updated;
+  }
+
+  const created = await moneybirdFetch<MoneybirdSalesInvoice>("/sales_invoices.json", {
+    method: "POST",
+    body: JSON.stringify({
+      sales_invoice: {
+        contact_id: contact.id,
+        reference,
+        currency: "EUR",
+        prices_are_incl_tax: false,
+        details_attributes: details,
+      },
+    }),
+  });
+  console.info("[moneybird] reparatie conceptfactuur aangemaakt", created.id, reference);
+  return created;
+}
+
+export async function deleteReparatieSalesInvoice(params: {
+  orderId: string;
+  invoiceId?: string | null;
+}): Promise<{ deleted: boolean; invoiceId?: string; skipped?: string }> {
+  if (!isMoneybirdConfigured()) {
+    return { deleted: false, skipped: "moneybird_not_configured" };
+  }
+  const orderId = String(params.orderId ?? "").trim();
+  const reference = reparatieReferenceForOrderId(orderId);
+  let existing: MoneybirdSalesInvoice | null = null;
+  const invId = String(params.invoiceId ?? "").trim();
+  if (invId) existing = await fetchSalesInvoiceById(invId);
+  if (!existing) existing = await findSalesInvoiceByReference(reference);
+  if (!existing?.id) return { deleted: false };
+
+  if (!isDraftMoneybirdInvoice(existing)) {
+    return {
+      deleted: false,
+      invoiceId: existing.id,
+      skipped: `state_${existing.state ?? "unknown"}`,
+    };
+  }
+
+  await moneybirdFetch<unknown>(`/sales_invoices/${existing.id}.json`, {
+    method: "DELETE",
+  });
+  console.info("[moneybird] reparatie conceptfactuur verwijderd", existing.id, reference);
+  return { deleted: true, invoiceId: existing.id };
+}
