@@ -269,8 +269,9 @@ export function isDatumOpmerkingVandaagOfMorgen(
 
 /**
  * Koopjefatbike: voor 20:00 besteld ≈ morgen in huis.
- * Orders die tussen 20:00 en 22:00 (Amsterdam) binnenkomen → meenemen_in_planning = nee.
- * Buiten dat venster → ja (handmatig nog steeds te wijzigen).
+ * Orders die tussen 20:00 en 22:00 (Amsterdam) binnenkomen → meenemen_in_planning = nee
+ * bij eerste verschijning in de planner. Buiten dat venster → ja.
+ * Handmatige wijzigingen blijven staan (Shopify-webhooks overschrijven meenemen niet opnieuw).
  * Venster: [20:00, 22:00).
  */
 export const MEENEMEN_NEE_WINDOW_START_HOUR_AMSTERDAM = 20;

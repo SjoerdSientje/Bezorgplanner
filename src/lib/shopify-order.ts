@@ -883,7 +883,7 @@ export function mapShopifyOrderToRitjesRow(
     adres_url: buildAdresUrl(volledigAdres) || null,
     bel_link: buildBelLink(telefoon, firstName) || null,
     bezorgtijd_voorkeur: noteParsed.bezorgtijdVoorkeur || null,
-    // Voor 20:00 ≈ morgen in huis; tussen 20:00–22:00 Amsterdam → meenemen = nee.
+    // Eerste insert: 20:00–22:00 Amsterdam → meenemen = nee. Updates behouden handmatige waarde.
     meenemen_in_planning: defaultMeenemenInPlanning(shopifyOrderCreatedAt(order)),
     nieuw_appje_sturen: true,
     datum_opmerking: noteParsed.datumOpmerking || null,
@@ -984,9 +984,10 @@ export function ritjesShopifyRelevantFieldsEqual(
   if (!core) return false;
   if (!opts.includePlannerScheduleFields) return true;
 
+  // meenemen_in_planning telt niet mee: die is na insert planner-eigendom (handmatig),
+  // Shopify-created_at-default mag een latere webhook niet opnieuw forceren.
   return (
     strFieldEq(existing.status, next.status) &&
-    boolFieldEq(existing.meenemen_in_planning, next.meenemen_in_planning) &&
     strFieldEq(existing.datum_opmerking, next.datum_opmerking) &&
     strFieldEq(existing.datum, next.datum)
   );

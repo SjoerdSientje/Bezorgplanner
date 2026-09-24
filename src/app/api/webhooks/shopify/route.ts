@@ -462,6 +462,13 @@ export async function POST(request: NextRequest) {
         .eq("source", "shopify")
         .maybeSingle();
 
+      // Meenemen: alleen bij eerste insert uit Shopify (20:00–22:00 → nee).
+      // Bestaande rijen: handmatige keuze behouden — Shopify-updates mogen die niet terugzetten.
+      const meenemenInPlanning =
+        existing != null
+          ? (existing.meenemen_in_planning ?? row.meenemen_in_planning)
+          : row.meenemen_in_planning;
+
       const insertRow: RitjesInsertRow = {
         owner_email: ownerEmail,
         source: row.source,
@@ -472,7 +479,7 @@ export async function POST(request: NextRequest) {
         adres_url: row.adres_url,
         bel_link: row.bel_link,
         bezorgtijd_voorkeur: row.bezorgtijd_voorkeur,
-        meenemen_in_planning: row.meenemen_in_planning,
+        meenemen_in_planning: meenemenInPlanning,
         nieuw_appje_sturen: row.nieuw_appje_sturen,
         datum_opmerking: row.datum_opmerking,
         opmerkingen_klant: row.opmerkingen_klant,
