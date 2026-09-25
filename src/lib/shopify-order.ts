@@ -149,9 +149,22 @@ function getSpecialServiceProduct(order: ShopifyOrder): string {
   return parseSpecialServiceFromLineItems(order);
 }
 
+/** Onderhoudspakket brons/zilver/goud — geen fysiek product voor de pakketjes-paklijst. */
+export function isOnderhoudspakketLineName(name: string): boolean {
+  const n = String(name ?? "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!n.includes("onderhoudspakket")) return false;
+  return /(goud|zilver|brons|bronze)/.test(n);
+}
+
 /**
  * Pakketjes-wachtrij: totaal &lt; €450, niet geannuleerd, nog niet volledig verzonden.
  * Service-orders (terugbrengen, ophalen, proefrit, reparatie) zijn geen pakketjes.
+ * Alleen-onderhoudspakket-orders (brons/zilver/goud) horen hier niet.
  */
 export function qualifiesForPakketjes(order: ShopifyOrder): boolean {
   if (isShowroomShippingOrder(order)) return false;
@@ -173,6 +186,15 @@ export function qualifiesForPakketjes(order: ShopifyOrder): boolean {
   if (order.cancelled_at) return false;
   const fs = String(order.fulfillment_status ?? "").toLowerCase();
   if (fs === "fulfilled") return false;
+
+  const lineItems = order.line_items ?? [];
+  const physicalLines = lineItems.filter(
+    (li) => !isOnderhoudspakketLineName(String(li.name ?? ""))
+  );
+  // Alleen onderhoudspakket(ten) → geen pakketjes-wachtrij.
+  if (lineItems.length > 0 && physicalLines.length === 0 && !qualifiesBySpecialService) {
+    return false;
+  }
   return true;
 }
 
@@ -193,6 +215,7 @@ export function extractPakketjesLineItems(order: ShopifyOrder): { name: string; 
   for (const li of order.line_items ?? []) {
     const name = String(li.name ?? "").trim();
     if (!name) continue;
+    if (isOnderhoudspakketLineName(name)) continue;
     const qty = Math.max(1, Number(li.quantity ?? 1) || 1);
     out.push({ name, quantity: qty });
   }
