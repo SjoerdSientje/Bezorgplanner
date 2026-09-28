@@ -148,7 +148,12 @@ export default function RitjesVandaagPage() {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(fields),
-      }).catch(() => fetchRitjes());
+      })
+        .then((res) => {
+          // Mislukte opslag (kleur/datum/meenemen) → terug naar serverstate.
+          if (!res.ok) void fetchRitjes();
+        })
+        .catch(() => fetchRitjes());
     },
     [fetchRitjes]
   );

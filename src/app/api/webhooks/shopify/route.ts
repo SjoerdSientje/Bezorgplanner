@@ -10,6 +10,8 @@ import {
   shopifyOrderCreatedAt,
   ritjesShopifyRelevantFieldsEqual,
   pakketjesShopifyRelevantFieldsEqual,
+  shopifyNoteSnapshot,
+  buildShopifyRitjesUpdatePayload,
   type ShopifyOrder,
 } from "@/lib/shopify-order";
 import {
@@ -238,6 +240,7 @@ async function removeShopifyOrderEverywhere(
 
 type RitjesInsertRow = ReturnType<typeof mapShopifyOrderToRitjesRow> & {
   owner_email: string;
+  shopify_note_snapshot?: string | null;
 };
 
 async function insertRitjesRow(
@@ -455,19 +458,14 @@ export async function POST(request: NextRequest) {
       const { data: existing } = await supabase
         .from("orders")
         .select(
-          "id, status, afgerond_at, mp_tags, order_nummer, type, naam, adres_url, bel_link, bezorgtijd_voorkeur, meenemen_in_planning, datum_opmerking, opmerkingen_klant, producten, bestelling_totaal_prijs, betaald, volledig_adres, telefoon_nummer, datum, aantal_fietsen, email, telefoon_e164, line_items_json"
+          "id, status, afgerond_at, mp_tags, order_nummer, type, naam, adres_url, bel_link, bezorgtijd_voorkeur, meenemen_in_planning, nieuw_appje_sturen, datum_opmerking, opmerkingen_klant, producten, bestelling_totaal_prijs, betaald, volledig_adres, telefoon_nummer, datum, aantal_fietsen, email, telefoon_e164, line_items_json, shopify_note_snapshot"
         )
         .eq("owner_email", ownerEmail)
         .eq("order_id", row.order_id)
         .eq("source", "shopify")
         .maybeSingle();
 
-      // Meenemen: alleen bij eerste insert uit Shopify (20:00–22:00 → nee).
-      // Bestaande rijen: handmatige keuze behouden — Shopify-updates mogen die niet terugzetten.
-      const meenemenInPlanning =
-        existing != null
-          ? (existing.meenemen_in_planning ?? row.meenemen_in_planning)
-          : row.meenemen_in_planning;
+      const noteSnap = shopifyNoteSnapshot(order);
 
       const insertRow: RitjesInsertRow = {
         owner_email: ownerEmail,
@@ -479,7 +477,7 @@ export async function POST(request: NextRequest) {
         adres_url: row.adres_url,
         bel_link: row.bel_link,
         bezorgtijd_voorkeur: row.bezorgtijd_voorkeur,
-        meenemen_in_planning: meenemenInPlanning,
+        meenemen_in_planning: row.meenemen_in_planning,
         nieuw_appje_sturen: row.nieuw_appje_sturen,
         datum_opmerking: row.datum_opmerking,
         opmerkingen_klant: row.opmerkingen_klant,
@@ -497,6 +495,7 @@ export async function POST(request: NextRequest) {
         serienummer: row.serienummer,
         mp_tags: row.mp_tags,
         line_items_json: row.line_items_json,
+        shopify_note_snapshot: noteSnap,
       };
 
       // UPDATE-pad: alleen als de order al in de bezorgplanner staat.
@@ -530,29 +529,24 @@ export async function POST(request: NextRequest) {
           .maybeSingle();
 
         const includePlannerScheduleFields = !activeSlot?.id;
+        const noteSnapshotChanged =
+          String(existing.shopify_note_snapshot ?? "\u0001") !== noteSnap;
         if (
           ritjesShopifyRelevantFieldsEqual(existing, row, {
             includePlannerScheduleFields,
-          })
+          }) &&
+          !noteSnapshotChanged
         ) {
           continue;
         }
 
-        if (activeSlot?.id) {
-          const {
-            status: _s,
-            meenemen_in_planning: _m,
-            datum_opmerking: _d,
-            nieuw_appje_sturen: _n,
-            datum: _datum,
-            model: _model,
-            serienummer: _serienummer,
-            ...safeUpdate
-          } = insertRow;
-          await supabase.from("orders").update(safeUpdate).eq("id", existing.id);
-        } else {
-          await supabase.from("orders").update(insertRow).eq("id", existing.id);
-        }
+        const updatePayload = buildShopifyRitjesUpdatePayload({
+          row,
+          existing,
+          order,
+          hasActivePlanningSlot: Boolean(activeSlot?.id),
+        });
+        await supabase.from("orders").update(updatePayload).eq("id", existing.id);
         insertedOrUpdatedIds.push(existing.id);
         continue;
       }
@@ -564,7 +558,21 @@ export async function POST(request: NextRequest) {
 
       if (existing) {
         if (isOrderMarkedCompleted(existing)) continue;
-        await supabase.from("orders").update(insertRow).eq("id", existing.id);
+        const { data: activeSlot } = await supabase
+          .from("planning_slots")
+          .select("id")
+          .eq("owner_email", ownerEmail)
+          .eq("order_id", existing.id)
+          .neq("status", "afgerond")
+          .limit(1)
+          .maybeSingle();
+        const updatePayload = buildShopifyRitjesUpdatePayload({
+          row,
+          existing,
+          order,
+          hasActivePlanningSlot: Boolean(activeSlot?.id),
+        });
+        await supabase.from("orders").update(updatePayload).eq("id", existing.id);
         insertedOrUpdatedIds.push(existing.id);
         continue;
       }

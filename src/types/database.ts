@@ -58,6 +58,7 @@ export interface Order {
   voorrij_km?: number | null;
   voorrij_bedrag?: number | null;
   reparatie_regels_json?: unknown;
+  shopify_note_snapshot?: string | null;
 
   created_at: string;
   updated_at: string;

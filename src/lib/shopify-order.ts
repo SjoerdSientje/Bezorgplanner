@@ -854,6 +854,78 @@ export interface RitjesOrderRow {
   line_items_json: string | null;
 }
 
+/** Ruwe Shopify-note voor snapshot-vergelijking (note-afgeleide velden). */
+export function shopifyNoteSnapshot(order: ShopifyOrder): string {
+  return String(order.note ?? "");
+}
+
+export type RitjesShopifyExisting = {
+  meenemen_in_planning?: boolean | null;
+  nieuw_appje_sturen?: boolean | null;
+  datum_opmerking?: string | null;
+  bezorgtijd_voorkeur?: string | null;
+  opmerkingen_klant?: string | null;
+  shopify_note_snapshot?: string | null;
+  status?: string | null;
+};
+
+/**
+ * UPDATE-payload vanuit Shopify: echte orderwijzigingen syncen,
+ * maar geen spontane resets van planner-velden.
+ *
+ * - meenemen / nieuw_appje: behouden (niet herberekend forceren)
+ * - model / serienummer: nooit wissen (mapping is altijd null)
+ * - bezorgtijd / datum_opmerking / opmerkingen: alleen als note écht wijzigde
+ * - overige Shopify-data (producten, prijs, adres, tags, …): altijd sync
+ */
+export function buildShopifyRitjesUpdatePayload(params: {
+  row: RitjesOrderRow;
+  existing: RitjesShopifyExisting;
+  order: ShopifyOrder;
+  hasActivePlanningSlot: boolean;
+}): Record<string, unknown> {
+  const { row, existing, order, hasActivePlanningSlot } = params;
+  const noteNow = shopifyNoteSnapshot(order);
+  const notePrev = existing.shopify_note_snapshot;
+  const noteKnown = notePrev != null;
+  const noteChanged = noteKnown && String(notePrev) !== noteNow;
+
+  const update: Record<string, unknown> = {
+    type: row.type,
+    order_nummer: row.order_nummer,
+    naam: row.naam,
+    adres_url: row.adres_url,
+    bel_link: row.bel_link,
+    producten: row.producten,
+    bestelling_totaal_prijs: row.bestelling_totaal_prijs,
+    betaald: row.betaald,
+    volledig_adres: row.volledig_adres,
+    telefoon_nummer: row.telefoon_nummer,
+    order_id: row.order_id,
+    aantal_fietsen: row.aantal_fietsen,
+    email: row.email,
+    telefoon_e164: row.telefoon_e164,
+    mp_tags: row.mp_tags,
+    line_items_json: row.line_items_json,
+    shopify_note_snapshot: noteNow,
+  };
+
+  // Note-afgeleide velden: alleen syncen bij echte note-wijziging.
+  // Eerste keer snapshot vullen (legacy rijen) → bestaande planner-waarden behouden.
+  if (noteChanged) {
+    update.bezorgtijd_voorkeur = row.bezorgtijd_voorkeur;
+    update.datum_opmerking = row.datum_opmerking;
+    update.opmerkingen_klant = row.opmerkingen_klant;
+  }
+
+  if (!hasActivePlanningSlot) {
+    update.status = row.status;
+    update.datum = row.datum;
+  }
+
+  return update;
+}
+
 /** Bepaal type uit tags, met fallback op productnaam (bijv. "Ophalen: ...") */
 function getOrderType(order: ShopifyOrder): RitjesOrderRow["type"] {
   const tags = (order.tags ?? "").toLowerCase();
@@ -909,6 +981,7 @@ export function mapShopifyOrderToRitjesRow(
     // Eerste insert: 20:00–22:00 Amsterdam → meenemen = nee. Updates behouden handmatige waarde.
     meenemen_in_planning: defaultMeenemenInPlanning(shopifyOrderCreatedAt(order)),
     nieuw_appje_sturen: true,
+    // Eerste insert: uit Shopify-note (default "vandaag"). Updates behouden handmatige voorkeursdatum.
     datum_opmerking: noteParsed.datumOpmerking || null,
     opmerkingen_klant: noteParsed.opmerkingenKlant || null,
     producten: getProducten(order) || null,
@@ -991,8 +1064,7 @@ export function ritjesShopifyRelevantFieldsEqual(
     strFieldEq(existing.naam, next.naam) &&
     strFieldEq(existing.adres_url, next.adres_url) &&
     strFieldEq(existing.bel_link, next.bel_link) &&
-    strFieldEq(existing.bezorgtijd_voorkeur, next.bezorgtijd_voorkeur) &&
-    strFieldEq(existing.opmerkingen_klant, next.opmerkingen_klant) &&
+    // bezorgtijd / opmerkingen: note-snapshot-gestuurd in de webhook, niet hier.
     strFieldEq(existing.producten, next.producten) &&
     numFieldEq(existing.bestelling_totaal_prijs, next.bestelling_totaal_prijs) &&
     boolFieldEq(existing.betaald, next.betaald) &&
@@ -1007,11 +1079,9 @@ export function ritjesShopifyRelevantFieldsEqual(
   if (!core) return false;
   if (!opts.includePlannerScheduleFields) return true;
 
-  // meenemen_in_planning telt niet mee: die is na insert planner-eigendom (handmatig),
-  // Shopify-created_at-default mag een latere webhook niet opnieuw forceren.
+  // meenemen/datum_opmerking: planner-eigendom of note-snapshot-gestuurd — niet hier.
   return (
     strFieldEq(existing.status, next.status) &&
-    strFieldEq(existing.datum_opmerking, next.datum_opmerking) &&
     strFieldEq(existing.datum, next.datum)
   );
 }
