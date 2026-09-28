@@ -1,5 +1,6 @@
 import {
   fetchAllShopifyProducts,
+  fetchFatbikeCollectionProductIds,
   searchShopifyProducts,
   type ShopifyAdminProduct,
   type ShopifyAdminProductVariant,
@@ -12,6 +13,9 @@ export type ShopifyProductSearchResult = {
   price: string | null;
   image_url: string | null;
 };
+
+/** fiets = alleen collectie alle-fatbikes; extra = alle actieve producten buiten die collectie. */
+export type ShopifyProductSearchKind = "fiets" | "extra";
 
 /** Zelfde naam als Shopify line items (producttitel + variant indien niet Default Title). */
 export function buildShopifyLineItemTitle(
@@ -103,10 +107,15 @@ async function collectProductsForTokens(
  * Live Shopify-producten voor orderformulieren (MP e.d.).
  * Geen voorraadgroepering — elke actieve variant is een aparte suggestie.
  * Zoekt op losse woorden: "V8 basic" matcht "OUXI V8 … Mat-zwart Basic".
+ *
+ * `kind`:
+ * - fiets → alleen actieve producten in collectie "alle-fatbikes"
+ * - extra → alle andere actieve producten (niet in die collectie)
  */
 export async function searchShopifyProductsForOrderForm(
   query: string,
-  limit = 25
+  limit = 25,
+  kind?: ShopifyProductSearchKind
 ): Promise<ShopifyProductSearchResult[]> {
   const q = query.trim();
   if (q.length < 2) return [];
@@ -114,10 +123,19 @@ export async function searchShopifyProductsForOrderForm(
   const tokens = tokenizeSearchQuery(q);
   if (tokens.length === 0) return [];
 
-  const products = await collectProductsForTokens(q, tokens);
+  const [products, fatbikeIds] = await Promise.all([
+    collectProductsForTokens(q, tokens),
+    kind ? fetchFatbikeCollectionProductIds() : Promise.resolve(null),
+  ]);
   const results: ShopifyProductSearchResult[] = [];
 
   for (const product of Array.from(products.values())) {
+    if (fatbikeIds) {
+      const inFatbikes = fatbikeIds.has(product.id);
+      if (kind === "fiets" && !inFatbikes) continue;
+      if (kind === "extra" && inFatbikes) continue;
+    }
+
     const imageUrl = productImageUrl(product);
     for (const variant of product.variants ?? []) {
       const title = buildShopifyLineItemTitle(product, variant);

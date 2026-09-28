@@ -17,6 +17,8 @@ export type ProductAutocompleteMeta = {
 };
 
 type SearchSource = "inventory" | "shopify";
+/** Alleen relevant bij searchSource=shopify (MP fiets vs extra). */
+export type ShopifyProductKind = "fiets" | "extra";
 
 interface Props {
   label: string;
@@ -26,6 +28,11 @@ interface Props {
   required?: boolean;
   /** inventory = alleen voorraadregels; shopify = live Shopify (MP-orders). */
   searchSource?: SearchSource;
+  /**
+   * Shopify-filter: fiets = collectie alle-fatbikes;
+   * extra = overige actieve producten.
+   */
+  productKind?: ShopifyProductKind;
 }
 
 const DEBOUNCE_MS = 280;
@@ -70,6 +77,7 @@ export default function ProductAutocomplete({
   placeholder,
   required,
   searchSource = "inventory",
+  productKind,
 }: Props) {
   const [suggestions, setSuggestions] = useState<SearchResult[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -77,6 +85,8 @@ export default function ProductAutocomplete({
   const [loading, setLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const productKindRef = useRef(productKind);
+  productKindRef.current = productKind;
 
   const searchPath =
     searchSource === "shopify" ? "/api/shopify/product-search" : "/api/inventory/search";
@@ -91,6 +101,19 @@ export default function ProductAutocomplete({
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
+  // Bij wisselen fiets/extra: suggesties legen en opnieuw zoeken met huidige waarde.
+  useEffect(() => {
+    if (searchSource !== "shopify") return;
+    setSuggestions([]);
+    setShowSuggestions(false);
+    setActiveIndex(-1);
+    if (value.trim().length >= MIN_QUERY_LEN) {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => fetchSuggestions(value), DEBOUNCE_MS);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- alleen productKind-wissel
+  }, [productKind, searchSource]);
+
   function fetchSuggestions(query: string) {
     if (query.length < MIN_QUERY_LEN) {
       setSuggestions([]);
@@ -99,7 +122,12 @@ export default function ProductAutocomplete({
     }
 
     setLoading(true);
-    fetch(`${searchPath}?q=${encodeURIComponent(query)}`)
+    const kind = productKindRef.current;
+    const kindParam =
+      searchSource === "shopify" && kind
+        ? `&kind=${encodeURIComponent(kind)}`
+        : "";
+    fetch(`${searchPath}?q=${encodeURIComponent(query)}${kindParam}`)
       .then((res) => res.json())
       .then((data: { results?: SearchResult[] }) => {
         const results = data?.results ?? [];

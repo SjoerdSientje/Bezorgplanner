@@ -506,6 +506,40 @@ export async function fetchProductsInCollection(
   return products;
 }
 
+export async function fetchSmartCollections(): Promise<ShopifyCustomCollection[]> {
+  const data = await shopifyAdminJson<{ smart_collections?: ShopifyCustomCollection[] }>(
+    "/smart_collections.json?limit=250"
+  );
+  return data.smart_collections ?? [];
+}
+
+/** Zoek collectie-id op handle in custom + smart collections. */
+export async function findCollectionIdByHandle(handle: string): Promise<number | null> {
+  const custom = await fetchCustomCollections();
+  const hit = custom.find((c) => c.handle === handle);
+  if (hit) return hit.id;
+  const smart = await fetchSmartCollections();
+  const smartHit = smart.find((c) => c.handle === handle);
+  return smartHit?.id ?? null;
+}
+
+let fatbikeIdsCache: { ids: Set<number>; expiresAt: number } | null = null;
+const FATBIKE_IDS_CACHE_MS = 5 * 60 * 1000;
+
+/** Product-IDs in de collectie "alle-fatbikes" (gecached ~5 min). */
+export async function fetchFatbikeCollectionProductIds(): Promise<Set<number>> {
+  const now = Date.now();
+  if (fatbikeIdsCache && fatbikeIdsCache.expiresAt > now) {
+    return fatbikeIdsCache.ids;
+  }
+  const collectionId = await findCollectionIdByHandle(INVENTORY_FIETS_COLLECTION_HANDLE);
+  const ids = collectionId
+    ? new Set(await fetchProductIdsInCollection(collectionId))
+    : new Set<number>();
+  fatbikeIdsCache = { ids, expiresAt: now + FATBIKE_IDS_CACHE_MS };
+  return ids;
+}
+
 export async function fetchInventoryCollectionProductIds(): Promise<{
   fietsProductIds: Set<number>;
   onderdeelProductIds: Set<number>;

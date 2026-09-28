@@ -625,6 +625,7 @@ export default function MarktplaatsGeplandClient() {
                         <div className="flex-1">
                           <ProductAutocomplete
                             searchSource="shopify"
+                            productKind={product.type}
                             label={product.type === "fiets" ? "Fietsnaam" : "Productnaam"}
                             required
                             value={product.naam}
