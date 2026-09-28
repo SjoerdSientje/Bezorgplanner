@@ -44,6 +44,7 @@ export async function POST(request: NextRequest) {
     const reparatieRegels = Array.isArray(body.reparatie_regels)
       ? body.reparatie_regels
       : null;
+    const convertToOphalen = Boolean(body.convert_to_ophalen);
 
     if (!orderId) {
       return NextResponse.json({ error: "Order-id ontbreekt." }, { status: 400 });
@@ -81,20 +82,84 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Order niet gevonden." }, { status: 404 });
     }
 
-    // Reparatie aan huis met onbekende producten: verplicht invullen vóór afronden.
-    if (
-      order.type === "reparatie_deur" &&
-      Boolean(order.producten_nog_niet_bekend)
-    ) {
-      if (!reparatieRegels?.length) {
+    // Reparatie aan huis: producten/arbeid controleren of omzetten naar ophalen.
+    let reparatieInvoiceId =
+      (order.moneybird_invoice_id as string | null | undefined) ?? null;
+    let reparatieLineItemsForDeduct: Array<{
+      name?: string | null;
+      price?: string | number | null;
+      quantity?: number | null;
+      product_id?: string | number | null;
+      variant_id?: string | number | null;
+    }> = [];
+    let convertedToOphalen = false;
+
+    if (order.type === "reparatie_deur" && convertToOphalen) {
+      const {
+        buildReparatieLineItemsJson,
+      } = await import("@/lib/reparaties");
+      const { deleteReparatieSalesInvoice } = await import("@/lib/moneybird");
+
+      // Conceptfactuur verwijderen als de order niet op contant stond.
+      if (String(order.reparatie_betaalwijze ?? "") !== "contant") {
+        try {
+          await deleteReparatieSalesInvoice({
+            orderId,
+            invoiceId: reparatieInvoiceId,
+          });
+        } catch (delErr) {
+          console.error("[api/afronden] reparatie moneybird delete (→ophalen):", delErr);
+        }
+      }
+
+      const ophalenLineItems = [
+        {
+          name: "Ophalen",
+          price: 0,
+          quantity: 1,
+          properties: [] as { name: string; value: string }[],
+        },
+      ];
+      await supabase
+        .from("orders")
+        .update({
+          type: "reparatie_ophalen",
+          reparatie_betaalwijze: "contant",
+          producten_nog_niet_bekend: false,
+          reparatie_regels_json: [],
+          producten: "Ophalen",
+          line_items_json: buildReparatieLineItemsJson(ophalenLineItems as any),
+          bestelling_totaal_prijs: 0,
+          moneybird_invoice_id: null,
+          voorrij_km: null,
+          voorrij_bedrag: null,
+        })
+        .eq("id", orderId)
+        .eq("owner_email", ownerEmail);
+
+      convertedToOphalen = true;
+      (order as { type?: string }).type = "reparatie_ophalen";
+    } else if (order.type === "reparatie_deur") {
+      // Altijd producten/arbeid toepassen (nieuw invullen of bestaande bijwerken).
+      const hasContent =
+        Array.isArray(reparatieRegels) &&
+        reparatieRegels.some((r: Record<string, unknown>) => {
+          const naam = String(r.onderdeel_naam ?? r.naam ?? "").trim();
+          const uren = Number(r.arbeid_uren) || 0;
+          return Boolean(naam) || uren > 0;
+        });
+      if (!hasContent) {
         return NextResponse.json(
           {
             error:
-              "Vul eerst de gebruikte producten en arbeidsuren in (producten waren nog niet bekend).",
+              Boolean(order.producten_nog_niet_bekend)
+                ? "Vul eerst de gebruikte producten en arbeidsuren in (producten waren nog niet bekend)."
+                : "Controleer of vul producten en arbeidsuren in vóór afronden.",
           },
           { status: 400 }
         );
       }
+
       const {
         buildReparatieShopifyLineItems,
         buildReparatieLineItemsJson,
@@ -103,7 +168,7 @@ export async function POST(request: NextRequest) {
       } = await import("@/lib/reparaties");
       const { upsertReparatieSalesInvoice } = await import("@/lib/moneybird");
 
-      const expanded = reparatieRegels.map((r: Record<string, unknown>) => ({
+      const expanded = (reparatieRegels ?? []).map((r: Record<string, unknown>) => ({
         kind: "custom" as const,
         naam: String(r.naam ?? r.onderdeel_naam ?? "Reparatie"),
         onderdeel_naam: String(r.onderdeel_naam ?? r.naam ?? ""),
@@ -126,6 +191,7 @@ export async function POST(request: NextRequest) {
       }
 
       const lineItems = buildReparatieShopifyLineItems(expanded as any);
+      reparatieLineItemsForDeduct = lineItems;
       const totaal = sumLineItemsIncl(lineItems);
       const regelsForStore = expanded.filter(
         (r: { kind: string }) => r.kind !== "voorrijkosten"
@@ -147,7 +213,7 @@ export async function POST(request: NextRequest) {
           const inv = await upsertReparatieSalesInvoice({
             orderId,
             orderNummer: String(order.order_nummer ?? orderId),
-            existingInvoiceId: order.moneybird_invoice_id,
+            existingInvoiceId: reparatieInvoiceId,
             contact: {
               email: String(order.email ?? "onbekend@koopjefatbike.nl"),
               lastname: String(order.naam ?? "Klant"),
@@ -166,6 +232,7 @@ export async function POST(request: NextRequest) {
               })),
           });
           if (inv?.id) {
+            reparatieInvoiceId = inv.id;
             await supabase
               .from("orders")
               .update({ moneybird_invoice_id: inv.id })
@@ -174,6 +241,38 @@ export async function POST(request: NextRequest) {
         } catch (mbErr) {
           console.error("[api/afronden] reparatie moneybird:", mbErr);
         }
+      }
+    }
+
+    // Reparatie aan huis: bij afronden factuur versturen + voorraad afschrijven
+    // (niet bij omzetting naar ophalen).
+    if (order.type === "reparatie_deur" && !convertedToOphalen) {
+      if (order.reparatie_betaalwijze === "factuur" && reparatieInvoiceId) {
+        try {
+          const { sendReparatieSalesInvoice } = await import("@/lib/moneybird");
+          await sendReparatieSalesInvoice({
+            orderId,
+            invoiceId: reparatieInvoiceId,
+            email: String(order.email ?? "").trim() || null,
+          });
+        } catch (sendErr) {
+          console.error("[api/afronden] reparatie moneybird send:", sendErr);
+        }
+      }
+      try {
+        const {
+          deductInventoryForReparatieOrder,
+          reparatieLineItemsForInventoryDeduction,
+        } = await import("@/lib/inventory");
+        await deductInventoryForReparatieOrder(
+          supabase,
+          ownerEmail,
+          orderId,
+          String(order.order_nummer ?? orderId),
+          reparatieLineItemsForInventoryDeduction(reparatieLineItemsForDeduct)
+        );
+      } catch (invErr) {
+        console.error("[api/afronden] reparatie inventory deduct:", invErr);
       }
     }
 

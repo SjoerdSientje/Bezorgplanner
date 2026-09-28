@@ -11,7 +11,11 @@ import {
   type ProductDefaultItemsRulesV2,
 } from "@/lib/product-default-items-rules";
 import ProductAutocomplete from "@/components/ProductAutocomplete";
-import { ARBEID_UUR_PRIJS_INCL, arbeidPrijsIncl } from "@/lib/reparaties";
+import {
+  ARBEID_UUR_PRIJS_INCL,
+  arbeidPrijsIncl,
+  parseStoredReparatieRegels,
+} from "@/lib/reparaties";
 
 type PaymentOption =
   | "Was al betaald"
@@ -36,11 +40,30 @@ type OrderDetail = {
   line_items_json?: string | null;
   producten_nog_niet_bekend?: boolean | null;
   reparatie_betaalwijze?: string | null;
+  reparatie_regels_json?: unknown;
   naam?: string | null;
   email?: string | null;
   telefoon_nummer?: string | null;
   moneybird_invoice_id?: string | null;
 };
+
+type ReparatieDraftRegel = {
+  key: string;
+  onderdeel_naam: string;
+  onderdeel_prijs_incl: string;
+  shopify_product_id?: number | null;
+  shopify_variant_id?: number | null;
+  arbeid_uren: string;
+};
+
+function emptyReparatieRegel(): ReparatieDraftRegel {
+  return {
+    key: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    onderdeel_naam: "",
+    onderdeel_prijs_incl: "",
+    arbeid_uren: "1",
+  };
+}
 
 function shouldIgnoreAfrondenChecklistItem(label: string): boolean {
   const n = label.trim().toLowerCase();
@@ -124,19 +147,12 @@ export default function AfrondenVragenlijstPage({
   const [betaalBedrag, setBetaalBedrag] = useState<string>("");
   const [serienummer, setSerienummer] = useState<string>("");
   const [checked, setChecked] = useState<Record<string, boolean>>({});
-  const [reparatieRegels, setReparatieRegels] = useState<
-    Array<{
-      key: string;
-      onderdeel_naam: string;
-      onderdeel_prijs_incl: string;
-      shopify_product_id?: number | null;
-      shopify_variant_id?: number | null;
-      arbeid_uren: string;
-    }>
-  >([]);
+  const [reparatieRegels, setReparatieRegels] = useState<ReparatieDraftRegel[]>([]);
+  const [reparatieRegelsLoaded, setReparatieRegelsLoaded] = useState(false);
+  const [convertToOphalen, setConvertToOphalen] = useState(false);
 
-  const needsReparatieProducts =
-    order?.type === "reparatie_deur" && Boolean(order?.producten_nog_niet_bekend);
+  const isReparatieDeur = order?.type === "reparatie_deur";
+  const productenNogNietBekend = Boolean(order?.producten_nog_niet_bekend);
 
   const fetchOrder = useCallback(async () => {
     setLoading(true);
@@ -146,6 +162,7 @@ export default function AfrondenVragenlijstPage({
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? "Ophalen mislukt");
       setOrder(data.order as OrderDetail);
+      setReparatieRegelsLoaded(false);
     } catch (e) {
       setOrder(null);
       setError(e instanceof Error ? e.message : "Ophalen mislukt");
@@ -158,7 +175,38 @@ export default function AfrondenVragenlijstPage({
     fetchOrder();
   }, [fetchOrder]);
 
-  const checklist = useMemo(() => (order ? parseChecklist(order, productRules) : []), [order, productRules]);
+  // Prefill producten/arbeid voor reparatie aan huis.
+  useEffect(() => {
+    if (!order || order.type !== "reparatie_deur" || reparatieRegelsLoaded) return;
+    if (Boolean(order.producten_nog_niet_bekend)) {
+      setReparatieRegels([emptyReparatieRegel()]);
+    } else {
+      const stored = parseStoredReparatieRegels(order.reparatie_regels_json);
+      if (stored.length > 0) {
+        setReparatieRegels(
+          stored.map((r) => ({
+            key: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            onderdeel_naam: String(r.onderdeel_naam || r.naam || ""),
+            onderdeel_prijs_incl:
+              r.onderdeel_prijs_incl != null && Number(r.onderdeel_prijs_incl) > 0
+                ? String(r.onderdeel_prijs_incl)
+                : "",
+            shopify_product_id: r.shopify_product_id ?? null,
+            shopify_variant_id: r.shopify_variant_id ?? null,
+            arbeid_uren: String(r.arbeid_uren ?? 0),
+          }))
+        );
+      } else {
+        setReparatieRegels([emptyReparatieRegel()]);
+      }
+    }
+    setReparatieRegelsLoaded(true);
+  }, [order, reparatieRegelsLoaded]);
+
+  const checklist = useMemo(
+    () => (order && !isReparatieDeur ? parseChecklist(order, productRules) : []),
+    [order, productRules, isReparatieDeur]
+  );
 
   // Init checked-state zodra checklist binnen is
   useEffect(() => {
@@ -175,7 +223,7 @@ export default function AfrondenVragenlijstPage({
   const isMpOrder =
     order?.source === "mp" || /^#mp/i.test(String(order?.order_nummer ?? "").trim());
 
-  const allChecked = checklist.every((i) => checked[i.label]);
+  const allChecked = isReparatieDeur || checklist.every((i) => checked[i.label]);
   const needsBedrag = betaalOptie === "Factuur betaling aan deur" || betaalOptie === "Contant aan deur";
   const parsedBedrag = parseFloat(betaalBedrag.trim().replace(",", "."));
   const bedragOk = !needsBedrag || (betaalBedrag.trim().length > 0 && !Number.isNaN(parsedBedrag));
@@ -183,7 +231,8 @@ export default function AfrondenVragenlijstPage({
     Boolean(betaalOptie) && (betaalOptie !== "Anders" || betaalAnders.trim().length > 0) && bedragOk;
   const serienummerOk = !isMpOrder || serienummer.trim().length > 0;
   const reparatieProductsOk =
-    !needsReparatieProducts ||
+    !isReparatieDeur ||
+    convertToOphalen ||
     reparatieRegels.some(
       (r) =>
         r.onderdeel_naam.trim() ||
@@ -212,18 +261,20 @@ export default function AfrondenVragenlijstPage({
           betaal_anders: betaalAnders,
           betaal_bedrag: needsBedrag ? parseFloat(betaalBedrag.trim().replace(",", ".")) : undefined,
           serienummer: isMpOrder ? serienummer.trim() : undefined,
-          reparatie_regels: needsReparatieProducts
-            ? reparatieRegels.map((r) => ({
-                kind: "custom",
-                naam: r.onderdeel_naam || "Reparatie",
-                onderdeel_naam: r.onderdeel_naam,
-                onderdeel_prijs_incl:
-                  parseFloat(r.onderdeel_prijs_incl.replace(",", ".")) || 0,
-                shopify_product_id: r.shopify_product_id ?? null,
-                shopify_variant_id: r.shopify_variant_id ?? null,
-                arbeid_uren: parseFloat(r.arbeid_uren.replace(",", ".")) || 0,
-              }))
-            : undefined,
+          convert_to_ophalen: isReparatieDeur ? convertToOphalen : undefined,
+          reparatie_regels:
+            isReparatieDeur && !convertToOphalen
+              ? reparatieRegels.map((r) => ({
+                  kind: "custom",
+                  naam: r.onderdeel_naam || "Reparatie",
+                  onderdeel_naam: r.onderdeel_naam,
+                  onderdeel_prijs_incl:
+                    parseFloat(r.onderdeel_prijs_incl.replace(",", ".")) || 0,
+                  shopify_product_id: r.shopify_product_id ?? null,
+                  shopify_variant_id: r.shopify_variant_id ?? null,
+                  arbeid_uren: parseFloat(r.arbeid_uren.replace(",", ".")) || 0,
+                }))
+              : undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -251,7 +302,8 @@ export default function AfrondenVragenlijstPage({
     serienummer,
     isMpOrder,
     needsBedrag,
-    needsReparatieProducts,
+    isReparatieDeur,
+    convertToOphalen,
     reparatieRegels,
   ]);
 
@@ -296,106 +348,145 @@ export default function AfrondenVragenlijstPage({
                 </div>
               )}
 
-              {needsReparatieProducts && (
-                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 shadow-sm">
-                  <p className="mb-2 text-sm font-semibold text-koopje-black">
-                    Producten nog niet bekend — vul nu in wat er is gedaan
-                  </p>
-                  <p className="mb-3 text-xs text-koopje-black/60">
-                    Onderdelen via Shopify (21% BTW). Arbeid: uren × €{ARBEID_UUR_PRIJS_INCL} incl. 9%.
-                  </p>
-                  <div className="space-y-3">
-                    {reparatieRegels.map((r) => (
-                      <div key={r.key} className="rounded-lg border border-amber-100 bg-white p-3">
-                        <ProductAutocomplete
-                          label="Onderdeel"
-                          value={r.onderdeel_naam}
-                          searchSource="shopify"
-                          onChange={(title, prijs, meta) => {
-                            setReparatieRegels((prev) =>
-                              prev.map((x) =>
-                                x.key === r.key
-                                  ? {
-                                      ...x,
-                                      onderdeel_naam: title,
-                                      onderdeel_prijs_incl: prijs ?? x.onderdeel_prijs_incl,
-                                      shopify_product_id: meta?.shopify_product_id ?? null,
-                                      shopify_variant_id: meta?.shopify_variant_id ?? null,
-                                    }
-                                  : x
-                              )
-                            );
-                          }}
-                        />
-                        <label className="mt-2 block text-xs">
-                          Prijs onderdeel incl.
-                          <input
-                            className="mt-0.5 w-full rounded border px-2 py-1.5 text-sm"
-                            value={r.onderdeel_prijs_incl}
-                            onChange={(e) =>
-                              setReparatieRegels((prev) =>
-                                prev.map((x) =>
-                                  x.key === r.key
-                                    ? { ...x, onderdeel_prijs_incl: e.target.value }
-                                    : x
+              {isReparatieDeur && (
+                <div
+                  className={`rounded-2xl border p-5 shadow-sm ${
+                    productenNogNietBekend && !convertToOphalen
+                      ? "border-amber-200 bg-amber-50"
+                      : "border-stone-200 bg-white"
+                  }`}
+                >
+                  <label className="mb-4 flex cursor-pointer items-start gap-3 rounded-xl border border-stone-200 bg-white px-3 py-3 text-sm">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 accent-koopje-orange"
+                      checked={convertToOphalen}
+                      onChange={(e) => setConvertToOphalen(e.target.checked)}
+                    />
+                    <span>
+                      <span className="font-semibold text-koopje-black">
+                        Omzetten naar ophalen-order
+                      </span>
+                      <span className="mt-0.5 block text-xs text-koopje-black/60">
+                        Geen reparatie uitgevoerd — bike opgehaald. Conceptfactuur
+                        {order.reparatie_betaalwijze === "contant"
+                          ? " (n.v.t. bij contant)"
+                          : " wordt verwijderd uit Moneybird"}
+                        .
+                      </span>
+                    </span>
+                  </label>
+
+                  {!convertToOphalen && (
+                    <>
+                      <p className="mb-2 text-sm font-semibold text-koopje-black">
+                        {productenNogNietBekend
+                          ? "Producten nog niet bekend — vul nu in wat er is gedaan"
+                          : "Producten en arbeid controleren"}
+                      </p>
+                      <p className="mb-3 text-xs text-koopje-black/60">
+                        {productenNogNietBekend
+                          ? `Onderdelen via Shopify (21% BTW). Arbeid: uren × €${ARBEID_UUR_PRIJS_INCL} incl. 9%.`
+                          : "Pas regels aan of verwijder ze indien nodig. Wijzigingen worden vóór verzending op de factuur gezet."}
+                      </p>
+                      <div className="space-y-3">
+                        {reparatieRegels.map((r) => (
+                          <div
+                            key={r.key}
+                            className="rounded-lg border border-stone-200 bg-white p-3"
+                          >
+                            <ProductAutocomplete
+                              label="Onderdeel"
+                              value={r.onderdeel_naam}
+                              searchSource="shopify"
+                              onChange={(title, prijs, meta) => {
+                                setReparatieRegels((prev) =>
+                                  prev.map((x) =>
+                                    x.key === r.key
+                                      ? {
+                                          ...x,
+                                          onderdeel_naam: title,
+                                          onderdeel_prijs_incl:
+                                            prijs ?? x.onderdeel_prijs_incl,
+                                          shopify_product_id:
+                                            meta?.shopify_product_id ?? null,
+                                          shopify_variant_id:
+                                            meta?.shopify_variant_id ?? null,
+                                        }
+                                      : x
+                                  )
+                                );
+                              }}
+                            />
+                            <label className="mt-2 block text-xs">
+                              Prijs onderdeel incl.
+                              <input
+                                className="mt-0.5 w-full rounded border px-2 py-1.5 text-sm"
+                                value={r.onderdeel_prijs_incl}
+                                onChange={(e) =>
+                                  setReparatieRegels((prev) =>
+                                    prev.map((x) =>
+                                      x.key === r.key
+                                        ? {
+                                            ...x,
+                                            onderdeel_prijs_incl: e.target.value,
+                                          }
+                                        : x
+                                    )
+                                  )
+                                }
+                              />
+                            </label>
+                            <label className="mt-2 block text-xs">
+                              Arbeidsuren
+                              <input
+                                className="mt-0.5 w-full rounded border px-2 py-1.5 text-sm"
+                                value={r.arbeid_uren}
+                                onChange={(e) =>
+                                  setReparatieRegels((prev) =>
+                                    prev.map((x) =>
+                                      x.key === r.key
+                                        ? { ...x, arbeid_uren: e.target.value }
+                                        : x
+                                    )
+                                  )
+                                }
+                              />
+                            </label>
+                            <p className="mt-1 text-xs text-koopje-black/50">
+                              Arbeid ≈ €
+                              {arbeidPrijsIncl(
+                                parseFloat(r.arbeid_uren.replace(",", ".")) || 0
+                              ).toFixed(2)}
+                            </p>
+                            <button
+                              type="button"
+                              className="mt-2 text-xs text-red-600"
+                              onClick={() =>
+                                setReparatieRegels((prev) =>
+                                  prev.filter((x) => x.key !== r.key)
                                 )
-                              )
-                            }
-                          />
-                        </label>
-                        <label className="mt-2 block text-xs">
-                          Arbeidsuren
-                          <input
-                            className="mt-0.5 w-full rounded border px-2 py-1.5 text-sm"
-                            value={r.arbeid_uren}
-                            onChange={(e) =>
-                              setReparatieRegels((prev) =>
-                                prev.map((x) =>
-                                  x.key === r.key
-                                    ? { ...x, arbeid_uren: e.target.value }
-                                    : x
-                                )
-                              )
-                            }
-                          />
-                        </label>
-                        <p className="mt-1 text-xs text-koopje-black/50">
-                          Arbeid ≈ €
-                          {arbeidPrijsIncl(
-                            parseFloat(r.arbeid_uren.replace(",", ".")) || 0
-                          ).toFixed(2)}
-                        </p>
-                        <button
-                          type="button"
-                          className="mt-2 text-xs text-red-600"
-                          onClick={() =>
-                            setReparatieRegels((prev) =>
-                              prev.filter((x) => x.key !== r.key)
-                            )
-                          }
-                        >
-                          Verwijderen
-                        </button>
+                              }
+                            >
+                              Verwijderen
+                            </button>
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
-                  <button
-                    type="button"
-                    className="mt-3 rounded-lg border border-koopje-black/20 bg-white px-3 py-1.5 text-sm"
-                    onClick={() =>
-                      setReparatieRegels((prev) => [
-                        ...prev,
-                        {
-                          key: `${Date.now()}`,
-                          onderdeel_naam: "",
-                          onderdeel_prijs_incl: "",
-                          arbeid_uren: "1",
-                        },
-                      ])
-                    }
-                  >
-                    + Regel toevoegen
-                  </button>
+                      <button
+                        type="button"
+                        className="mt-3 rounded-lg border border-koopje-black/20 bg-white px-3 py-1.5 text-sm"
+                        onClick={() =>
+                          setReparatieRegels((prev) => [
+                            ...prev,
+                            emptyReparatieRegel(),
+                          ])
+                        }
+                      >
+                        + Regel toevoegen
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
 
@@ -513,49 +604,51 @@ export default function AfrondenVragenlijstPage({
                 </div>
               )}
 
-              <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
-                <p className="mb-3 text-sm font-semibold text-koopje-black">
-                  Alles meegegeven?
-                </p>
-                {checklist.length === 0 ? (
-                  <p className="text-sm text-koopje-black/60">
-                    Geen producten gevonden voor deze order.
+              {!isReparatieDeur && (
+                <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
+                  <p className="mb-3 text-sm font-semibold text-koopje-black">
+                    Alles meegegeven?
                   </p>
-                ) : (
-                  <div className="space-y-2">
-                    {checklist.map((item) => (
-                      <label
-                        key={item.label}
-                        className={`flex cursor-pointer items-start gap-3 rounded-xl border px-3 py-2 text-sm ${
-                          checked[item.label]
-                            ? "border-green-200 bg-green-50"
-                            : "border-stone-200 bg-white hover:bg-stone-50"
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          className="mt-0.5 accent-koopje-orange"
-                          checked={Boolean(checked[item.label])}
-                          onChange={(e) =>
-                            setChecked((prev) => ({
-                              ...prev,
-                              [item.label]: e.target.checked,
-                            }))
-                          }
-                        />
-                        <div className="flex flex-1 items-start justify-between gap-3">
-                          <span className="text-koopje-black">{item.label}</span>
-                          {item.count > 1 && (
-                            <span className="shrink-0 rounded-full bg-koopje-orange-light px-2 py-0.5 text-xs font-semibold text-koopje-orange">
-                              {item.count}×
-                            </span>
-                          )}
-                        </div>
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </div>
+                  {checklist.length === 0 ? (
+                    <p className="text-sm text-koopje-black/60">
+                      Geen producten gevonden voor deze order.
+                    </p>
+                  ) : (
+                    <div className="space-y-2">
+                      {checklist.map((item) => (
+                        <label
+                          key={item.label}
+                          className={`flex cursor-pointer items-start gap-3 rounded-xl border px-3 py-2 text-sm ${
+                            checked[item.label]
+                              ? "border-green-200 bg-green-50"
+                              : "border-stone-200 bg-white hover:bg-stone-50"
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            className="mt-0.5 accent-koopje-orange"
+                            checked={Boolean(checked[item.label])}
+                            onChange={(e) =>
+                              setChecked((prev) => ({
+                                ...prev,
+                                [item.label]: e.target.checked,
+                              }))
+                            }
+                          />
+                          <div className="flex flex-1 items-start justify-between gap-3">
+                            <span className="text-koopje-black">{item.label}</span>
+                            {item.count > 1 && (
+                              <span className="shrink-0 rounded-full bg-koopje-orange-light px-2 py-0.5 text-xs font-semibold text-koopje-orange">
+                                {item.count}×
+                              </span>
+                            )}
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
               <button
                 type="button"
@@ -563,7 +656,11 @@ export default function AfrondenVragenlijstPage({
                 disabled={!canSubmit}
                 className="w-full rounded-2xl bg-koopje-orange px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-koopje-orange/90 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {saving ? "Afronden…" : "Order afronden"}
+                {saving
+                  ? "Afronden…"
+                  : convertToOphalen
+                    ? "Afronden als ophalen"
+                    : "Order afronden"}
               </button>
             </div>
           )}

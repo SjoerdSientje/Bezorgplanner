@@ -39,7 +39,13 @@ import {
 } from "@/lib/inventory-pending";
 
 export type InventoryCategory = "fiets" | "onderdeel" | "accessoire" | "overig";
-export type InventorySource = "shopify" | "marktplaats" | "winkel" | "handmatig" | "moneybird";
+export type InventorySource =
+  | "shopify"
+  | "marktplaats"
+  | "winkel"
+  | "handmatig"
+  | "moneybird"
+  | "reparatie";
 export type InventoryMutationType = "inkomend" | "uitgaand" | "correctie";
 
 export const LOW_STOCK_THRESHOLD = 3;
@@ -1648,7 +1654,7 @@ export async function getInventoryMutationsForDay(
 export async function markOrderDeducted(
   supabase: SupabaseClient,
   ownerEmail: string,
-  source: "shopify" | "marktplaats" | "moneybird",
+  source: "shopify" | "marktplaats" | "moneybird" | "reparatie",
   externalOrderId: string
 ): Promise<boolean> {
   const { error } = await supabase.from("inventory_order_deductions").insert({
@@ -1665,7 +1671,7 @@ export async function markOrderDeducted(
 export async function hasOrderDeduction(
   supabase: SupabaseClient,
   ownerEmail: string,
-  source: "shopify" | "marktplaats" | "moneybird",
+  source: "shopify" | "marktplaats" | "moneybird" | "reparatie",
   externalOrderId: string
 ): Promise<boolean> {
   const { data } = await supabase
@@ -1681,7 +1687,7 @@ export async function hasOrderDeduction(
 export async function clearOrderDeduction(
   supabase: SupabaseClient,
   ownerEmail: string,
-  source: "shopify" | "marktplaats" | "moneybird",
+  source: "shopify" | "marktplaats" | "moneybird" | "reparatie",
   externalOrderId: string
 ): Promise<void> {
   const { error } = await supabase
@@ -1852,7 +1858,7 @@ export async function deductInventoryForLineItems(
   supabase: SupabaseClient,
   params: {
     ownerEmail: string;
-    source: "shopify" | "marktplaats";
+    source: "shopify" | "marktplaats" | "reparatie";
     externalOrderId: string;
     orderReference: string;
     lineItems: LineItemForDeduction[];
@@ -2479,6 +2485,54 @@ export async function deductInventoryForMpOrder(
     source: "marktplaats",
     externalOrderId: orderId,
     orderReference: orderNummer,
+    lineItems,
+  });
+}
+
+/** Alleen Shopify-onderdelen van reparatie-orders (geen arbeid/voorrij). */
+export function reparatieLineItemsForInventoryDeduction(
+  items: Array<{
+    name?: string | null;
+    price?: string | number | null;
+    quantity?: number | null;
+    product_id?: string | number | null;
+    variant_id?: string | number | null;
+  }>
+): LineItemForDeduction[] {
+  const out: LineItemForDeduction[] = [];
+  for (const li of items) {
+    const name = String(li.name ?? "").trim();
+    const lower = name.toLowerCase();
+    if (!name) continue;
+    if (lower.startsWith("arbeidskosten")) continue;
+    if (lower.includes("voorrijkosten")) continue;
+    if (lower.includes("producten nog niet bekend")) continue;
+    const productId = li.product_id != null ? Number(li.product_id) : null;
+    const variantId = li.variant_id != null ? Number(li.variant_id) : null;
+    if (!productId && !variantId) continue;
+    out.push({
+      name,
+      quantity: Math.max(1, Math.floor(Number(li.quantity ?? 1)) || 1),
+      product_id: productId,
+      variant_id: variantId,
+    });
+  }
+  return out;
+}
+
+export async function deductInventoryForReparatieOrder(
+  supabase: SupabaseClient,
+  ownerEmail: string,
+  orderId: string,
+  orderNummer: string,
+  lineItems: LineItemForDeduction[]
+): Promise<void> {
+  if (!lineItems.length) return;
+  await deductInventoryForLineItems(supabase, {
+    ownerEmail,
+    source: "reparatie",
+    externalOrderId: orderId,
+    orderReference: orderNummer || orderId,
     lineItems,
   });
 }

@@ -18,10 +18,15 @@ import {
 } from "@/lib/reparaties";
 import {
   deleteReparatieSalesInvoice,
+  sendReparatieSalesInvoice,
   upsertReparatieSalesInvoice,
   type ReparatieInvoiceLineInput,
 } from "@/lib/moneybird";
 import type { ShopifyLineItem } from "@/lib/shopify-order";
+import {
+  deductInventoryForReparatieOrder,
+  reparatieLineItemsForInventoryDeduction,
+} from "@/lib/inventory";
 
 export const dynamic = "force-dynamic";
 
@@ -358,6 +363,32 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Terugbrengen: factuur meteen versturen + voorraad afschrijven (ook bij contant).
+    if (soort === "reparatie_terugbrengen" && !productenNogNietBekend) {
+      if (betaalwijze === "factuur" && moneybirdInvoiceId) {
+        try {
+          await sendReparatieSalesInvoice({
+            orderId: order.id,
+            invoiceId: moneybirdInvoiceId,
+            email: email || null,
+          });
+        } catch (sendErr) {
+          console.error("[reparaties] moneybird send (terugbrengen):", sendErr);
+        }
+      }
+      try {
+        await deductInventoryForReparatieOrder(
+          supabase,
+          ownerEmail,
+          order.id,
+          orderNummer,
+          reparatieLineItemsForInventoryDeduction(lineItems)
+        );
+      } catch (invErr) {
+        console.error("[reparaties] inventory deduct (terugbrengen):", invErr);
+      }
+    }
+
     return NextResponse.json({
       order: { ...order, moneybird_invoice_id: moneybirdInvoiceId },
     });
@@ -399,10 +430,15 @@ export async function PATCH(request: NextRequest) {
     const soort = (String(body.soort ?? existing.type) ||
       existing.type) as ReparatieSoort;
     let betaalwijze = String(
-      body.betaalwijze ?? existing.reparatie_betaalwijze ?? "factuur"
-    ) as ReparatieBetaalwijze;
+      body.betaalwijze ?? existing.reparatie_betaalwijze ?? ""
+    ) as ReparatieBetaalwijze | "";
     if (soort === "reparatie_ophalen") {
       betaalwijze = "contant";
+    } else if (!["contant", "factuur"].includes(betaalwijze)) {
+      return NextResponse.json(
+        { error: "Kies contant of factuur." },
+        { status: 400 }
+      );
     }
 
     const naam = String(body.naam ?? existing.naam ?? "").trim();
@@ -671,6 +707,32 @@ export async function PATCH(request: NextRequest) {
       .from("orders")
       .update({ moneybird_invoice_id: moneybirdInvoiceId })
       .eq("id", orderId);
+
+    // Terugbrengen: bij opslaan factuur versturen (indien concept) + voorraad afschrijven.
+    if (soort === "reparatie_terugbrengen" && !productenNogNietBekend) {
+      if (betaalwijze === "factuur" && moneybirdInvoiceId) {
+        try {
+          await sendReparatieSalesInvoice({
+            orderId,
+            invoiceId: moneybirdInvoiceId,
+            email: email || null,
+          });
+        } catch (sendErr) {
+          console.error("[reparaties] moneybird send PATCH (terugbrengen):", sendErr);
+        }
+      }
+      try {
+        await deductInventoryForReparatieOrder(
+          supabase,
+          ownerEmail,
+          orderId,
+          String(order.order_nummer ?? orderId),
+          reparatieLineItemsForInventoryDeduction(lineItems)
+        );
+      } catch (invErr) {
+        console.error("[reparaties] inventory deduct PATCH (terugbrengen):", invErr);
+      }
+    }
 
     return NextResponse.json({
       order: { ...order, moneybird_invoice_id: moneybirdInvoiceId },

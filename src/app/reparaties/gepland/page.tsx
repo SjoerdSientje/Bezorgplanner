@@ -55,7 +55,8 @@ type DraftRegel = {
 type EditDraft = {
   id: string;
   soort: ReparatieSoort;
-  betaalwijze: ReparatieBetaalwijze;
+  /** null = nog kiezen (bijv. na switch weg van ophalen). */
+  betaalwijze: ReparatieBetaalwijze | null;
   naam: string;
   email: string;
   telefoonnummer: string;
@@ -289,6 +290,11 @@ export default function ReparatiesGeplandPage() {
 
   async function doSave() {
     if (!edit) return;
+    if (edit.soort !== "reparatie_ophalen" && !edit.betaalwijze) {
+      setError("Kies contant of factuur.");
+      setConfirmOpen(false);
+      return;
+    }
     if (needsProducts && edit.regels.length === 0) {
       setError(
         edit.soort === "reparatie_deur"
@@ -431,11 +437,17 @@ export default function ReparatiesGeplandPage() {
                       value={edit.soort}
                       onChange={(e) => {
                         const soort = e.target.value as ReparatieSoort;
+                        const wasOphalen = edit.soort === "reparatie_ophalen";
                         setEdit({
                           ...edit,
                           soort,
+                          // Ophalen: geen factuur. Weg van ophalen → opnieuw kiezen.
                           betaalwijze:
-                            soort === "reparatie_ophalen" ? "contant" : edit.betaalwijze,
+                            soort === "reparatie_ophalen"
+                              ? "contant"
+                              : wasOphalen
+                                ? null
+                                : edit.betaalwijze,
                           producten_nog_niet_bekend:
                             soort === "reparatie_deur"
                               ? edit.producten_nog_niet_bekend
@@ -444,6 +456,9 @@ export default function ReparatiesGeplandPage() {
                             soort === "reparatie_terugbrengen"
                               ? edit.fiets_ook_opgehaald
                               : false,
+                          // Ophalen: productregels wissen.
+                          regels:
+                            soort === "reparatie_ophalen" ? [] : edit.regels,
                         });
                       }}
                     >
@@ -454,10 +469,10 @@ export default function ReparatiesGeplandPage() {
                   </label>
                   {edit.soort !== "reparatie_ophalen" && (
                     <label className="block">
-                      Betaling
+                      Betaling *
                       <select
                         className="mt-1 w-full rounded border px-2 py-2"
-                        value={edit.betaalwijze}
+                        value={edit.betaalwijze ?? ""}
                         onChange={(e) =>
                           setEdit({
                             ...edit,
@@ -465,6 +480,9 @@ export default function ReparatiesGeplandPage() {
                           })
                         }
                       >
+                        <option value="" disabled>
+                          Kies contant of factuur…
+                        </option>
                         <option value="factuur">Factuur</option>
                         <option value="contant">Contant</option>
                       </select>
