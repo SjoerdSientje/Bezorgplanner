@@ -147,7 +147,7 @@ export async function POST(request: NextRequest) {
       soort === "reparatie_terugbrengen" && Boolean(body.fiets_ook_opgehaald);
 
     const productenNogNietBekend =
-      reparatieSoortHeeftProducten(soort) && Boolean(body.producten_nog_niet_bekend);
+      soort === "reparatie_deur" && Boolean(body.producten_nog_niet_bekend);
 
     const standaardItems = await listReparatieStandaardItems(supabase, ownerEmail, {
       includeInactive: true,
@@ -231,7 +231,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           error:
-            "Voeg minstens één reparatieregel toe, of kies ‘producten nog niet bekend’.",
+            soort === "reparatie_deur"
+              ? "Voeg minstens één reparatieregel toe, of kies ‘producten nog niet bekend’."
+              : "Voeg minstens één reparatieregel toe.",
         },
         { status: 400 }
       );
@@ -429,7 +431,7 @@ export async function PATCH(request: NextRequest) {
         : Boolean(existing.fiets_ook_opgehaald));
 
     const productenNogNietBekend =
-      reparatieSoortHeeftProducten(soort) &&
+      soort === "reparatie_deur" &&
       (body.producten_nog_niet_bekend != null
         ? Boolean(body.producten_nog_niet_bekend)
         : Boolean(existing.producten_nog_niet_bekend));

@@ -201,7 +201,8 @@ export default function ReparatiesGeplandPage() {
       bezorgtijd_voorkeur: o.bezorgtijd_voorkeur ?? "",
       datum_voorkeur: o.datum_opmerking ?? "",
       opmerking: o.opmerkingen_klant ?? "",
-      producten_nog_niet_bekend: Boolean(o.producten_nog_niet_bekend),
+      producten_nog_niet_bekend:
+        soort === "reparatie_deur" && Boolean(o.producten_nog_niet_bekend),
       fiets_ook_opgehaald:
         soort === "reparatie_terugbrengen" && Boolean(o.fiets_ook_opgehaald),
       regels: storedToDraft(o.reparatie_regels_json),
@@ -263,8 +264,8 @@ export default function ReparatiesGeplandPage() {
 
   const needsProducts =
     edit != null &&
-    reparatieSoortHeeftProducten(edit.soort) &&
-    !edit.producten_nog_niet_bekend;
+    (edit.soort === "reparatie_terugbrengen" ||
+      (edit.soort === "reparatie_deur" && !edit.producten_nog_niet_bekend));
 
   const voorrijWeergave =
     !edit || !voorrij
@@ -289,7 +290,11 @@ export default function ReparatiesGeplandPage() {
   async function doSave() {
     if (!edit) return;
     if (needsProducts && edit.regels.length === 0) {
-      setError("Voeg minstens één reparatieregel toe, of vink producten nog niet bekend aan.");
+      setError(
+        edit.soort === "reparatie_deur"
+          ? "Voeg minstens één reparatieregel toe, of vink producten nog niet bekend aan."
+          : "Voeg minstens één reparatieregel toe."
+      );
       setConfirmOpen(false);
       return;
     }
@@ -332,8 +337,7 @@ export default function ReparatiesGeplandPage() {
           datum_voorkeur: edit.datum_voorkeur,
           opmerking: edit.opmerking,
           producten_nog_niet_bekend:
-            reparatieSoortHeeftProducten(edit.soort) &&
-            edit.producten_nog_niet_bekend,
+            edit.soort === "reparatie_deur" && edit.producten_nog_niet_bekend,
           fiets_ook_opgehaald:
             edit.soort === "reparatie_terugbrengen" && edit.fiets_ook_opgehaald,
           regels: payloadRegels,
@@ -432,9 +436,10 @@ export default function ReparatiesGeplandPage() {
                           soort,
                           betaalwijze:
                             soort === "reparatie_ophalen" ? "contant" : edit.betaalwijze,
-                          producten_nog_niet_bekend: reparatieSoortHeeftProducten(soort)
-                            ? edit.producten_nog_niet_bekend
-                            : false,
+                          producten_nog_niet_bekend:
+                            soort === "reparatie_deur"
+                              ? edit.producten_nog_niet_bekend
+                              : false,
                           fiets_ook_opgehaald:
                             soort === "reparatie_terugbrengen"
                               ? edit.fiets_ook_opgehaald
@@ -590,21 +595,24 @@ export default function ReparatiesGeplandPage() {
 
                   {reparatieSoortHeeftProducten(edit.soort) && (
                     <section className="space-y-3 rounded-xl border border-koopje-black/10 p-3">
-                      <label className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={edit.producten_nog_niet_bekend}
-                          onChange={(e) =>
-                            setEdit({
-                              ...edit,
-                              producten_nog_niet_bekend: e.target.checked,
-                            })
-                          }
-                        />
-                        Producten nog niet bekend
-                      </label>
+                      {edit.soort === "reparatie_deur" && (
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={edit.producten_nog_niet_bekend}
+                            onChange={(e) =>
+                              setEdit({
+                                ...edit,
+                                producten_nog_niet_bekend: e.target.checked,
+                              })
+                            }
+                          />
+                          Producten nog niet bekend
+                        </label>
+                      )}
 
-                      {!edit.producten_nog_niet_bekend && (
+                      {(edit.soort === "reparatie_terugbrengen" ||
+                        !edit.producten_nog_niet_bekend) && (
                         <>
                           <div className="flex flex-wrap gap-2">
                             <select

@@ -58,7 +58,9 @@ export default function ReparatieNieuwPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const needsProducts = reparatieSoortHeeftProducten(soort) && !productenOnbekend;
+  const needsProducts =
+    soort === "reparatie_terugbrengen" ||
+    (soort === "reparatie_deur" && !productenOnbekend);
   const showBetaling = soort !== "reparatie_ophalen";
 
   useEffect(() => {
@@ -162,7 +164,11 @@ export default function ReparatieNieuwPage() {
       return;
     }
     if (needsProducts && regels.length === 0) {
-      setError("Voeg minstens één reparatieregel toe, of kies producten nog niet bekend.");
+      setError(
+        soort === "reparatie_deur"
+          ? "Voeg minstens één reparatieregel toe, of kies producten nog niet bekend."
+          : "Voeg minstens één reparatieregel toe."
+      );
       return;
     }
     setSaving(true);
@@ -191,7 +197,7 @@ export default function ReparatieNieuwPage() {
           soort,
           betaalwijze: soort === "reparatie_ophalen" ? "contant" : betaalwijze,
           producten_nog_niet_bekend:
-            productenOnbekend && reparatieSoortHeeftProducten(soort),
+            productenOnbekend && soort === "reparatie_deur",
           fiets_ook_opgehaald:
             soort === "reparatie_terugbrengen" && fietsOokOpgehaald,
           naam,
@@ -249,7 +255,7 @@ export default function ReparatieNieuwPage() {
                     type="button"
                     onClick={() => {
                       setSoort(value);
-                      if (!reparatieSoortHeeftProducten(value)) {
+                      if (value !== "reparatie_deur") {
                         setProductenOnbekend(false);
                       }
                       if (value !== "reparatie_terugbrengen") {
@@ -400,16 +406,18 @@ export default function ReparatieNieuwPage() {
             {reparatieSoortHeeftProducten(soort) && (
               <section className="space-y-3 rounded-xl border border-koopje-black/10 p-4">
                 <h2 className="text-sm font-medium text-koopje-black">Producten / arbeid</h2>
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={productenOnbekend}
-                    onChange={(e) => setProductenOnbekend(e.target.checked)}
-                  />
-                  Producten nog niet bekend
-                </label>
+                {soort === "reparatie_deur" && (
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={productenOnbekend}
+                      onChange={(e) => setProductenOnbekend(e.target.checked)}
+                    />
+                    Producten nog niet bekend
+                  </label>
+                )}
 
-                {!productenOnbekend && (
+                {(soort === "reparatie_terugbrengen" || !productenOnbekend) && (
                   <>
                     <div className="flex flex-wrap gap-2">
                       <select
