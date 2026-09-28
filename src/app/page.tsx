@@ -45,7 +45,7 @@ export default async function Home() {
             {!mpPaused && (
               <li>
                 <Link
-                  href="/marktplaats/nieuw"
+                  href="/marktplaats"
                   className="group flex flex-col rounded-xl border border-koopje-black/10 bg-white p-6 shadow-sm transition hover:border-koopje-orange hover:shadow-md focus:outline-none focus:ring-2 focus:ring-koopje-orange focus:ring-offset-2"
                 >
                   <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-koopje-orange-light text-koopje-orange transition group-hover:bg-koopje-orange group-hover:text-white">
@@ -53,8 +53,8 @@ export default async function Home() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
                     </svg>
                   </span>
-                  <span className="mt-4 font-medium text-koopje-black">Nieuwe Marktplaats order</span>
-                  <span className="mt-1 text-sm text-koopje-black/60">Formulier voor afhaal of bezorging</span>
+                  <span className="mt-4 font-medium text-koopje-black">Marktplaats orders</span>
+                  <span className="mt-1 text-sm text-koopje-black/60">Afgehaald, bezorgen en geplande MP orders</span>
                 </Link>
               </li>
             )}

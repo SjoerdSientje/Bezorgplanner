@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import Header from "@/components/Header";
 import AdresAutocomplete from "@/components/AdresAutocomplete";
 import ProductAutocomplete from "@/components/ProductAutocomplete";
@@ -185,8 +185,12 @@ function StandaardProductenLijst({
 }
 
 export default function NieuwMarktplaatsOrderClient() {
-  const router = useRouter();
-  const [soort, setSoort] = useState<Soort | null>(null);
+  const searchParams = useSearchParams();
+  const soortParam = searchParams.get("soort");
+  const presetSoort: Soort | null =
+    soortParam === "afhaal" || soortParam === "bezorging" ? soortParam : null;
+
+  const [soort, setSoort] = useState<Soort | null>(presetSoort);
   const [form, setForm] = useState<FormData>(EMPTY);
   const [producten, setProducten] = useState<ProductRegel[]>([defaultProduct()]);
   const [loading, setLoading] = useState(false);
@@ -194,6 +198,10 @@ export default function NieuwMarktplaatsOrderClient() {
   const [success, setSuccess] = useState<string | null>(null);
   const [garantieWarning, setGarantieWarning] = useState<string | null>(null);
   const [productRules, setProductRules] = useState<ProductDefaultItemsRulesV2>(DEFAULT_PRODUCT_RULES_V2);
+
+  useEffect(() => {
+    if (presetSoort) setSoort(presetSoort);
+  }, [presetSoort]);
 
   useEffect(() => {
     fetch("/api/product-rules")
@@ -274,12 +282,18 @@ export default function NieuwMarktplaatsOrderClient() {
       <main className="min-h-[calc(100vh-4rem)] bg-white">
         <div className="mx-auto max-w-xl px-4 py-8 sm:px-6 sm:py-12">
           <div className="mb-6 flex items-center gap-4">
-            <Link href="/" className="text-koopje-black/60 transition hover:text-koopje-black" aria-label="Terug">
+            <Link href="/marktplaats" className="text-koopje-black/60 transition hover:text-koopje-black" aria-label="Terug">
               <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
               </svg>
             </Link>
-            <h1 className="text-xl font-semibold text-koopje-black sm:text-2xl">Nieuwe Marktplaats order</h1>
+            <h1 className="text-xl font-semibold text-koopje-black sm:text-2xl">
+              {presetSoort === "afhaal"
+                ? "Afgehaald"
+                : presetSoort === "bezorging"
+                  ? "Bezorgen"
+                  : "Nieuwe Marktplaats order"}
+            </h1>
           </div>
 
           {success && (
@@ -297,30 +311,32 @@ export default function NieuwMarktplaatsOrderClient() {
             </div>
           )}
 
-          {/* Soort */}
-          <div className="mb-6">
-            <p className="mb-3 text-sm font-medium text-koopje-black">
-              Afgehaald of bezorgen?<span className="ml-1 text-koopje-orange">*</span>
-            </p>
-            <div className="flex gap-3">
-              {(["afhaal", "bezorging"] as Soort[]).map((s) => (
-                <button key={s} type="button" onClick={() => handleSoortChange(s)}
-                  className={`flex-1 rounded-xl border-2 px-4 py-3 text-left transition ${
-                    soort === s
-                      ? "border-koopje-orange bg-koopje-orange-light"
-                      : "border-koopje-black/10 bg-white hover:border-koopje-orange/40"
-                  }`}
-                >
-                  <span className="block text-sm font-medium text-koopje-black">
-                    {s === "afhaal" ? "Afgehaald" : "Bezorgen"}
-                  </span>
-                  <span className="mt-0.5 block text-xs text-koopje-black/60">
-                    {s === "afhaal" ? "Klant haalt op in winkel" : "Order wordt bij klant bezorgd"}
-                  </span>
-                </button>
-              ))}
+          {/* Soort — alleen tonen als niet via hub voorgekozen */}
+          {!presetSoort && (
+            <div className="mb-6">
+              <p className="mb-3 text-sm font-medium text-koopje-black">
+                Afgehaald of bezorgen?<span className="ml-1 text-koopje-orange">*</span>
+              </p>
+              <div className="flex gap-3">
+                {(["afhaal", "bezorging"] as Soort[]).map((s) => (
+                  <button key={s} type="button" onClick={() => handleSoortChange(s)}
+                    className={`flex-1 rounded-xl border-2 px-4 py-3 text-left transition ${
+                      soort === s
+                        ? "border-koopje-orange bg-koopje-orange-light"
+                        : "border-koopje-black/10 bg-white hover:border-koopje-orange/40"
+                    }`}
+                  >
+                    <span className="block text-sm font-medium text-koopje-black">
+                      {s === "afhaal" ? "Afgehaald" : "Bezorgen"}
+                    </span>
+                    <span className="mt-0.5 block text-xs text-koopje-black/60">
+                      {s === "afhaal" ? "Klant haalt op in winkel" : "Order wordt bij klant bezorgd"}
+                    </span>
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
           {soort && (
             <form onSubmit={handleSubmit} className="space-y-8">

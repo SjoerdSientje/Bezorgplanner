@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { stripMpDummyPricesFromLineItemsJsonString } from "@/lib/line-items-json-sanitize";
 import {
   DEFAULT_PRODUCT_RULES_V2,
   getDefaultItemsForFiets,
@@ -9,11 +8,12 @@ import {
   type ProductDefaultItemsRulesV2,
 } from "@/lib/product-default-items-rules";
 
-/** Oude MP-data: fiets op €999 dummy — tonen als €0 tot DB-migratie is gedraaid. */
-function effectiveLineItemsJson(json: string | null | undefined): string | null | undefined {
-  if (!json) return json;
-  const { json: out } = stripMpDummyPricesFromLineItemsJsonString(json);
-  return out ?? json;
+/** Toon line_items_json zoals opgeslagen (geen MP-dummy 999→0 meer). */
+function effectiveLineItemsJson(
+  json: string | null | undefined,
+  _orderTotal?: number | null
+): string | null | undefined {
+  return json;
 }
 
 interface LineItem {
@@ -51,10 +51,14 @@ const RIJKLAAR_SURCHARGE_PRICE = "50";
 let idCounter = 0;
 function genId() { return String(++idCounter); }
 
-function parseToEditRows(lineItemsJson: string | null | undefined, fallbackText: string): EditRow[] {
+function parseToEditRows(
+  lineItemsJson: string | null | undefined,
+  fallbackText: string,
+  orderTotal?: number | null
+): EditRow[] {
   if (lineItemsJson) {
     try {
-      const raw = effectiveLineItemsJson(lineItemsJson) ?? lineItemsJson;
+      const raw = effectiveLineItemsJson(lineItemsJson, orderTotal) ?? lineItemsJson;
       const items = JSON.parse(raw) as LineItem[];
       return normalizeRowsForEdit(items
         .map((item) => ({
@@ -299,13 +303,13 @@ export default function ProductenCell({
 
   // Lees producten uit JSON/tekst bij openen
   function openPanel() {
-    setRows(normalizeRowsForEdit(parseToEditRows(localLineItemsJson, localValue)));
+    setRows(normalizeRowsForEdit(parseToEditRows(localLineItemsJson, localValue, bestellingTotaalPrijs)));
     setEditing(false);
     setPanelOpen(true);
   }
 
   function startEditing() {
-    const parsed = normalizeRowsForEdit(parseToEditRows(localLineItemsJson, localValue));
+    const parsed = normalizeRowsForEdit(parseToEditRows(localLineItemsJson, localValue, bestellingTotaalPrijs));
 
     // Retroactieve fix: als alle items €0 zijn maar bestelling_totaal_prijs wel gevuld is,
     // zet het totaal op de eerste fiets zodat de editor direct een zinnige waarde toont.
@@ -329,7 +333,7 @@ export default function ProductenCell({
 
   function cancelEditing() {
     setEditing(false);
-    setRows(normalizeRowsForEdit(parseToEditRows(localLineItemsJson, localValue)));
+    setRows(normalizeRowsForEdit(parseToEditRows(localLineItemsJson, localValue, bestellingTotaalPrijs)));
   }
 
   function updateRow(id: string, patch: Partial<EditRow>) {
@@ -442,7 +446,7 @@ export default function ProductenCell({
       const hasUsableLineItemsJson = (() => {
         if (!localLineItemsJson) return false;
         try {
-          const raw = effectiveLineItemsJson(localLineItemsJson) ?? localLineItemsJson;
+          const raw = effectiveLineItemsJson(localLineItemsJson, bestellingTotaalPrijs) ?? localLineItemsJson;
           const parsed = JSON.parse(raw) as unknown;
           return Array.isArray(parsed) && parsed.length > 0;
         } catch {
@@ -483,7 +487,7 @@ export default function ProductenCell({
   let displayItems: LineItem[] = [];
   if (localLineItemsJson) {
     try {
-      const raw = effectiveLineItemsJson(localLineItemsJson) ?? localLineItemsJson;
+      const raw = effectiveLineItemsJson(localLineItemsJson, bestellingTotaalPrijs) ?? localLineItemsJson;
       displayItems = JSON.parse(raw) as LineItem[];
     } catch { /* ignore */ }
   }

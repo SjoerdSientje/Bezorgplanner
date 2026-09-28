@@ -1,12 +1,11 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { Suspense } from "react";
 import { AUTH_COOKIE, isAllowedEmail, normalizeEmail } from "@/lib/auth-shared";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { isMpPausedForOwner } from "@/lib/mp-pause";
-import NieuwMarktplaatsOrderClient from "./NieuwMarktplaatsOrderClient";
+import MarktplaatsGeplandClient from "./GeplandClient";
 
-export default async function NieuwMarktplaatsOrderPage() {
+export default async function MarktplaatsGeplandPage() {
   const cookieStore = await cookies();
   const email = normalizeEmail(cookieStore.get(AUTH_COOKIE)?.value ?? "");
   const ownerEmail = isAllowedEmail(email) ? email : null;
@@ -16,9 +15,5 @@ export default async function NieuwMarktplaatsOrderPage() {
 
   if (mpPaused) redirect("/");
 
-  return (
-    <Suspense fallback={null}>
-      <NieuwMarktplaatsOrderClient />
-    </Suspense>
-  );
+  return <MarktplaatsGeplandClient />;
 }
