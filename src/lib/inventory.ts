@@ -2382,7 +2382,7 @@ function moneybirdInvoiceOwnerEmail(): string {
 
 /**
  * Voorraadaftrek voor een Moneybird-factuur (aanroepen na verzenden, niet bij concept).
- * Shopify-reference: commit reserveringen (typisch ≥ €498 handmatig verzonden).
+ * Shopify-reference: commit reserveringen (typisch ≥ €490 handmatig verzonden).
  * Idempotent op invoice-id.
  */
 export async function deductInventoryForMoneybirdInvoice(

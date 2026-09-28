@@ -323,7 +323,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, skipped: "unhandled_topic", topic }, { status: 200 });
     }
 
-    // Voorraad: create/update = reserveren; fulfilled <€498 = afschrijven; delete/cancel = vrijgeven/restore.
+    // Voorraad: create/update = reserveren; fulfilled <€490 = afschrijven; delete/cancel = vrijgeven/restore.
     try {
       if (isCreate) {
         await reserveInventoryForShopifyOrder(supabase, order);

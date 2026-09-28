@@ -17,7 +17,7 @@ const MONEYBIRD_API_BASE = "https://moneybird.com/api/v2";
  * Drempel (incl. BTW): onder dit bedrag auto-mailen zodra Shopify fulfillment_status = fulfilled.
  * ≥ deze drempel blijft concept (handmatig versturen, o.a. serienummer).
  */
-export const AUTO_FINALIZE_INVOICE_BELOW_EUR = 498;
+export const AUTO_FINALIZE_INVOICE_BELOW_EUR = 490;
 
 export function isMoneybirdConfigured(): boolean {
   return Boolean(
@@ -595,7 +595,7 @@ export async function sendSalesInvoiceByEmail(
 }
 
 /**
- * Na create/update: onder €498 + fulfilled → conceptfactuur e-mailen (idempotent).
+ * Na create/update: onder €490 + fulfilled → conceptfactuur e-mailen (idempotent).
  */
 export async function maybeSendSalesInvoiceAfterShopifyFulfillment(
   supabase: SupabaseClient,
@@ -623,7 +623,7 @@ export async function maybeSendSalesInvoiceAfterShopifyFulfillment(
   // Edge case: create miste eerder, order is nu al fulfilled.
   if (!invoice?.id) {
     console.info(
-      "[moneybird] fulfilled <498 zonder factuur — create alsnog",
+      "[moneybird] fulfilled <490 zonder factuur — create alsnog",
       reference
     );
     invoice = await createSalesInvoiceFromShopifyOrder(supabase, order);
@@ -651,7 +651,7 @@ export async function maybeSendSalesInvoiceAfterShopifyFulfillment(
       emailAddress: shopifyOrderInvoiceEmail(order),
     });
     console.info(
-      "[moneybird] factuur auto-verzonden (fulfilled <€498)",
+      "[moneybird] factuur auto-verzonden (fulfilled <€490)",
       sent.id ?? full.id,
       reference,
       `€${shopifyOrderBillableTotalIncl(order).toFixed(2)}`
@@ -796,7 +796,7 @@ export async function updateDraftSalesInvoiceFromShopifyOrder(
  * Routeert Moneybird-factuuractie op Shopify-webhook topic.
  * - orders/create → nieuwe conceptfactuur (indien van toepassing)
  * - orders/updated → alleen bestaande conceptfactuur bijwerken
- * - daarna: auto-mail als fulfilled én totaal < €498
+ * - daarna: auto-mail als fulfilled én totaal < €490
  */
 export async function syncSalesInvoiceFromShopifyOrder(
   supabase: SupabaseClient,
@@ -882,7 +882,7 @@ export async function deleteSalesInvoiceForShopifyOrderId(
  * Reference = shopify:{id} zodat de Moneybird-webhook dubbele voorraadaftrek kan skippen.
  *
  * Altijd als concept. Auto-mail gebeurt apart bij fulfillment_status=fulfilled
- * én totaal < €498. Totaal €0: geen factuur.
+ * én totaal < €490. Totaal €0: geen factuur.
  */
 export async function createSalesInvoiceFromShopifyOrder(
   supabase: SupabaseClient,

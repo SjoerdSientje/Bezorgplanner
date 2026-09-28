@@ -545,7 +545,7 @@ export async function releaseReservationsForShopifyOrder(
   }
 }
 
-/** Commit bij fulfillment_status=fulfilled én totaal < €498. */
+/** Commit bij fulfillment_status=fulfilled én totaal < €490. */
 export async function maybeCommitInventoryOnShopifyFulfilled(
   supabase: SupabaseClient,
   order: ShopifyOrder
@@ -576,7 +576,7 @@ export async function maybeCommitInventoryOnShopifyFulfilled(
     });
     if (result.committed) {
       console.info(
-        "[inventory-reservations] Shopify fulfilled <498 — voorraad afgeschreven",
+        "[inventory-reservations] Shopify fulfilled <490 — voorraad afgeschreven",
         orderReference,
         ownerEmail
       );
@@ -631,7 +631,7 @@ export async function commitInventoryForMpOrder(
 }
 
 /**
- * Moneybird factuur verzonden voor Shopify-order (≥498 of zonder eerdere commit):
+ * Moneybird factuur verzonden voor Shopify-order (≥490 of zonder eerdere commit):
  * commit reserveringen i.p.v. losse factuurregels waar mogelijk.
  */
 export async function commitShopifyReservationsFromMoneybirdInvoice(
