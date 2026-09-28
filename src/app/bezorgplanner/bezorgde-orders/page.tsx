@@ -1,10 +1,10 @@
-/* eslint-disable react-hooks/exhaustive-deps */
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import Header from "@/components/Header";
 import EditableSheetTable from "@/components/EditableSheetTable";
+import ProductenCell from "@/components/ProductenCell";
 
 const BEZORGDE_ORDERS_HEADERS = [
   "Order Nummer",
@@ -34,6 +34,7 @@ export default function BezorgdeOrdersPage() {
     betaald_bedrag: number | null;
     afgerond_at: string | null;
     producten: string | null;
+    line_items_json?: string | null;
     bestelling_totaal_prijs: number | null;
     volledig_adres: string | null;
     telefoon_nummer: string | null;
@@ -72,13 +73,15 @@ export default function BezorgdeOrdersPage() {
     fetchOrders();
   }, [fetchOrders]);
 
-  const tableRows = useMemo(() => {
-    const sortedOrders = [...orders].sort((a, b) => {
+  const sortedOrders = useMemo(() => {
+    return [...orders].sort((a, b) => {
       const aTime = a.afgerond_at ? new Date(a.afgerond_at).getTime() : 0;
       const bTime = b.afgerond_at ? new Date(b.afgerond_at).getTime() : 0;
       return bTime - aTime;
     });
+  }, [orders]);
 
+  const tableRows = useMemo(() => {
     return sortedOrders.map((o) => [
       o.order_nummer ?? "",
       o.naam ?? "",
@@ -105,7 +108,30 @@ export default function BezorgdeOrdersPage() {
       o.betaalmethode ?? "",
       o.telefoon_e164 ?? "",
     ]);
-  }, [orders]);
+  }, [sortedOrders]);
+
+  const cellRenderers = useMemo(
+    () => ({
+      "Product(en)": (rowIndex: number) => {
+        const order = sortedOrders[rowIndex];
+        if (!order) {
+          return <span className="block px-2 py-1.5 text-sm text-stone-300">—</span>;
+        }
+        return (
+          <ProductenCell
+            value={String(order.producten ?? "")}
+            lineItemsJson={order.line_items_json ?? null}
+            bestellingTotaalPrijs={
+              typeof order.bestelling_totaal_prijs === "number"
+                ? order.bestelling_totaal_prijs
+                : null
+            }
+          />
+        );
+      },
+    }),
+    [sortedOrders]
+  );
 
   return (
     <>
@@ -138,6 +164,7 @@ export default function BezorgdeOrdersPage() {
               headers={BEZORGDE_ORDERS_HEADERS}
               initialData={tableRows}
               dataRowCount={orders.length}
+              cellRenderers={cellRenderers}
             />
           )}
         </div>

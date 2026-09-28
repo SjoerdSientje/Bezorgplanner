@@ -5,6 +5,7 @@ import Link from "next/link";
 import Header from "@/components/Header";
 import EditableSheetTable from "@/components/EditableSheetTable";
 import AankoopbewijsCell from "@/components/AankoopbewijsCell";
+import ProductenCell from "@/components/ProductenCell";
 
 const HEADERS = [
   "Order Nummer",
@@ -34,6 +35,7 @@ type MpOrder = {
   datum: string | null;
   telefoon_nummer: string | null;
   producten: string | null;
+  line_items_json?: string | null;
   bestelling_totaal_prijs: number | null;
   volledig_adres: string | null;
   email: string | null;
@@ -106,6 +108,23 @@ export default function MpOrdersClient() {
 
   const cellRenderers = useMemo(
     () => ({
+      "Product(en)": (rowIndex: number) => {
+        const order = sortedOrders[rowIndex];
+        if (!order) {
+          return <span className="block px-2 py-1.5 text-sm text-stone-300">—</span>;
+        }
+        return (
+          <ProductenCell
+            value={String(order.producten ?? "")}
+            lineItemsJson={order.line_items_json ?? null}
+            bestellingTotaalPrijs={
+              typeof order.bestelling_totaal_prijs === "number"
+                ? order.bestelling_totaal_prijs
+                : null
+            }
+          />
+        );
+      },
       "Link Aankoopbewijs": (rowIndex: number) => {
         const order = sortedOrders[rowIndex];
         if (!order?.id) return <span className="block px-2 py-1.5 text-sm text-stone-300">—</span>;
