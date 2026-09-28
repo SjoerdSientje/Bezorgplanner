@@ -149,16 +149,19 @@ function getSpecialServiceProduct(order: ShopifyOrder): string {
   return parseSpecialServiceFromLineItems(order);
 }
 
-/** Onderhoudspakket brons/zilver/goud — geen fysiek product voor de pakketjes-paklijst. */
+/** Onderhoudspakket (brons/zilver/goud e.d.) — geen fysiek product voor de pakketjes-paklijst. */
 export function isOnderhoudspakketLineName(name: string): boolean {
   const n = String(name ?? "")
     .toLowerCase()
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
+    // Emoji's (🥇🥈🥉) en overige symbolen weg — titles zoals "Onderhoudspakket Bronze 🥉".
+    .replace(/[^a-z0-9\s\-_/]/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
-  if (!n.includes("onderhoudspakket")) return false;
-  return /(goud|zilver|brons|bronze)/.test(n);
+  if (!n) return false;
+  // "onderhoudspakket", "onderhouds pakket", "onderhoud-pakket"
+  return /onderhouds?\s*-?\s*pakket/.test(n);
 }
 
 /**
@@ -191,8 +194,8 @@ export function qualifiesForPakketjes(order: ShopifyOrder): boolean {
   const physicalLines = lineItems.filter(
     (li) => !isOnderhoudspakketLineName(String(li.name ?? ""))
   );
-  // Alleen onderhoudspakket(ten) → geen pakketjes-wachtrij.
-  if (lineItems.length > 0 && physicalLines.length === 0 && !qualifiesBySpecialService) {
+  // Alleen onderhoudspakket(ten) of geen fysieke regels → geen pakketjes-wachtrij.
+  if (physicalLines.length === 0 && !qualifiesBySpecialService) {
     return false;
   }
   return true;

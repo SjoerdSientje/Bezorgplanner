@@ -25,6 +25,9 @@ export type PakketjesDbRow = {
 export function buildPakketjesRow(order: ShopifyOrder, ownerEmail: string): PakketjesDbRow | null {
   const shopifyOrderId = String(order.id ?? "").trim();
   if (!shopifyOrderId) return null;
+  const items = extractPakketjesLineItems(order);
+  // Geen fysieke producten (bijv. alleen onderhoudspakket) → niet opslaan.
+  if (items.length === 0) return null;
   const total = parseFloat(String(order.total_price ?? 0));
   const created = shopifyOrderCreatedAt(order);
   return {
@@ -33,7 +36,7 @@ export function buildPakketjesRow(order: ShopifyOrder, ownerEmail: string): Pakk
     order_nummer: String(order.name ?? ""),
     naam: pakketjesCustomerName(order),
     adres: shopifyOrderDisplayAdres(order),
-    items: extractPakketjesLineItems(order),
+    items,
     totaal_prijs: Number.isFinite(total) ? total : 0,
     fulfillment_status: order.fulfillment_status ?? null,
     shopify_created_at: created.toISOString(),

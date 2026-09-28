@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { requireAccountEmail } from "@/lib/account";
 import { syncPakketjesForOwner } from "@/lib/pakketjes-sync";
-import { PAKKETJES_MAX_PRIJS } from "@/lib/shopify-order";
+import { isOnderhoudspakketLineName, PAKKETJES_MAX_PRIJS } from "@/lib/shopify-order";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -30,6 +30,8 @@ function normalizeItems(raw: unknown): PakketjesItem[] {
     const o = x as Record<string, unknown>;
     const name = String(o.name ?? "").trim();
     if (!name) continue;
+    // Defensief: strip onderhoudspakketten ook uit oude DB-regels.
+    if (isOnderhoudspakketLineName(name)) continue;
     const quantity = Math.max(1, Number(o.quantity ?? 1) || 1);
     out.push({ name, quantity });
   }
@@ -97,7 +99,7 @@ export async function GET(request: NextRequest) {
       return (Number.isFinite(ta) ? ta : 0) - (Number.isFinite(tb) ? tb : 0);
     });
 
-    const orders = list.map((r) => {
+    const ordersRaw = list.map((r) => {
       const items = normalizeItems(r.items);
       return {
         id: r.id,
@@ -111,6 +113,13 @@ export async function GET(request: NextRequest) {
         items,
       };
     });
+
+    // Orders die na strip alleen onderhoudspakket hadden → verbergen én uit DB opruimen.
+    const emptyIds = ordersRaw.filter((o) => o.items.length === 0).map((o) => o.id);
+    if (emptyIds.length > 0) {
+      void supabase.from("pakketjes_orders").delete().in("id", emptyIds);
+    }
+    const orders = ordersRaw.filter((o) => o.items.length > 0);
 
     const counts = new Map<string, number>();
     for (const o of orders) {

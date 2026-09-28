@@ -4,9 +4,6 @@ import {
   passesRitjesFilter,
   mapShopifyOrderToRitjesRow,
   qualifiesForPakketjes,
-  pakketjesCustomerName,
-  extractPakketjesLineItems,
-  shopifyOrderDisplayAdres,
   shopifyOrderCreatedAt,
   ritjesShopifyRelevantFieldsEqual,
   pakketjesShopifyRelevantFieldsEqual,
@@ -14,6 +11,7 @@ import {
   buildShopifyRitjesUpdatePayload,
   type ShopifyOrder,
 } from "@/lib/shopify-order";
+import { buildPakketjesRow } from "@/lib/pakketjes-sync";
 import {
   allAccountEmails,
   getInventoryScanOwnerEmail,
@@ -406,18 +404,14 @@ export async function POST(request: NextRequest) {
         }
 
         if (qualifiesForPakketjes(order)) {
-          const total = parseFloat(String(order.total_price ?? 0));
-          const row = {
-            owner_email: ownerEmail,
-            shopify_order_id: shopifyOrderId,
-            order_nummer: String(order.name ?? ""),
-            naam: pakketjesCustomerName(order),
-            adres: shopifyOrderDisplayAdres(order),
-            items: extractPakketjesLineItems(order),
-            totaal_prijs: total,
-            fulfillment_status: order.fulfillment_status ?? null,
-            shopify_created_at: shopifyOrderCreatedAt(order).toISOString(),
-          };
+          const built = buildPakketjesRow(order, ownerEmail);
+          if (!built) {
+            if (existingPakket?.id) {
+              await supabase.from("pakketjes_orders").delete().eq("id", existingPakket.id);
+            }
+            continue;
+          }
+          const row = built;
 
           // Create én update: upsert zodat gemiste creates (of latere kwalificatie) alsnog binnenkomen.
           if (
