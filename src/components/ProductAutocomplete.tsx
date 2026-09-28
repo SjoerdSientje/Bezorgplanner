@@ -8,6 +8,7 @@ type SearchResult = {
   stock_quantity?: number | null;
   shopify_product_id?: number;
   shopify_variant_id?: number;
+  image_url?: string | null;
 };
 
 export type ProductAutocompleteMeta = {
@@ -29,6 +30,38 @@ interface Props {
 
 const DEBOUNCE_MS = 280;
 const MIN_QUERY_LEN = 2;
+
+function SuggestionImage({ src, alt }: { src: string | null | undefined; alt: string }) {
+  const [failed, setFailed] = useState(false);
+  const url = String(src ?? "").trim();
+  if (!url || failed) {
+    return (
+      <span
+        className="flex h-14 w-14 shrink-0 items-center justify-center rounded-lg bg-stone-100 text-stone-300"
+        aria-hidden
+      >
+        <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={1.5}
+            d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+          />
+        </svg>
+      </span>
+    );
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={url}
+      alt={alt}
+      className="h-14 w-14 shrink-0 rounded-lg object-cover bg-stone-100"
+      loading="lazy"
+      onError={() => setFailed(true)}
+    />
+  );
+}
 
 export default function ProductAutocomplete({
   label,
@@ -157,7 +190,7 @@ export default function ProductAutocomplete({
         )}
 
         {showSuggestions && suggestions.length > 0 && (
-          <ul className="absolute left-0 top-full z-50 mt-1 max-h-60 w-full overflow-y-auto rounded-xl border border-stone-200 bg-white shadow-xl">
+          <ul className="absolute left-0 top-full z-50 mt-1 max-h-80 min-w-full w-max max-w-[min(36rem,calc(100vw-2rem))] overflow-y-auto rounded-xl border border-stone-200 bg-white shadow-xl">
             {suggestions.map((item, idx) => (
               <li key={`${item.shopify_variant_id ?? item.title}-${idx}`}>
                 <button
@@ -166,18 +199,23 @@ export default function ProductAutocomplete({
                     e.preventDefault();
                     selectSuggestion(item);
                   }}
-                  className={`flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left text-sm transition ${
+                  className={`flex w-full items-start gap-3 px-3 py-3 text-left transition ${
                     idx === activeIndex
                       ? "bg-koopje-orange-light text-koopje-black"
                       : "text-stone-700 hover:bg-stone-50"
                   }`}
                 >
-                  <span className="min-w-0 truncate">{item.title}</span>
-                  <span className="shrink-0 text-xs text-stone-400">
-                    {item.price != null && item.price !== "" ? `€${item.price}` : ""}
-                    {searchSource === "inventory" && item.stock_quantity != null
-                      ? ` · ${item.stock_quantity} op voorraad`
-                      : ""}
+                  <SuggestionImage src={item.image_url} alt="" />
+                  <span className="min-w-0 flex-1 pt-0.5">
+                    <span className="block whitespace-normal break-words text-sm font-medium leading-snug">
+                      {item.title}
+                    </span>
+                    <span className="mt-1 block text-xs text-stone-400">
+                      {item.price != null && item.price !== "" ? `€${item.price}` : ""}
+                      {searchSource === "inventory" && item.stock_quantity != null
+                        ? `${item.price != null && item.price !== "" ? " · " : ""}${item.stock_quantity} op voorraad`
+                        : ""}
+                    </span>
                   </span>
                 </button>
               </li>
