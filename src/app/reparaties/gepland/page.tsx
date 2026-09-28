@@ -9,6 +9,7 @@ import {
   ARBEID_UUR_PRIJS_INCL,
   arbeidPrijsIncl,
   parseStoredReparatieRegels,
+  reparatieSoortHeeftProducten,
   reparatieSoortLabel,
   type ReparatieBetaalwijze,
   type ReparatieSoort,
@@ -31,6 +32,7 @@ type OrderRow = {
   bestelling_totaal_prijs: number | null;
   reparatie_betaalwijze: ReparatieBetaalwijze | null;
   producten_nog_niet_bekend: boolean;
+  fiets_ook_opgehaald?: boolean;
   voorrij_km: number | null;
   voorrij_bedrag: number | null;
   reparatie_regels_json?: unknown;
@@ -65,6 +67,7 @@ type EditDraft = {
   datum_voorkeur: string;
   opmerking: string;
   producten_nog_niet_bekend: boolean;
+  fiets_ook_opgehaald: boolean;
   regels: DraftRegel[];
 };
 
@@ -180,10 +183,14 @@ export default function ReparatiesGeplandPage() {
 
   function startEdit(o: OrderRow) {
     const adres = splitAdres(o.volledig_adres ?? "");
+    const soort = o.type as ReparatieSoort;
     setEdit({
       id: o.id,
-      soort: o.type as ReparatieSoort,
-      betaalwijze: (o.reparatie_betaalwijze as ReparatieBetaalwijze) || "factuur",
+      soort,
+      betaalwijze:
+        soort === "reparatie_ophalen"
+          ? "contant"
+          : (o.reparatie_betaalwijze as ReparatieBetaalwijze) || "factuur",
       naam: o.naam ?? "",
       email: o.email ?? "",
       telefoonnummer: o.telefoon_nummer ?? "",
@@ -195,10 +202,18 @@ export default function ReparatiesGeplandPage() {
       datum_voorkeur: o.datum_opmerking ?? "",
       opmerking: o.opmerkingen_klant ?? "",
       producten_nog_niet_bekend: Boolean(o.producten_nog_niet_bekend),
+      fiets_ook_opgehaald:
+        soort === "reparatie_terugbrengen" && Boolean(o.fiets_ook_opgehaald),
       regels: storedToDraft(o.reparatie_regels_json),
     });
     if (o.voorrij_km != null && o.voorrij_bedrag != null) {
-      setVoorrij({ km: Number(o.voorrij_km), bedrag: Number(o.voorrij_bedrag) });
+      // Voorrij-API geeft basisbedrag; als ×2 was opgeslagen, toon basis voor preview.
+      const total = Number(o.voorrij_bedrag);
+      const basis =
+        o.fiets_ook_opgehaald && total > 0
+          ? Math.round((total / 2) * 100) / 100
+          : total;
+      setVoorrij({ km: Number(o.voorrij_km), bedrag: basis });
     } else {
       setVoorrij(null);
     }
@@ -246,7 +261,21 @@ export default function ReparatiesGeplandPage() {
     });
   }
 
-  const needsProducts = edit?.soort === "reparatie_deur" && !edit.producten_nog_niet_bekend;
+  const needsProducts =
+    edit != null &&
+    reparatieSoortHeeftProducten(edit.soort) &&
+    !edit.producten_nog_niet_bekend;
+
+  const voorrijWeergave =
+    !edit || !voorrij
+      ? null
+      : edit.soort === "reparatie_terugbrengen" && edit.fiets_ook_opgehaald
+        ? {
+            km: voorrij.km,
+            bedrag: Math.round(voorrij.bedrag * 2 * 100) / 100,
+            basis: voorrij.bedrag,
+          }
+        : { km: voorrij.km, bedrag: voorrij.bedrag, basis: voorrij.bedrag };
 
   const subtotaal = useMemo(() => {
     if (!edit || !needsProducts) return 0;
@@ -290,7 +319,8 @@ export default function ReparatiesGeplandPage() {
         body: JSON.stringify({
           id: edit.id,
           soort: edit.soort,
-          betaalwijze: edit.betaalwijze,
+          betaalwijze:
+            edit.soort === "reparatie_ophalen" ? "contant" : edit.betaalwijze,
           naam: edit.naam,
           email: edit.email,
           telefoonnummer: edit.telefoonnummer,
@@ -301,7 +331,11 @@ export default function ReparatiesGeplandPage() {
           bezorgtijd_voorkeur: edit.bezorgtijd_voorkeur,
           datum_voorkeur: edit.datum_voorkeur,
           opmerking: edit.opmerking,
-          producten_nog_niet_bekend: edit.producten_nog_niet_bekend,
+          producten_nog_niet_bekend:
+            reparatieSoortHeeftProducten(edit.soort) &&
+            edit.producten_nog_niet_bekend,
+          fiets_ook_opgehaald:
+            edit.soort === "reparatie_terugbrengen" && edit.fiets_ook_opgehaald,
           regels: payloadRegels,
         }),
       });
@@ -352,9 +386,14 @@ export default function ReparatiesGeplandPage() {
                     <p className="text-sm text-koopje-black/70">{o.naam}</p>
                     <p className="text-sm text-koopje-black/50">{o.volledig_adres}</p>
                     <p className="mt-1 text-xs text-koopje-black/50">
-                      {o.reparatie_betaalwijze === "contant" ? "Contant" : "Factuur"}
+                      {o.type === "reparatie_ophalen"
+                        ? "Geen factuur"
+                        : o.reparatie_betaalwijze === "contant"
+                          ? "Contant"
+                          : "Factuur"}
                       {" · "}€{Number(o.bestelling_totaal_prijs ?? 0).toFixed(2)}
                       {o.producten_nog_niet_bekend ? " · producten onbekend" : ""}
+                      {o.fiets_ook_opgehaald ? " · ook opgehaald" : ""}
                       {" · "}
                       {o.status}
                     </p>
@@ -391,9 +430,14 @@ export default function ReparatiesGeplandPage() {
                         setEdit({
                           ...edit,
                           soort,
-                          producten_nog_niet_bekend:
-                            soort === "reparatie_deur"
-                              ? edit.producten_nog_niet_bekend
+                          betaalwijze:
+                            soort === "reparatie_ophalen" ? "contant" : edit.betaalwijze,
+                          producten_nog_niet_bekend: reparatieSoortHeeftProducten(soort)
+                            ? edit.producten_nog_niet_bekend
+                            : false,
+                          fiets_ook_opgehaald:
+                            soort === "reparatie_terugbrengen"
+                              ? edit.fiets_ook_opgehaald
                               : false,
                         });
                       }}
@@ -403,22 +447,29 @@ export default function ReparatiesGeplandPage() {
                       <option value="reparatie_terugbrengen">Terugbrengen</option>
                     </select>
                   </label>
-                  <label className="block">
-                    Betaling
-                    <select
-                      className="mt-1 w-full rounded border px-2 py-2"
-                      value={edit.betaalwijze}
-                      onChange={(e) =>
-                        setEdit({
-                          ...edit,
-                          betaalwijze: e.target.value as ReparatieBetaalwijze,
-                        })
-                      }
-                    >
-                      <option value="factuur">Factuur</option>
-                      <option value="contant">Contant</option>
-                    </select>
-                  </label>
+                  {edit.soort !== "reparatie_ophalen" && (
+                    <label className="block">
+                      Betaling
+                      <select
+                        className="mt-1 w-full rounded border px-2 py-2"
+                        value={edit.betaalwijze}
+                        onChange={(e) =>
+                          setEdit({
+                            ...edit,
+                            betaalwijze: e.target.value as ReparatieBetaalwijze,
+                          })
+                        }
+                      >
+                        <option value="factuur">Factuur</option>
+                        <option value="contant">Contant</option>
+                      </select>
+                    </label>
+                  )}
+                  {edit.soort === "reparatie_ophalen" && (
+                    <p className="rounded-lg bg-stone-50 px-3 py-2 text-xs text-koopje-black/60">
+                      Ophalen-orders krijgen geen factuur.
+                    </p>
+                  )}
                   <label className="block">
                     Naam
                     <input
@@ -467,15 +518,43 @@ export default function ReparatiesGeplandPage() {
                   <div className="rounded-lg bg-stone-50 px-3 py-2 text-xs text-koopje-black/70">
                     {voorrijLoading
                       ? "Voorrijkosten berekenen…"
-                      : voorrij
-                        ? `Afstand ≈ ${voorrij.km} km · Voorrijkosten €${voorrij.bedrag.toFixed(2)}`
+                      : voorrijWeergave
+                        ? edit.soort === "reparatie_terugbrengen" &&
+                          edit.fiets_ook_opgehaald
+                          ? `Afstand ≈ ${voorrijWeergave.km} km · Voorrijkosten ophalen + terugbrengen €${voorrijWeergave.bedrag.toFixed(2)} (2 × €${voorrijWeergave.basis.toFixed(2)})`
+                          : `Afstand ≈ ${voorrijWeergave.km} km · Voorrijkosten €${voorrijWeergave.bedrag.toFixed(2)}`
                         : "Vul een adres in voor automatische voorrijkosten."}
-                    {needsProducts && (
+                    {(needsProducts || voorrijWeergave) && (
                       <span className="ml-2 font-medium">
-                        · Totaal ≈ €{(subtotaal + (voorrij?.bedrag ?? 0)).toFixed(2)}
+                        · Totaal ≈ €
+                        {(subtotaal + (voorrijWeergave?.bedrag ?? 0)).toFixed(2)}
                       </span>
                     )}
                   </div>
+
+                  {edit.soort === "reparatie_terugbrengen" && (
+                    <label className="flex items-start gap-2 rounded-xl border border-koopje-orange/30 bg-koopje-orange-light/30 px-3 py-3 text-sm">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={edit.fiets_ook_opgehaald}
+                        onChange={(e) =>
+                          setEdit({
+                            ...edit,
+                            fiets_ook_opgehaald: e.target.checked,
+                          })
+                        }
+                      />
+                      <span>
+                        <span className="font-medium text-koopje-black">
+                          Fiets is ook opgehaald
+                        </span>
+                        <span className="mt-0.5 block text-koopje-black/60">
+                          Voorrijkosten ×2 op de factuur (ophalen + terugbrengen).
+                        </span>
+                      </span>
+                    </label>
+                  )}
 
                   <label className="block">
                     Bezorgtijd voorkeur
@@ -509,7 +588,7 @@ export default function ReparatiesGeplandPage() {
                     />
                   </label>
 
-                  {edit.soort === "reparatie_deur" && (
+                  {reparatieSoortHeeftProducten(edit.soort) && (
                     <section className="space-y-3 rounded-xl border border-koopje-black/10 p-3">
                       <label className="flex items-center gap-2">
                         <input

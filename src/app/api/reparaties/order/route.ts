@@ -9,6 +9,7 @@ import {
   calcVoorrijkostenForAddress,
   listReparatieStandaardItems,
   productenTekstFromLineItems,
+  reparatieSoortHeeftProducten,
   stripVoorrijFromRegels,
   sumLineItemsIncl,
   type ReparatieBetaalwijze,
@@ -112,8 +113,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Ongeldig type." }, { status: 400 });
     }
 
-    const betaalwijze = String(body.betaalwijze ?? "") as ReparatieBetaalwijze;
-    if (!["contant", "factuur"].includes(betaalwijze)) {
+    // Ophalen: nooit factuur — geen betaalkeuze.
+    let betaalwijze = String(body.betaalwijze ?? "") as ReparatieBetaalwijze;
+    if (soort === "reparatie_ophalen") {
+      betaalwijze = "contant";
+    } else if (!["contant", "factuur"].includes(betaalwijze)) {
       return NextResponse.json(
         { error: "Kies contant of factuur." },
         { status: 400 }
@@ -139,8 +143,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const fietsOokOpgehaald =
+      soort === "reparatie_terugbrengen" && Boolean(body.fiets_ook_opgehaald);
+
     const productenNogNietBekend =
-      soort === "reparatie_deur" && Boolean(body.producten_nog_niet_bekend);
+      reparatieSoortHeeftProducten(soort) && Boolean(body.producten_nog_niet_bekend);
 
     const standaardItems = await listReparatieStandaardItems(supabase, ownerEmail, {
       includeInactive: true,
@@ -188,20 +195,36 @@ export async function POST(request: NextRequest) {
         volledigAdres
       );
       voorrijKm = vr.km;
-      voorrijBedrag = vr.bedrag;
-      if (voorrijBedrag >= 0.01) {
-        expanded.push({
-          kind: "voorrijkosten",
-          naam: "Voorrijkosten",
-          voorrij_bedrag: voorrijBedrag,
-        });
+      const basisBedrag = vr.bedrag;
+      if (basisBedrag >= 0.01) {
+        if (fietsOokOpgehaald) {
+          // Ophalen + terugbrengen: tarief ×2 als twee factuurregels.
+          expanded.push({
+            kind: "voorrijkosten",
+            naam: "Voorrijkosten ophalen",
+            voorrij_bedrag: basisBedrag,
+          });
+          expanded.push({
+            kind: "voorrijkosten",
+            naam: "Voorrijkosten terugbrengen",
+            voorrij_bedrag: basisBedrag,
+          });
+          voorrijBedrag = Math.round(basisBedrag * 2 * 100) / 100;
+        } else {
+          expanded.push({
+            kind: "voorrijkosten",
+            naam: "Voorrijkosten",
+            voorrij_bedrag: basisBedrag,
+          });
+          voorrijBedrag = basisBedrag;
+        }
       }
     } catch (err) {
       console.warn("[reparaties] voorrijkosten berekening:", err);
     }
 
     if (
-      soort === "reparatie_deur" &&
+      reparatieSoortHeeftProducten(soort) &&
       !productenNogNietBekend &&
       expanded.filter((r) => r.kind !== "voorrijkosten").length === 0
     ) {
@@ -276,6 +299,7 @@ export async function POST(request: NextRequest) {
       betaalmethode: null,
       reparatie_betaalwijze: betaalwijze,
       producten_nog_niet_bekend: productenNogNietBekend,
+      fiets_ook_opgehaald: fietsOokOpgehaald,
       voorrij_km: voorrijKm,
       voorrij_bedrag: voorrijBedrag,
       reparatie_regels_json: productenNogNietBekend
@@ -295,7 +319,11 @@ export async function POST(request: NextRequest) {
     if (error) throw new Error(error.message);
 
     let moneybirdInvoiceId: string | null = null;
-    if (betaalwijze === "factuur" && !productenNogNietBekend) {
+    if (
+      soort !== "reparatie_ophalen" &&
+      betaalwijze === "factuur" &&
+      !productenNogNietBekend
+    ) {
       const { first, last } = splitName(naam);
       try {
         const inv = await upsertReparatieSalesInvoice({
@@ -368,9 +396,12 @@ export async function PATCH(request: NextRequest) {
 
     const soort = (String(body.soort ?? existing.type) ||
       existing.type) as ReparatieSoort;
-    const betaalwijze = String(
+    let betaalwijze = String(
       body.betaalwijze ?? existing.reparatie_betaalwijze ?? "factuur"
     ) as ReparatieBetaalwijze;
+    if (soort === "reparatie_ophalen") {
+      betaalwijze = "contant";
+    }
 
     const naam = String(body.naam ?? existing.naam ?? "").trim();
     const email = String(body.email ?? existing.email ?? "")
@@ -391,8 +422,14 @@ export async function PATCH(request: NextRequest) {
       volledigAdres = String(existing.volledig_adres ?? "").trim();
     }
 
+    const fietsOokOpgehaald =
+      soort === "reparatie_terugbrengen" &&
+      (body.fiets_ook_opgehaald != null
+        ? Boolean(body.fiets_ook_opgehaald)
+        : Boolean(existing.fiets_ook_opgehaald));
+
     const productenNogNietBekend =
-      soort === "reparatie_deur" &&
+      reparatieSoortHeeftProducten(soort) &&
       (body.producten_nog_niet_bekend != null
         ? Boolean(body.producten_nog_niet_bekend)
         : Boolean(existing.producten_nog_niet_bekend));
@@ -444,17 +481,75 @@ export async function PATCH(request: NextRequest) {
           volledigAdres
         );
         voorrijKm = vr.km;
-        voorrijBedrag = vr.bedrag;
+        const basisBedrag = vr.bedrag;
+        if (basisBedrag >= 0.01) {
+          if (fietsOokOpgehaald) {
+            expanded.push({
+              kind: "voorrijkosten",
+              naam: "Voorrijkosten ophalen",
+              voorrij_bedrag: basisBedrag,
+            });
+            expanded.push({
+              kind: "voorrijkosten",
+              naam: "Voorrijkosten terugbrengen",
+              voorrij_bedrag: basisBedrag,
+            });
+            voorrijBedrag = Math.round(basisBedrag * 2 * 100) / 100;
+          } else {
+            expanded.push({
+              kind: "voorrijkosten",
+              naam: "Voorrijkosten",
+              voorrij_bedrag: basisBedrag,
+            });
+            voorrijBedrag = basisBedrag;
+          }
+        } else {
+          voorrijBedrag = basisBedrag;
+        }
       } catch {
-        /* keep existing */
+        /* keep existing — alsnog voorrij-regel toevoegen indien bekend */
+        if (voorrijBedrag != null && voorrijBedrag >= 0.01) {
+          if (fietsOokOpgehaald) {
+            const half = Math.round((voorrijBedrag / 2) * 100) / 100;
+            expanded.push({
+              kind: "voorrijkosten",
+              naam: "Voorrijkosten ophalen",
+              voorrij_bedrag: half,
+            });
+            expanded.push({
+              kind: "voorrijkosten",
+              naam: "Voorrijkosten terugbrengen",
+              voorrij_bedrag: half,
+            });
+          } else {
+            expanded.push({
+              kind: "voorrijkosten",
+              naam: "Voorrijkosten",
+              voorrij_bedrag: voorrijBedrag,
+            });
+          }
+        }
       }
-    }
-    if (voorrijBedrag != null && voorrijBedrag >= 0.01) {
-      expanded.push({
-        kind: "voorrijkosten",
-        naam: "Voorrijkosten",
-        voorrij_bedrag: voorrijBedrag,
-      });
+    } else if (voorrijBedrag != null && voorrijBedrag >= 0.01) {
+      if (fietsOokOpgehaald) {
+        const half = Math.round((voorrijBedrag / 2) * 100) / 100;
+        expanded.push({
+          kind: "voorrijkosten",
+          naam: "Voorrijkosten ophalen",
+          voorrij_bedrag: half,
+        });
+        expanded.push({
+          kind: "voorrijkosten",
+          naam: "Voorrijkosten terugbrengen",
+          voorrij_bedrag: half,
+        });
+      } else {
+        expanded.push({
+          kind: "voorrijkosten",
+          naam: "Voorrijkosten",
+          voorrij_bedrag: voorrijBedrag,
+        });
+      }
     }
 
     const lineItems = productenNogNietBekend
@@ -507,6 +602,7 @@ export async function PATCH(request: NextRequest) {
       bestelling_totaal_prijs: Math.round(totaal * 100) / 100,
       reparatie_betaalwijze: betaalwijze,
       producten_nog_niet_bekend: productenNogNietBekend,
+      fiets_ook_opgehaald: fietsOokOpgehaald,
       voorrij_km: voorrijKm,
       voorrij_bedrag: voorrijBedrag,
       reparatie_regels_json: productenNogNietBekend
@@ -526,7 +622,11 @@ export async function PATCH(request: NextRequest) {
 
     let moneybirdInvoiceId = existing.moneybird_invoice_id as string | null;
 
-    if (betaalwijze === "contant" || productenNogNietBekend) {
+    if (
+      soort === "reparatie_ophalen" ||
+      betaalwijze === "contant" ||
+      productenNogNietBekend
+    ) {
       try {
         await deleteReparatieSalesInvoice({
           orderId,

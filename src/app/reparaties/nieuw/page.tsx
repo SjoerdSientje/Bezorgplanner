@@ -9,6 +9,7 @@ import ProductAutocomplete from "@/components/ProductAutocomplete";
 import {
   ARBEID_UUR_PRIJS_INCL,
   arbeidPrijsIncl,
+  reparatieSoortHeeftProducten,
   type ReparatieBetaalwijze,
   type ReparatieSoort,
   type ReparatieStandaardItem,
@@ -37,6 +38,7 @@ export default function ReparatieNieuwPage() {
   const [soort, setSoort] = useState<ReparatieSoort>("reparatie_deur");
   const [betaalwijze, setBetaalwijze] = useState<ReparatieBetaalwijze>("factuur");
   const [productenOnbekend, setProductenOnbekend] = useState(false);
+  const [fietsOokOpgehaald, setFietsOokOpgehaald] = useState(false);
 
   const [naam, setNaam] = useState("");
   const [email, setEmail] = useState("");
@@ -56,7 +58,8 @@ export default function ReparatieNieuwPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const needsProducts = soort === "reparatie_deur" && !productenOnbekend;
+  const needsProducts = reparatieSoortHeeftProducten(soort) && !productenOnbekend;
+  const showBetaling = soort !== "reparatie_ophalen";
 
   useEffect(() => {
     void fetch("/api/reparaties/prijslijst")
@@ -97,6 +100,17 @@ export default function ReparatieNieuwPage() {
     return () => clearTimeout(t);
   }, [refreshVoorrij]);
 
+  const voorrijWeergave =
+    voorrij == null
+      ? null
+      : soort === "reparatie_terugbrengen" && fietsOokOpgehaald
+        ? {
+            km: voorrij.km,
+            bedrag: Math.round(voorrij.bedrag * 2 * 100) / 100,
+            basis: voorrij.bedrag,
+          }
+        : { km: voorrij.km, bedrag: voorrij.bedrag, basis: voorrij.bedrag };
+
   const subtotaalRegels = useMemo(() => {
     if (!needsProducts) return 0;
     return regels.reduce((sum, r) => {
@@ -106,7 +120,7 @@ export default function ReparatieNieuwPage() {
     }, 0);
   }, [regels, needsProducts]);
 
-  const totaal = subtotaalRegels + (voorrij?.bedrag ?? 0);
+  const totaal = subtotaalRegels + (voorrijWeergave?.bedrag ?? 0);
 
   function addStandaardRegel(id: string) {
     const s = standaard.find((i) => i.id === id);
@@ -175,8 +189,11 @@ export default function ReparatieNieuwPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           soort,
-          betaalwijze,
-          producten_nog_niet_bekend: productenOnbekend && soort === "reparatie_deur",
+          betaalwijze: soort === "reparatie_ophalen" ? "contant" : betaalwijze,
+          producten_nog_niet_bekend:
+            productenOnbekend && reparatieSoortHeeftProducten(soort),
+          fiets_ook_opgehaald:
+            soort === "reparatie_terugbrengen" && fietsOokOpgehaald,
           naam,
           email,
           telefoonnummer: telefoon,
@@ -232,7 +249,12 @@ export default function ReparatieNieuwPage() {
                     type="button"
                     onClick={() => {
                       setSoort(value);
-                      if (value !== "reparatie_deur") setProductenOnbekend(false);
+                      if (!reparatieSoortHeeftProducten(value)) {
+                        setProductenOnbekend(false);
+                      }
+                      if (value !== "reparatie_terugbrengen") {
+                        setFietsOokOpgehaald(false);
+                      }
                     }}
                     className={`rounded-full px-3 py-1.5 text-sm ${
                       soort === value
@@ -246,30 +268,38 @@ export default function ReparatieNieuwPage() {
               </div>
             </fieldset>
 
-            <fieldset>
-              <legend className="text-sm font-medium text-koopje-black">Betaling</legend>
-              <div className="mt-2 flex gap-2">
-                {(
-                  [
-                    ["factuur", "Factuur (Moneybird concept)"],
-                    ["contant", "Contant (geen factuur)"],
-                  ] as const
-                ).map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => setBetaalwijze(value)}
-                    className={`rounded-full px-3 py-1.5 text-sm ${
-                      betaalwijze === value
-                        ? "bg-koopje-orange text-white"
-                        : "bg-stone-100 text-koopje-black"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </fieldset>
+            {showBetaling && (
+              <fieldset>
+                <legend className="text-sm font-medium text-koopje-black">Betaling</legend>
+                <div className="mt-2 flex gap-2">
+                  {(
+                    [
+                      ["factuur", "Factuur (Moneybird concept)"],
+                      ["contant", "Contant (geen factuur)"],
+                    ] as const
+                  ).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setBetaalwijze(value)}
+                      className={`rounded-full px-3 py-1.5 text-sm ${
+                        betaalwijze === value
+                          ? "bg-koopje-orange text-white"
+                          : "bg-stone-100 text-koopje-black"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </fieldset>
+            )}
+
+            {soort === "reparatie_ophalen" && (
+              <p className="rounded-lg bg-stone-50 px-3 py-2 text-sm text-koopje-black/60">
+                Ophalen-orders krijgen geen factuur.
+              </p>
+            )}
 
             <label className="block text-sm">
               Naam *
@@ -315,10 +345,29 @@ export default function ReparatieNieuwPage() {
             <div className="rounded-lg bg-stone-50 px-3 py-2 text-sm text-koopje-black/70">
               {voorrijLoading
                 ? "Voorrijkosten berekenen…"
-                : voorrij
-                  ? `Afstand ≈ ${voorrij.km} km · Voorrijkosten €${voorrij.bedrag.toFixed(2)}`
+                : voorrijWeergave
+                  ? soort === "reparatie_terugbrengen" && fietsOokOpgehaald
+                    ? `Afstand ≈ ${voorrijWeergave.km} km · Voorrijkosten ophalen + terugbrengen €${voorrijWeergave.bedrag.toFixed(2)} (2 × €${voorrijWeergave.basis.toFixed(2)})`
+                    : `Afstand ≈ ${voorrijWeergave.km} km · Voorrijkosten €${voorrijWeergave.bedrag.toFixed(2)}`
                   : "Vul een adres in voor automatische voorrijkosten."}
             </div>
+
+            {soort === "reparatie_terugbrengen" && (
+              <label className="flex items-start gap-2 rounded-xl border border-koopje-orange/30 bg-koopje-orange-light/30 px-3 py-3 text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={fietsOokOpgehaald}
+                  onChange={(e) => setFietsOokOpgehaald(e.target.checked)}
+                />
+                <span>
+                  <span className="font-medium text-koopje-black">Fiets is ook opgehaald</span>
+                  <span className="mt-0.5 block text-koopje-black/60">
+                    Voorrijkosten ×2 op de factuur (ophalen + terugbrengen).
+                  </span>
+                </span>
+              </label>
+            )}
 
             <label className="block text-sm">
               Bezorgtijd voorkeur
@@ -348,7 +397,7 @@ export default function ReparatieNieuwPage() {
               />
             </label>
 
-            {soort === "reparatie_deur" && (
+            {reparatieSoortHeeftProducten(soort) && (
               <section className="space-y-3 rounded-xl border border-koopje-black/10 p-4">
                 <h2 className="text-sm font-medium text-koopje-black">Producten / arbeid</h2>
                 <label className="flex items-center gap-2 text-sm">

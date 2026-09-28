@@ -14,6 +14,11 @@ export const ARBEID_UUR_PRIJS_INCL = 49.05;
 export type ReparatieSoort = "reparatie_deur" | "reparatie_ophalen" | "reparatie_terugbrengen";
 export type ReparatieBetaalwijze = "contant" | "factuur";
 
+/** Productregels (Shopify + arbeid) gelden voor aan-huis én terugbrengen. */
+export function reparatieSoortHeeftProducten(soort: ReparatieSoort): boolean {
+  return soort === "reparatie_deur" || soort === "reparatie_terugbrengen";
+}
+
 export type ReparatieStandaardItem = {
   id: string;
   owner_email: string;
@@ -88,7 +93,7 @@ export function buildReparatieShopifyLineItems(regels: ReparatieRegelInput[]): S
       const bedrag = Number(r.voorrij_bedrag ?? 0);
       if (bedrag < 0.01) continue;
       out.push({
-        name: "Voorrijkosten",
+        name: String(r.naam ?? "Voorrijkosten").trim() || "Voorrijkosten",
         price: bedrag,
         quantity: 1,
         properties: [],
