@@ -332,6 +332,33 @@ export default function MarktplaatsGeplandClient() {
     );
   }
 
+  async function deleteOrder(o: OrderRow) {
+    const label = o.order_nummer || o.naam || "deze order";
+    if (
+      !confirm(
+        `Order ${label} definitief verwijderen?\n\nDit haalt de order uit ritjes/gepland en draait voorraadreserveringen terug.\nDit kan niet ongedaan worden gemaakt.`
+      )
+    ) {
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/orders/${o.id}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Verwijderen mislukt");
+      if (edit?.id === o.id) {
+        setEdit(null);
+        setConfirmOpen(false);
+      }
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Verwijderen mislukt");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function saveEdit() {
     if (!edit) return;
     if (!edit.naam.trim()) {
@@ -444,13 +471,23 @@ export default function MarktplaatsGeplandClient() {
                     </p>
                   )}
                 </div>
-                <button
-                  type="button"
-                  onClick={() => startEdit(o)}
-                  className="shrink-0 rounded-xl border border-koopje-black/15 px-4 py-2 text-sm font-medium text-koopje-black transition hover:border-koopje-orange hover:text-koopje-orange"
-                >
-                  Bewerken
-                </button>
+                <div className="flex shrink-0 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => startEdit(o)}
+                    className="rounded-xl border border-koopje-black/15 px-4 py-2 text-sm font-medium text-koopje-black transition hover:border-koopje-orange hover:text-koopje-orange"
+                  >
+                    Bewerken
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void deleteOrder(o)}
+                    disabled={saving}
+                    className="rounded-xl border border-red-200 px-4 py-2 text-sm font-medium text-red-700 transition hover:bg-red-50 disabled:opacity-50"
+                  >
+                    Verwijderen
+                  </button>
+                </div>
               </li>
             ))}
           </ul>

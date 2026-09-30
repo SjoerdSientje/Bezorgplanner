@@ -273,7 +273,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Reparatie aan huis: bij afronden factuur versturen + voorraad afschrijven
-    // (niet bij omzetting naar ophalen).
+    // (niet bij omzetting naar ophalen). Terugbrengen: factuur/voorraad al bij aanmaken.
     if (order.type === "reparatie_deur" && !convertedToOphalen) {
       if (reparatieWilFactuur && reparatieInvoiceId) {
         try {

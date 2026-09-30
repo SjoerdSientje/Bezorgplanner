@@ -213,6 +213,37 @@ export default function ReparatiesGeplandPage() {
     return () => clearTimeout(t);
   }, [edit, volledigAdres]);
 
+  async function deleteOrder(o: OrderRow) {
+    const label = o.order_nummer || o.naam || "deze order";
+    const factuurHint =
+      o.reparatie_betaalwijze === "factuur"
+        ? " Eventuele conceptfactuur wordt ook verwijderd."
+        : "";
+    if (
+      !confirm(
+        `Order ${label} definitief verwijderen?\n\nDit haalt de order uit ritjes/gepland.${factuurHint}\nDit kan niet ongedaan worden gemaakt.`
+      )
+    ) {
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/orders/${o.id}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Verwijderen mislukt");
+      if (edit?.id === o.id) {
+        setEdit(null);
+        setConfirmOpen(false);
+      }
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Verwijderen mislukt");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function startEdit(o: OrderRow) {
     const adres = splitAdres(o.volledig_adres ?? "");
     const soort = o.type as ReparatieSoort;
@@ -446,13 +477,23 @@ export default function ReparatiesGeplandPage() {
                       </pre>
                     )}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => startEdit(o)}
-                    className="rounded-lg border border-koopje-black/20 px-3 py-1.5 text-sm"
-                  >
-                    Bewerken
-                  </button>
+                  <div className="flex shrink-0 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => startEdit(o)}
+                      className="rounded-lg border border-koopje-black/20 px-3 py-1.5 text-sm"
+                    >
+                      Bewerken
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void deleteOrder(o)}
+                      disabled={saving}
+                      className="rounded-lg border border-red-200 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 disabled:opacity-50"
+                    >
+                      Verwijderen
+                    </button>
+                  </div>
                 </div>
               </li>
             ))}

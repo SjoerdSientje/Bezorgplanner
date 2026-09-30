@@ -368,7 +368,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Terugbrengen: factuur meteen versturen + voorraad afschrijven (ook bij contant).
+    // Terugbrengen: bij aanmaken factuur meteen versturen + voorraad afschrijven.
     if (soort === "reparatie_terugbrengen" && !productenNogNietBekend) {
       if (betaalwijze === "factuur" && moneybirdInvoiceId) {
         try {
@@ -668,7 +668,10 @@ export async function PATCH(request: NextRequest) {
 
     let moneybirdInvoiceId = existing.moneybird_invoice_id as string | null;
 
-    if (
+    // Terugbrengen: bij bewerken geen nieuwe factuur maken/verzenden (handmatig).
+    if (soort === "reparatie_terugbrengen") {
+      moneybirdInvoiceId = existing.moneybird_invoice_id as string | null;
+    } else if (
       soort === "reparatie_ophalen" ||
       betaalwijze === "contant" ||
       productenNogNietBekend
@@ -715,32 +718,6 @@ export async function PATCH(request: NextRequest) {
       .from("orders")
       .update({ moneybird_invoice_id: moneybirdInvoiceId })
       .eq("id", orderId);
-
-    // Terugbrengen: bij opslaan factuur versturen (indien concept) + voorraad afschrijven.
-    if (soort === "reparatie_terugbrengen" && !productenNogNietBekend) {
-      if (betaalwijze === "factuur" && moneybirdInvoiceId) {
-        try {
-          await sendReparatieSalesInvoice({
-            orderId,
-            invoiceId: moneybirdInvoiceId,
-            email: email || null,
-          });
-        } catch (sendErr) {
-          console.error("[reparaties] moneybird send PATCH (terugbrengen):", sendErr);
-        }
-      }
-      try {
-        await deductInventoryForReparatieOrder(
-          supabase,
-          ownerEmail,
-          orderId,
-          String(order.order_nummer ?? orderId),
-          reparatieLineItemsForInventoryDeduction(lineItems)
-        );
-      } catch (invErr) {
-        console.error("[reparaties] inventory deduct PATCH (terugbrengen):", invErr);
-      }
-    }
 
     return NextResponse.json({
       order: { ...order, moneybird_invoice_id: moneybirdInvoiceId },

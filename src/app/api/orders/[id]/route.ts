@@ -97,17 +97,65 @@ export async function DELETE(
       return NextResponse.json({ error: "Order-id ontbreekt." }, { status: 400 });
     }
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const serviceKey =
-      process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    if (!supabaseUrl || !serviceKey) {
+    const supabase = createServerSupabaseClient();
+    const { data: order, error: fetchErr } = await supabase
+      .from("orders")
+      .select(
+        "id, source, type, status, reparatie_betaalwijze, moneybird_invoice_id, order_nummer"
+      )
+      .eq("owner_email", ownerEmail)
+      .eq("id", id)
+      .maybeSingle();
+    if (fetchErr) {
+      console.error("[api/orders DELETE] fetch", fetchErr);
       return NextResponse.json(
-        { error: "Supabase niet geconfigureerd." },
+        { error: "Order ophalen mislukt.", detail: fetchErr.message },
         { status: 500 }
       );
     }
+    if (!order) {
+      return NextResponse.json({ error: "Order niet gevonden." }, { status: 404 });
+    }
 
-    const supabase = createClient(supabaseUrl, serviceKey);
+    const source = String(order.source ?? "").toLowerCase();
+
+    // MP: reserveringen terugdraaien (afhaal heeft geen reservering).
+    if (source === "mp") {
+      try {
+        const { clearReservationsForOrder } = await import(
+          "@/lib/inventory-reservations"
+        );
+        await clearReservationsForOrder(supabase, ownerEmail, "marktplaats", id, {
+          skipAlerts: true,
+        });
+      } catch (resErr) {
+        console.error("[api/orders DELETE] mp reservations:", resErr);
+      }
+    }
+
+    // Reparatie: conceptfactuur verwijderen als die op factuur stond (alleen drafts).
+    if (
+      source === "reparatie" &&
+      String(order.reparatie_betaalwijze ?? "") === "factuur"
+    ) {
+      try {
+        const { deleteReparatieSalesInvoice } = await import("@/lib/moneybird");
+        await deleteReparatieSalesInvoice({
+          orderId: id,
+          invoiceId: order.moneybird_invoice_id as string | null,
+        });
+      } catch (mbErr) {
+        console.error("[api/orders DELETE] reparatie invoice:", mbErr);
+      }
+    }
+
+    // Planning-slots expliciet weg (cascade dekt dit ook, maar dit is duidelijker).
+    await supabase
+      .from("planning_slots")
+      .delete()
+      .eq("owner_email", ownerEmail)
+      .eq("order_id", id);
+
     const { data: deletedRows, error } = await supabase
       .from("orders")
       .delete()
@@ -123,6 +171,13 @@ export async function DELETE(
     }
     if (!deletedRows || deletedRows.length === 0) {
       return NextResponse.json({ error: "Order niet gevonden." }, { status: 404 });
+    }
+
+    try {
+      const { promoteRitjesVoorMorgen } = await import("@/lib/planning-promote");
+      await promoteRitjesVoorMorgen(ownerEmail, supabase as any);
+    } catch (promoErr) {
+      console.error("[api/orders DELETE] promote:", promoErr);
     }
 
     return NextResponse.json({ ok: true }, { headers: { "Cache-Control": "no-store" } });
