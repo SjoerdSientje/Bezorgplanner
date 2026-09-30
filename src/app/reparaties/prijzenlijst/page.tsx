@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import Header from "@/components/Header";
+import ProductAutocomplete from "@/components/ProductAutocomplete";
 import {
   ARBEID_UUR_PRIJS_INCL,
   arbeidPrijsIncl,
@@ -21,6 +22,8 @@ export default function ReparatiePrijzenlijstPage() {
   const [newOnderdeel, setNewOnderdeel] = useState("");
   const [newPrijs, setNewPrijs] = useState("");
   const [newUren, setNewUren] = useState("1");
+  const [newShopifyProductId, setNewShopifyProductId] = useState<number | null>(null);
+  const [newShopifyVariantId, setNewShopifyVariantId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -80,6 +83,8 @@ export default function ReparatiePrijzenlijstPage() {
           onderdeel_naam: newOnderdeel.trim() || newNaam.trim(),
           onderdeel_prijs_incl: parseFloat(newPrijs.replace(",", ".")) || 0,
           arbeid_uren: parseFloat(newUren.replace(",", ".")) || 0,
+          shopify_product_id: newShopifyProductId,
+          shopify_variant_id: newShopifyVariantId,
         }),
       });
       const data = await res.json();
@@ -88,6 +93,8 @@ export default function ReparatiePrijzenlijstPage() {
       setNewOnderdeel("");
       setNewPrijs("");
       setNewUren("1");
+      setNewShopifyProductId(null);
+      setNewShopifyVariantId(null);
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Toevoegen mislukt");
@@ -212,7 +219,8 @@ export default function ReparatiePrijzenlijstPage() {
           <section>
             <h2 className="font-medium text-koopje-black">Standaardreparaties</h2>
             <p className="mt-1 text-sm text-koopje-black/60">
-              Onderdeel = 21% BTW. Arbeid = uren × €{ARBEID_UUR_PRIJS_INCL.toFixed(2)} incl. 9% BTW.
+              Onderdeel = 21% BTW (koppel een Shopify-product voor voorraadafschrijving). Arbeid =
+              uren × €{ARBEID_UUR_PRIJS_INCL.toFixed(2)} incl. 9% BTW.
             </p>
 
             <div className="mt-4 space-y-3">
@@ -235,31 +243,88 @@ export default function ReparatiePrijzenlijstPage() {
                           }}
                         />
                       </label>
-                      <label className="text-xs text-koopje-black/50">
-                        Onderdeel
-                        <input
-                          className="mt-0.5 w-full rounded border border-koopje-black/20 px-2 py-1.5 text-sm"
-                          defaultValue={item.onderdeel_naam ?? ""}
-                          onBlur={(e) => {
-                            const v = e.target.value.trim();
-                            if (v !== (item.onderdeel_naam ?? "")) {
-                              void patchItem(item.id, { onderdeel_naam: v });
+                      <div
+                        className="sm:col-span-2"
+                        onBlur={(e) => {
+                          if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                          const current = items.find((i) => i.id === item.id);
+                          if (!current) return;
+                          void patchItem(item.id, {
+                            onderdeel_naam: current.onderdeel_naam ?? "",
+                            shopify_product_id: current.shopify_product_id,
+                            shopify_variant_id: current.shopify_variant_id,
+                            onderdeel_prijs_incl: current.onderdeel_prijs_incl,
+                          });
+                        }}
+                      >
+                        <ProductAutocomplete
+                          label="Onderdeel (Shopify)"
+                          value={item.onderdeel_naam ?? ""}
+                          searchSource="shopify"
+                          placeholder="Zoek Shopify-product…"
+                          onChange={(title, prijs, meta) => {
+                            const selected = meta !== undefined;
+                            const nextPrijs =
+                              prijs != null && prijs !== ""
+                                ? parseFloat(String(prijs).replace(",", ".")) || 0
+                                : Number(item.onderdeel_prijs_incl);
+                            const nextProductId = selected
+                              ? (meta.shopify_product_id ?? null)
+                              : null;
+                            const nextVariantId = selected
+                              ? (meta.shopify_variant_id ?? null)
+                              : null;
+                            setItems((prev) =>
+                              prev.map((i) =>
+                                i.id === item.id
+                                  ? {
+                                      ...i,
+                                      onderdeel_naam: title,
+                                      onderdeel_prijs_incl: nextPrijs,
+                                      shopify_product_id: nextProductId,
+                                      shopify_variant_id: nextVariantId,
+                                    }
+                                  : i
+                              )
+                            );
+                            if (selected) {
+                              void patchItem(item.id, {
+                                onderdeel_naam: title,
+                                onderdeel_prijs_incl: nextPrijs,
+                                shopify_product_id: nextProductId,
+                                shopify_variant_id: nextVariantId,
+                              });
                             }
                           }}
                         />
-                      </label>
+                        <p className="mt-1 text-xs text-koopje-black/45">
+                          {item.shopify_product_id
+                            ? `Shopify gekoppeld (product ${item.shopify_product_id}${
+                                item.shopify_variant_id
+                                  ? ` / variant ${item.shopify_variant_id}`
+                                  : ""
+                              })`
+                            : "Nog geen Shopify-product gekoppeld — typ en kies uit de suggesties."}
+                        </p>
+                      </div>
                       <label className="text-xs text-koopje-black/50">
                         Onderdeelprijs incl. 21% (€)
                         <input
                           type="number"
                           step="0.01"
                           className="mt-0.5 w-full rounded border border-koopje-black/20 px-2 py-1.5 text-sm"
-                          defaultValue={item.onderdeel_prijs_incl}
+                          value={item.onderdeel_prijs_incl}
+                          onChange={(e) => {
+                            const v = Number(e.target.value) || 0;
+                            setItems((prev) =>
+                              prev.map((i) =>
+                                i.id === item.id ? { ...i, onderdeel_prijs_incl: v } : i
+                              )
+                            );
+                          }}
                           onBlur={(e) => {
                             const v = Number(e.target.value) || 0;
-                            if (v !== Number(item.onderdeel_prijs_incl)) {
-                              void patchItem(item.id, { onderdeel_prijs_incl: v });
-                            }
+                            void patchItem(item.id, { onderdeel_prijs_incl: v });
                           }}
                         />
                       </label>
@@ -303,31 +368,61 @@ export default function ReparatiePrijzenlijstPage() {
 
             <div className="mt-6 rounded-xl border border-dashed border-koopje-black/20 p-4">
               <h3 className="text-sm font-medium text-koopje-black">Nieuwe standaardreparatie</h3>
-              <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                <input
-                  placeholder="Naam (bijv. Trapsensor vervangen)"
-                  className="rounded border border-koopje-black/20 px-3 py-2 text-sm"
-                  value={newNaam}
-                  onChange={(e) => setNewNaam(e.target.value)}
-                />
-                <input
-                  placeholder="Onderdeelnaam"
-                  className="rounded border border-koopje-black/20 px-3 py-2 text-sm"
-                  value={newOnderdeel}
-                  onChange={(e) => setNewOnderdeel(e.target.value)}
-                />
-                <input
-                  placeholder="Onderdeelprijs incl. €"
-                  className="rounded border border-koopje-black/20 px-3 py-2 text-sm"
-                  value={newPrijs}
-                  onChange={(e) => setNewPrijs(e.target.value)}
-                />
-                <input
-                  placeholder="Arbeidsuren"
-                  className="rounded border border-koopje-black/20 px-3 py-2 text-sm"
-                  value={newUren}
-                  onChange={(e) => setNewUren(e.target.value)}
-                />
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <label className="text-xs text-koopje-black/50 sm:col-span-2">
+                  Naam
+                  <input
+                    placeholder="bijv. Trapsensor vervangen"
+                    className="mt-0.5 w-full rounded border border-koopje-black/20 px-3 py-2 text-sm"
+                    value={newNaam}
+                    onChange={(e) => setNewNaam(e.target.value)}
+                  />
+                </label>
+                <div className="sm:col-span-2">
+                  <ProductAutocomplete
+                    label="Onderdeel (Shopify)"
+                    value={newOnderdeel}
+                    searchSource="shopify"
+                    placeholder="Zoek Shopify-product…"
+                    onChange={(title, prijs, meta) => {
+                      setNewOnderdeel(title);
+                      if (prijs != null && prijs !== "") {
+                        setNewPrijs(String(prijs));
+                      }
+                      if (meta !== undefined) {
+                        setNewShopifyProductId(meta.shopify_product_id ?? null);
+                        setNewShopifyVariantId(meta.shopify_variant_id ?? null);
+                      } else {
+                        // Vrije tekst zonder selectie → geen voorraadkoppeling.
+                        setNewShopifyProductId(null);
+                        setNewShopifyVariantId(null);
+                      }
+                    }}
+                  />
+                  <p className="mt-1 text-xs text-koopje-black/45">
+                    {newShopifyProductId
+                      ? `Shopify gekoppeld (product ${newShopifyProductId}${
+                          newShopifyVariantId ? ` / variant ${newShopifyVariantId}` : ""
+                        })`
+                      : "Kies een product uit de suggesties om voorraad correct af te schrijven."}
+                  </p>
+                </div>
+                <label className="text-xs text-koopje-black/50">
+                  Onderdeelprijs incl. €
+                  <input
+                    className="mt-0.5 w-full rounded border border-koopje-black/20 px-3 py-2 text-sm"
+                    value={newPrijs}
+                    onChange={(e) => setNewPrijs(e.target.value)}
+                  />
+                </label>
+                <label className="text-xs text-koopje-black/50">
+                  Arbeidsuren
+                  <input
+                    className="mt-0.5 w-full rounded border border-koopje-black/20 px-3 py-2 text-sm"
+                    value={newUren}
+                    onChange={(e) => setNewUren(e.target.value)}
+                  />
+                </label>
               </div>
               <button
                 type="button"

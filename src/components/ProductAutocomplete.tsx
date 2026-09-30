@@ -162,11 +162,7 @@ export default function ProductAutocomplete({
           }
         : undefined;
     const prijs =
-      searchSource === "shopify"
-        ? undefined
-        : item.price != null && item.price !== ""
-          ? item.price
-          : undefined;
+      item.price != null && item.price !== "" ? item.price : undefined;
     onChange(item.title, prijs, meta);
   }
 
