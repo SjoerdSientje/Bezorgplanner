@@ -14,7 +14,11 @@ import ProductAutocomplete from "@/components/ProductAutocomplete";
 import ArbeidUrenInput from "@/components/ArbeidUrenInput";
 import {
   ARBEID_UUR_PRIJS_INCL,
+  arbeidPrijsIncl,
+  normalizeStandaardOnderdelen,
   parseStoredReparatieRegels,
+  type ReparatieOnderdeel,
+  type ReparatieStandaardItem,
 } from "@/lib/reparaties";
 
 type PaymentOption =
@@ -49,20 +53,97 @@ type OrderDetail = {
 
 type ReparatieDraftRegel = {
   key: string;
+  mode: "standaard" | "custom";
+  standaard_id?: string;
+  naam?: string;
   onderdeel_naam: string;
   onderdeel_prijs_incl: string;
   shopify_product_id?: number | null;
   shopify_variant_id?: number | null;
   arbeid_uren: string;
+  onderdelen?: ReparatieOnderdeel[];
 };
+
+function mkRegelKey() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
 
 function emptyReparatieRegel(): ReparatieDraftRegel {
   return {
-    key: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    key: mkRegelKey(),
+    mode: "custom",
     onderdeel_naam: "",
     onderdeel_prijs_incl: "",
     arbeid_uren: "1",
   };
+}
+
+function draftRegelsToApiPayload(regels: ReparatieDraftRegel[]) {
+  const out: Array<{
+    kind: "custom";
+    naam: string;
+    onderdeel_naam: string;
+    onderdeel_prijs_incl: number;
+    shopify_product_id: number | null;
+    shopify_variant_id: number | null;
+    arbeid_uren: number;
+  }> = [];
+
+  for (const r of regels) {
+    if (r.mode === "standaard") {
+      const onderdelen =
+        r.onderdelen && r.onderdelen.length > 0
+          ? r.onderdelen
+          : r.onderdeel_naam.trim()
+            ? [
+                {
+                  naam: r.onderdeel_naam.trim(),
+                  prijs_incl:
+                    parseFloat(r.onderdeel_prijs_incl.replace(",", ".")) || 0,
+                  shopify_product_id: r.shopify_product_id ?? null,
+                  shopify_variant_id: r.shopify_variant_id ?? null,
+                },
+              ]
+            : [];
+      for (const o of onderdelen) {
+        out.push({
+          kind: "custom",
+          naam: r.naam || o.naam || "Reparatie",
+          onderdeel_naam: o.naam,
+          onderdeel_prijs_incl: Number(o.prijs_incl) || 0,
+          shopify_product_id: o.shopify_product_id ?? null,
+          shopify_variant_id: o.shopify_variant_id ?? null,
+          arbeid_uren: 0,
+        });
+      }
+      const uren = parseFloat(r.arbeid_uren.replace(",", ".")) || 0;
+      if (uren > 0) {
+        out.push({
+          kind: "custom",
+          naam: r.naam || "Reparatie",
+          onderdeel_naam: "",
+          onderdeel_prijs_incl: 0,
+          shopify_product_id: null,
+          shopify_variant_id: null,
+          arbeid_uren: uren,
+        });
+      }
+      continue;
+    }
+
+    out.push({
+      kind: "custom",
+      naam: r.onderdeel_naam || r.naam || "Reparatie",
+      onderdeel_naam: r.onderdeel_naam,
+      onderdeel_prijs_incl:
+        parseFloat(r.onderdeel_prijs_incl.replace(",", ".")) || 0,
+      shopify_product_id: r.shopify_product_id ?? null,
+      shopify_variant_id: r.shopify_variant_id ?? null,
+      arbeid_uren: parseFloat(r.arbeid_uren.replace(",", ".")) || 0,
+    });
+  }
+
+  return out;
 }
 
 function shouldIgnoreAfrondenChecklistItem(label: string): boolean {
@@ -150,6 +231,11 @@ export default function AfrondenVragenlijstPage({
   const [reparatieRegels, setReparatieRegels] = useState<ReparatieDraftRegel[]>([]);
   const [reparatieRegelsLoaded, setReparatieRegelsLoaded] = useState(false);
   const [convertToOphalen, setConvertToOphalen] = useState(false);
+  const [reparatieFactuur, setReparatieFactuur] = useState<"factuur" | "contant" | "">(
+    ""
+  );
+  const [standaard, setStandaard] = useState<ReparatieStandaardItem[]>([]);
+  const [standaardLoading, setStandaardLoading] = useState(false);
 
   const isReparatieDeur = order?.type === "reparatie_deur";
   const productenNogNietBekend = Boolean(order?.producten_nog_niet_bekend);
@@ -175,6 +261,33 @@ export default function AfrondenVragenlijstPage({
     fetchOrder();
   }, [fetchOrder]);
 
+  const loadStandaard = useCallback(async () => {
+    setStandaardLoading(true);
+    try {
+      const res = await fetch(`/api/reparaties/prijslijst?t=${Date.now()}`, {
+        cache: "no-store",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) setStandaard(Array.isArray(data.items) ? data.items : []);
+    } catch {
+      /* negeren — custom regels blijven mogelijk */
+    } finally {
+      setStandaardLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isReparatieDeur) void loadStandaard();
+  }, [isReparatieDeur, loadStandaard]);
+
+  // Prefill factuurkeuze vanuit de order.
+  useEffect(() => {
+    if (!order || order.type !== "reparatie_deur") return;
+    setReparatieFactuur(
+      order.reparatie_betaalwijze === "contant" ? "contant" : "factuur"
+    );
+  }, [order?.id, order?.type, order?.reparatie_betaalwijze]);
+
   // Prefill producten/arbeid voor reparatie aan huis.
   useEffect(() => {
     if (!order || order.type !== "reparatie_deur" || reparatieRegelsLoaded) return;
@@ -185,7 +298,9 @@ export default function AfrondenVragenlijstPage({
       if (stored.length > 0) {
         setReparatieRegels(
           stored.map((r) => ({
-            key: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            key: mkRegelKey(),
+            mode: "custom" as const,
+            naam: r.naam,
             onderdeel_naam: String(r.onderdeel_naam || r.naam || ""),
             onderdeel_prijs_incl:
               r.onderdeel_prijs_incl != null && Number(r.onderdeel_prijs_incl) > 0
@@ -202,6 +317,35 @@ export default function AfrondenVragenlijstPage({
     }
     setReparatieRegelsLoaded(true);
   }, [order, reparatieRegelsLoaded]);
+
+  function addStandaardRegel(id: string) {
+    const s = standaard.find((i) => i.id === id);
+    if (!s) return;
+    const onderdelen = normalizeStandaardOnderdelen(s);
+    const prijs = onderdelen.reduce((sum, o) => sum + (o.prijs_incl || 0), 0);
+    setReparatieRegels((prev) => [
+      ...prev.filter(
+        (r) =>
+          !(
+            r.mode === "custom" &&
+            !r.onderdeel_naam.trim() &&
+            !(parseFloat(r.arbeid_uren.replace(",", ".")) || 0)
+          )
+      ),
+      {
+        key: mkRegelKey(),
+        mode: "standaard",
+        standaard_id: s.id,
+        naam: s.naam,
+        onderdeel_naam: onderdelen.map((o) => o.naam).join(" + ") || s.naam,
+        onderdeel_prijs_incl: String(prijs),
+        shopify_product_id: onderdelen[0]?.shopify_product_id ?? null,
+        shopify_variant_id: onderdelen[0]?.shopify_variant_id ?? null,
+        arbeid_uren: String(s.arbeid_uren),
+        onderdelen,
+      },
+    ]);
+  }
 
   const checklist = useMemo(
     () => (order && !isReparatieDeur ? parseChecklist(order, productRules) : []),
@@ -233,17 +377,27 @@ export default function AfrondenVragenlijstPage({
   const reparatieProductsOk =
     !isReparatieDeur ||
     convertToOphalen ||
-    reparatieRegels.some(
-      (r) =>
+    reparatieRegels.some((r) => {
+      if (r.mode === "standaard") {
+        return (
+          (r.onderdelen?.length ?? 0) > 0 ||
+          r.onderdeel_naam.trim().length > 0 ||
+          (parseFloat(r.arbeid_uren.replace(",", ".")) || 0) > 0
+        );
+      }
+      return (
         r.onderdeel_naam.trim() ||
         (parseFloat(r.arbeid_uren.replace(",", ".")) || 0) > 0
-    );
+      );
+    });
+  const reparatieFactuurOk = !isReparatieDeur || convertToOphalen || Boolean(reparatieFactuur);
   const canSubmit =
     bezorgerNaam.trim().length > 0 &&
     paymentOk &&
     allChecked &&
     serienummerOk &&
     reparatieProductsOk &&
+    reparatieFactuurOk &&
     !saving;
 
   const submit = useCallback(async () => {
@@ -262,18 +416,11 @@ export default function AfrondenVragenlijstPage({
           betaal_bedrag: needsBedrag ? parseFloat(betaalBedrag.trim().replace(",", ".")) : undefined,
           serienummer: isMpOrder ? serienummer.trim() : undefined,
           convert_to_ophalen: isReparatieDeur ? convertToOphalen : undefined,
+          reparatie_betaalwijze:
+            isReparatieDeur && !convertToOphalen ? reparatieFactuur : undefined,
           reparatie_regels:
             isReparatieDeur && !convertToOphalen
-              ? reparatieRegels.map((r) => ({
-                  kind: "custom",
-                  naam: r.onderdeel_naam || "Reparatie",
-                  onderdeel_naam: r.onderdeel_naam,
-                  onderdeel_prijs_incl:
-                    parseFloat(r.onderdeel_prijs_incl.replace(",", ".")) || 0,
-                  shopify_product_id: r.shopify_product_id ?? null,
-                  shopify_variant_id: r.shopify_variant_id ?? null,
-                  arbeid_uren: parseFloat(r.arbeid_uren.replace(",", ".")) || 0,
-                }))
+              ? draftRegelsToApiPayload(reparatieRegels)
               : undefined,
         }),
       });
@@ -304,6 +451,7 @@ export default function AfrondenVragenlijstPage({
     needsBedrag,
     isReparatieDeur,
     convertToOphalen,
+    reparatieFactuur,
     reparatieRegels,
   ]);
 
@@ -379,6 +527,45 @@ export default function AfrondenVragenlijstPage({
 
                   {!convertToOphalen && (
                     <>
+                      <div className="mb-4">
+                        <p className="mb-2 text-sm font-semibold text-koopje-black">
+                          Factuur
+                        </p>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {(
+                            [
+                              ["factuur", "Factuur versturen"],
+                              ["contant", "Geen factuur"],
+                            ] as const
+                          ).map(([value, label]) => (
+                            <label
+                              key={value}
+                              className={`flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-sm ${
+                                reparatieFactuur === value
+                                  ? "border-koopje-orange bg-koopje-orange-light/60 text-koopje-black"
+                                  : "border-stone-200 bg-white text-koopje-black/80 hover:bg-stone-50"
+                              }`}
+                            >
+                              <input
+                                type="radio"
+                                name="reparatie-factuur"
+                                className="accent-koopje-orange"
+                                checked={reparatieFactuur === value}
+                                onChange={() => setReparatieFactuur(value)}
+                              />
+                              <span>
+                                <span className="font-medium">{label}</span>
+                                <span className="mt-0.5 block text-xs text-koopje-black/55">
+                                  {value === "factuur"
+                                    ? "Conceptfactuur bijwerken en versturen"
+                                    : "Conceptfactuur (indien aanwezig) verwijderen"}
+                                </span>
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+
                       <p className="mb-2 text-sm font-semibold text-koopje-black">
                         {productenNogNietBekend
                           ? "Producten nog niet bekend — vul nu in wat er is gedaan"
@@ -386,70 +573,131 @@ export default function AfrondenVragenlijstPage({
                       </p>
                       <p className="mb-3 text-xs text-koopje-black/60">
                         {productenNogNietBekend
-                          ? `Onderdelen via Shopify (21% BTW). Arbeid: uren × €${ARBEID_UUR_PRIJS_INCL} incl. 9%.`
+                          ? `Onderdelen via Shopify (21% BTW, geen fatbikes). Arbeid: uren × €${ARBEID_UUR_PRIJS_INCL} incl. 9%.`
                           : "Pas regels aan of verwijder ze indien nodig. Wijzigingen worden vóór verzending op de factuur gezet."}
                       </p>
+
+                      <div className="mb-3 flex flex-wrap items-center gap-2">
+                        <select
+                          key={`standaard-${standaard.map((s) => s.id).join("-") || "leeg"}`}
+                          className="rounded-lg border border-koopje-black/20 bg-white px-2 py-1.5 text-sm"
+                          defaultValue=""
+                          disabled={standaardLoading || standaard.length === 0}
+                          onChange={(e) => {
+                            if (e.target.value) {
+                              addStandaardRegel(e.target.value);
+                              e.target.value = "";
+                            }
+                          }}
+                        >
+                          <option value="">
+                            {standaardLoading
+                              ? "Standaardreparaties laden…"
+                              : standaard.length === 0
+                                ? "Geen standaardreparaties"
+                                : "+ Standaardreparatie…"}
+                          </option>
+                          {standaard.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.naam}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          className="rounded-lg border border-koopje-black/20 bg-white px-3 py-1.5 text-sm"
+                          onClick={() =>
+                            setReparatieRegels((prev) => [
+                              ...prev,
+                              emptyReparatieRegel(),
+                            ])
+                          }
+                        >
+                          + Eigen regel (Shopify + uren)
+                        </button>
+                      </div>
+
                       <div className="space-y-3">
                         {reparatieRegels.map((r) => (
                           <div
                             key={r.key}
                             className="rounded-lg border border-stone-200 bg-white p-3"
                           >
-                            <ProductAutocomplete
-                              label="Onderdeel"
-                              value={r.onderdeel_naam}
-                              searchSource="shopify"
-                              onChange={(title, prijs, meta) => {
-                                setReparatieRegels((prev) =>
-                                  prev.map((x) =>
-                                    x.key === r.key
-                                      ? {
-                                          ...x,
-                                          onderdeel_naam: title,
-                                          onderdeel_prijs_incl:
-                                            prijs ?? x.onderdeel_prijs_incl,
-                                          shopify_product_id:
-                                            meta?.shopify_product_id ?? null,
-                                          shopify_variant_id:
-                                            meta?.shopify_variant_id ?? null,
-                                        }
-                                      : x
+                            {r.mode === "standaard" ? (
+                              <p className="text-sm">
+                                <strong>{r.naam}</strong>
+                                <span className="text-koopje-black/50">
+                                  {" "}
+                                  · {r.onderdeel_naam || "onderdelen"} (€
+                                  {r.onderdeel_prijs_incl}) · {r.arbeid_uren} u (€
+                                  {arbeidPrijsIncl(
+                                    parseFloat(r.arbeid_uren.replace(",", ".")) || 0
+                                  ).toFixed(2)}
                                   )
-                                );
-                              }}
-                            />
-                            <label className="mt-2 block text-xs">
-                              Prijs onderdeel incl.
-                              <input
-                                className="mt-0.5 w-full rounded border px-2 py-1.5 text-sm"
-                                value={r.onderdeel_prijs_incl}
-                                onChange={(e) =>
-                                  setReparatieRegels((prev) =>
-                                    prev.map((x) =>
-                                      x.key === r.key
-                                        ? {
-                                            ...x,
-                                            onderdeel_prijs_incl: e.target.value,
-                                          }
-                                        : x
-                                    )
-                                  )
-                                }
-                              />
-                            </label>
-                            <div className="mt-2">
-                              <ArbeidUrenInput
-                                compact
-                                uren={r.arbeid_uren}
-                                onUrenChange={(u) =>
-                                  setReparatieRegels((prev) =>
-                                    prev.map((x) =>
-                                      x.key === r.key ? { ...x, arbeid_uren: u } : x
-                                    )
-                                  )
-                                }
-                              />
-                            </div>
+                                </span>
+                              </p>
+                            ) : (
+                              <>
+                                <ProductAutocomplete
+                                  label="Onderdeel"
+                                  value={r.onderdeel_naam}
+                                  searchSource="shopify"
+                                  productKind="extra"
+                                  onChange={(title, prijs, meta) => {
+                                    setReparatieRegels((prev) =>
+                                      prev.map((x) =>
+                                        x.key === r.key
+                                          ? {
+                                              ...x,
+                                              onderdeel_naam: title,
+                                              onderdeel_prijs_incl:
+                                                prijs ?? x.onderdeel_prijs_incl,
+                                              shopify_product_id:
+                                                meta?.shopify_product_id ?? null,
+                                              shopify_variant_id:
+                                                meta?.shopify_variant_id ?? null,
+                                            }
+                                          : x
+                                      )
+                                    );
+                                  }}
+                                />
+                                <label className="mt-2 block text-xs">
+                                  Prijs onderdeel incl.
+                                  <input
+                                    className="mt-0.5 w-full rounded border px-2 py-1.5 text-sm"
+                                    value={r.onderdeel_prijs_incl}
+                                    onChange={(e) =>
+                                      setReparatieRegels((prev) =>
+                                        prev.map((x) =>
+                                          x.key === r.key
+                                            ? {
+                                                ...x,
+                                                onderdeel_prijs_incl: e.target.value,
+                                              }
+                                            : x
+                                        )
+                                      )
+                                    }
+                                  />
+                                </label>
+                                <div className="mt-2">
+                                  <ArbeidUrenInput
+                                    compact
+                                    uren={r.arbeid_uren}
+                                    onUrenChange={(u) =>
+                                      setReparatieRegels((prev) =>
+                                        prev.map((x) =>
+                                          x.key === r.key
+                                            ? { ...x, arbeid_uren: u }
+                                            : x
+                                        )
+                                      )
+                                    }
+                                  />
+                                </div>
+                              </>
+                            )}
                             <button
                               type="button"
                               className="mt-2 text-xs text-red-600"
@@ -464,18 +712,6 @@ export default function AfrondenVragenlijstPage({
                           </div>
                         ))}
                       </div>
-                      <button
-                        type="button"
-                        className="mt-3 rounded-lg border border-koopje-black/20 bg-white px-3 py-1.5 text-sm"
-                        onClick={() =>
-                          setReparatieRegels((prev) => [
-                            ...prev,
-                            emptyReparatieRegel(),
-                          ])
-                        }
-                      >
-                        + Regel toevoegen
-                      </button>
                     </>
                   )}
                 </div>

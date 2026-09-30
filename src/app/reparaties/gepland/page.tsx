@@ -737,6 +737,7 @@ export default function ReparatiesGeplandPage() {
                                     label="Onderdeel (Shopify)"
                                     value={r.onderdeel_naam}
                                     searchSource="shopify"
+                                    productKind="extra"
                                     onChange={(title, prijs, meta) =>
                                       setEdit({
                                         ...edit,

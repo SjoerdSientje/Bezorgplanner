@@ -45,6 +45,9 @@ export async function POST(request: NextRequest) {
       ? body.reparatie_regels
       : null;
     const convertToOphalen = Boolean(body.convert_to_ophalen);
+    const reparatieBetaalwijzeBody = String(body.reparatie_betaalwijze ?? "")
+      .trim()
+      .toLowerCase();
 
     if (!orderId) {
       return NextResponse.json({ error: "Order-id ontbreekt." }, { status: 400 });
@@ -81,6 +84,13 @@ export async function POST(request: NextRequest) {
     if (!order) {
       return NextResponse.json({ error: "Order niet gevonden." }, { status: 404 });
     }
+
+    const reparatieWilFactuur =
+      reparatieBetaalwijzeBody === "factuur"
+        ? true
+        : reparatieBetaalwijzeBody === "contant"
+          ? false
+          : String(order.reparatie_betaalwijze ?? "") === "factuur";
 
     // Reparatie aan huis: producten/arbeid controleren of omzetten naar ophalen.
     let reparatieInvoiceId =
@@ -204,11 +214,12 @@ export async function POST(request: NextRequest) {
           bestelling_totaal_prijs: Math.round(totaal * 100) / 100,
           producten_nog_niet_bekend: false,
           reparatie_regels_json: regelsForStore,
+          reparatie_betaalwijze: reparatieWilFactuur ? "factuur" : "contant",
         })
         .eq("id", orderId)
         .eq("owner_email", ownerEmail);
 
-      if (order.reparatie_betaalwijze === "factuur") {
+      if (reparatieWilFactuur) {
         try {
           const inv = await upsertReparatieSalesInvoice({
             orderId,
@@ -241,13 +252,30 @@ export async function POST(request: NextRequest) {
         } catch (mbErr) {
           console.error("[api/afronden] reparatie moneybird:", mbErr);
         }
+      } else {
+        // Geen factuur: concept verwijderen als die er nog was.
+        try {
+          const { deleteReparatieSalesInvoice } = await import("@/lib/moneybird");
+          await deleteReparatieSalesInvoice({
+            orderId,
+            invoiceId: reparatieInvoiceId,
+          });
+        } catch (delErr) {
+          console.error("[api/afronden] reparatie moneybird delete (geen factuur):", delErr);
+        }
+        reparatieInvoiceId = null;
+        await supabase
+          .from("orders")
+          .update({ moneybird_invoice_id: null })
+          .eq("id", orderId)
+          .eq("owner_email", ownerEmail);
       }
     }
 
     // Reparatie aan huis: bij afronden factuur versturen + voorraad afschrijven
     // (niet bij omzetting naar ophalen).
     if (order.type === "reparatie_deur" && !convertedToOphalen) {
-      if (order.reparatie_betaalwijze === "factuur" && reparatieInvoiceId) {
+      if (reparatieWilFactuur && reparatieInvoiceId) {
         try {
           const { sendReparatieSalesInvoice } = await import("@/lib/moneybird");
           await sendReparatieSalesInvoice({

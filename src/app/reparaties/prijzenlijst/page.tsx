@@ -109,6 +109,7 @@ function OnderdelenEditor({
             label="Product"
             value={d.naam}
             searchSource="shopify"
+            productKind="extra"
             placeholder="Zoek Shopify-product…"
             onChange={(title, prijs, meta) => {
               const selected = meta !== undefined;

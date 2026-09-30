@@ -517,6 +517,7 @@ export default function ReparatieNieuwPage() {
                               label="Onderdeel (Shopify)"
                               value={r.onderdeel_naam}
                               searchSource="shopify"
+                              productKind="extra"
                               onChange={(title, prijs, meta) => {
                                 setRegels((prev) =>
                                   prev.map((x) =>
