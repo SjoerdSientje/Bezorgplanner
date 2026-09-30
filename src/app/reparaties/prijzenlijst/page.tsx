@@ -8,23 +8,167 @@ import ArbeidUrenInput from "@/components/ArbeidUrenInput";
 import {
   ARBEID_UUR_PRIJS_INCL,
   arbeidPrijsIncl,
+  normalizeStandaardOnderdelen,
   type ReparatieStandaardItem,
   type VoorrijkostenSettings,
 } from "@/lib/reparaties";
 
+type DraftOnderdeel = {
+  key: string;
+  naam: string;
+  prijs_incl: string;
+  shopify_product_id: number | null;
+  shopify_variant_id: number | null;
+};
+
+function mkKey() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function emptyOnderdeel(): DraftOnderdeel {
+  return {
+    key: mkKey(),
+    naam: "",
+    prijs_incl: "",
+    shopify_product_id: null,
+    shopify_variant_id: null,
+  };
+}
+
+function itemToDrafts(item: ReparatieStandaardItem): DraftOnderdeel[] {
+  const onderdelen = normalizeStandaardOnderdelen(item);
+  if (onderdelen.length === 0) return [emptyOnderdeel()];
+  return onderdelen.map((o) => ({
+    key: mkKey(),
+    naam: o.naam,
+    prijs_incl: o.prijs_incl > 0 ? String(o.prijs_incl) : "",
+    shopify_product_id: o.shopify_product_id ?? null,
+    shopify_variant_id: o.shopify_variant_id ?? null,
+  }));
+}
+
+function draftsToPayload(drafts: DraftOnderdeel[]) {
+  return drafts
+    .filter((d) => d.naam.trim())
+    .map((d) => ({
+      naam: d.naam.trim(),
+      prijs_incl: parseFloat(d.prijs_incl.replace(",", ".")) || 0,
+      shopify_product_id: d.shopify_product_id,
+      shopify_variant_id: d.shopify_variant_id,
+    }));
+}
+
+function OnderdelenEditor({
+  drafts,
+  onChange,
+  onCommit,
+}: {
+  drafts: DraftOnderdeel[];
+  onChange: (next: DraftOnderdeel[]) => void;
+  onCommit?: (next: DraftOnderdeel[]) => void;
+}) {
+  function update(key: string, patch: Partial<DraftOnderdeel>, commit = false) {
+    const next = drafts.map((d) => (d.key === key ? { ...d, ...patch } : d));
+    onChange(next);
+    if (commit) onCommit?.(next);
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs font-medium text-koopje-black/60">
+        Onderdelen (Shopify) — meerdere mogelijk
+      </p>
+      {drafts.map((d, idx) => (
+        <div
+          key={d.key}
+          className="rounded-lg border border-koopje-black/10 bg-stone-50/60 p-3"
+        >
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-[11px] text-koopje-black/45">Onderdeel {idx + 1}</span>
+            {drafts.length > 1 && (
+              <button
+                type="button"
+                className="text-xs text-red-600 hover:underline"
+                onClick={() => {
+                  const next = drafts.filter((x) => x.key !== d.key);
+                  onChange(next);
+                  onCommit?.(next);
+                }}
+              >
+                Verwijderen
+              </button>
+            )}
+          </div>
+          <ProductAutocomplete
+            label="Product"
+            value={d.naam}
+            searchSource="shopify"
+            placeholder="Zoek Shopify-product…"
+            onChange={(title, prijs, meta) => {
+              const selected = meta !== undefined;
+              update(
+                d.key,
+                {
+                  naam: title,
+                  prijs_incl:
+                    prijs != null && prijs !== ""
+                      ? String(prijs)
+                      : d.prijs_incl,
+                  shopify_product_id: selected
+                    ? (meta.shopify_product_id ?? null)
+                    : null,
+                  shopify_variant_id: selected
+                    ? (meta.shopify_variant_id ?? null)
+                    : null,
+                },
+                selected
+              );
+            }}
+          />
+          <label className="mt-2 block text-xs text-koopje-black/50">
+            Prijs incl. 21% (€)
+            <input
+              className="mt-0.5 w-full rounded border border-koopje-black/20 px-2 py-1.5 text-sm"
+              value={d.prijs_incl}
+              onChange={(e) => update(d.key, { prijs_incl: e.target.value })}
+              onBlur={() => onCommit?.(drafts)}
+            />
+          </label>
+          <p className="mt-1 text-[11px] text-koopje-black/40">
+            {d.shopify_product_id
+              ? `Shopify gekoppeld (product ${d.shopify_product_id}${
+                  d.shopify_variant_id ? ` / variant ${d.shopify_variant_id}` : ""
+                })`
+              : "Kies uit suggesties voor voorraadafschrijving."}
+          </p>
+        </div>
+      ))}
+      <button
+        type="button"
+        className="rounded-lg border border-koopje-black/20 bg-white px-3 py-1.5 text-sm"
+        onClick={() => onChange([...drafts, emptyOnderdeel()])}
+      >
+        + Onderdeel toevoegen
+      </button>
+    </div>
+  );
+}
+
 export default function ReparatiePrijzenlijstPage() {
   const [items, setItems] = useState<ReparatieStandaardItem[]>([]);
+  const [onderdelenById, setOnderdelenById] = useState<
+    Record<string, DraftOnderdeel[]>
+  >({});
   const [settings, setSettings] = useState<VoorrijkostenSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const [newNaam, setNewNaam] = useState("");
-  const [newOnderdeel, setNewOnderdeel] = useState("");
-  const [newPrijs, setNewPrijs] = useState("");
+  const [newOnderdelen, setNewOnderdelen] = useState<DraftOnderdeel[]>([
+    emptyOnderdeel(),
+  ]);
   const [newUren, setNewUren] = useState("1");
-  const [newShopifyProductId, setNewShopifyProductId] = useState<number | null>(null);
-  const [newShopifyVariantId, setNewShopifyVariantId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -38,7 +182,13 @@ export default function ReparatiePrijzenlijstPage() {
       const vData = await vRes.json();
       if (!pRes.ok) throw new Error(pData.error || "Prijzenlijst laden mislukt");
       if (!vRes.ok) throw new Error(vData.error || "Voorrijkosten laden mislukt");
-      setItems(pData.items ?? []);
+      const list = (pData.items ?? []) as ReparatieStandaardItem[];
+      setItems(list);
+      const drafts: Record<string, DraftOnderdeel[]> = {};
+      for (const item of list) {
+        drafts[item.id] = itemToDrafts(item);
+      }
+      setOnderdelenById(drafts);
       setSettings(vData.settings);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Laden mislukt");
@@ -81,21 +231,15 @@ export default function ReparatiePrijzenlijstPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           naam: newNaam.trim(),
-          onderdeel_naam: newOnderdeel.trim() || newNaam.trim(),
-          onderdeel_prijs_incl: parseFloat(newPrijs.replace(",", ".")) || 0,
+          onderdelen: draftsToPayload(newOnderdelen),
           arbeid_uren: parseFloat(newUren.replace(",", ".")) || 0,
-          shopify_product_id: newShopifyProductId,
-          shopify_variant_id: newShopifyVariantId,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Toevoegen mislukt");
       setNewNaam("");
-      setNewOnderdeel("");
-      setNewPrijs("");
+      setNewOnderdelen([emptyOnderdeel()]);
       setNewUren("1");
-      setNewShopifyProductId(null);
-      setNewShopifyVariantId(null);
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Toevoegen mislukt");
@@ -115,9 +259,14 @@ export default function ReparatiePrijzenlijstPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Bijwerken mislukt");
-      setItems((prev) =>
-        prev.map((i) => (i.id === id ? (data.item as ReparatieStandaardItem) : i))
-      );
+      const updated = data.item as ReparatieStandaardItem;
+      setItems((prev) => prev.map((i) => (i.id === id ? updated : i)));
+      if (patch.onderdelen !== undefined) {
+        setOnderdelenById((prev) => ({
+          ...prev,
+          [id]: itemToDrafts(updated),
+        }));
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Bijwerken mislukt");
     } finally {
@@ -220,170 +369,112 @@ export default function ReparatiePrijzenlijstPage() {
           <section>
             <h2 className="font-medium text-koopje-black">Standaardreparaties</h2>
             <p className="mt-1 text-sm text-koopje-black/60">
-              Onderdeel = 21% BTW (koppel een Shopify-product voor voorraadafschrijving). Arbeid =
-              uren × €{ARBEID_UUR_PRIJS_INCL.toFixed(2)} incl. 9% BTW.
+              Onderdelen = 21% BTW (koppel Shopify-producten voor voorraad). Arbeid = uren × €
+              {ARBEID_UUR_PRIJS_INCL.toFixed(2)} incl. 9% BTW.
             </p>
 
             <div className="mt-4 space-y-3">
               {items
                 .filter((i) => i.active)
-                .map((item) => (
-                  <div
-                    key={item.id}
-                    className="rounded-xl border border-koopje-black/10 p-4"
-                  >
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      <label className="text-xs text-koopje-black/50">
-                        Naam
-                        <input
-                          className="mt-0.5 w-full rounded border border-koopje-black/20 px-2 py-1.5 text-sm"
-                          defaultValue={item.naam}
-                          onBlur={(e) => {
-                            const v = e.target.value.trim();
-                            if (v && v !== item.naam) void patchItem(item.id, { naam: v });
-                          }}
-                        />
-                      </label>
-                      <div
-                        className="sm:col-span-2"
-                        onBlur={(e) => {
-                          if (e.currentTarget.contains(e.relatedTarget as Node)) return;
-                          const current = items.find((i) => i.id === item.id);
-                          if (!current) return;
-                          void patchItem(item.id, {
-                            onderdeel_naam: current.onderdeel_naam ?? "",
-                            shopify_product_id: current.shopify_product_id,
-                            shopify_variant_id: current.shopify_variant_id,
-                            onderdeel_prijs_incl: current.onderdeel_prijs_incl,
-                          });
-                        }}
-                      >
-                        <ProductAutocomplete
-                          label="Onderdeel (Shopify)"
-                          value={item.onderdeel_naam ?? ""}
-                          searchSource="shopify"
-                          placeholder="Zoek Shopify-product…"
-                          onChange={(title, prijs, meta) => {
-                            const selected = meta !== undefined;
-                            const nextPrijs =
-                              prijs != null && prijs !== ""
-                                ? parseFloat(String(prijs).replace(",", ".")) || 0
-                                : Number(item.onderdeel_prijs_incl);
-                            const nextProductId = selected
-                              ? (meta.shopify_product_id ?? null)
-                              : null;
-                            const nextVariantId = selected
-                              ? (meta.shopify_variant_id ?? null)
-                              : null;
-                            setItems((prev) =>
-                              prev.map((i) =>
-                                i.id === item.id
-                                  ? {
-                                      ...i,
-                                      onderdeel_naam: title,
-                                      onderdeel_prijs_incl: nextPrijs,
-                                      shopify_product_id: nextProductId,
-                                      shopify_variant_id: nextVariantId,
-                                    }
-                                  : i
-                              )
-                            );
-                            if (selected) {
-                              void patchItem(item.id, {
-                                onderdeel_naam: title,
-                                onderdeel_prijs_incl: nextPrijs,
-                                shopify_product_id: nextProductId,
-                                shopify_variant_id: nextVariantId,
-                              });
-                            }
-                          }}
-                        />
-                        <p className="mt-1 text-xs text-koopje-black/45">
-                          {item.shopify_product_id
-                            ? `Shopify gekoppeld (product ${item.shopify_product_id}${
-                                item.shopify_variant_id
-                                  ? ` / variant ${item.shopify_variant_id}`
-                                  : ""
-                              })`
-                            : "Nog geen Shopify-product gekoppeld — typ en kies uit de suggesties."}
-                        </p>
-                      </div>
-                      <label className="text-xs text-koopje-black/50">
-                        Onderdeelprijs incl. 21% (€)
-                        <input
-                          type="number"
-                          step="0.01"
-                          className="mt-0.5 w-full rounded border border-koopje-black/20 px-2 py-1.5 text-sm"
-                          value={item.onderdeel_prijs_incl}
-                          onChange={(e) => {
-                            const v = Number(e.target.value) || 0;
-                            setItems((prev) =>
-                              prev.map((i) =>
-                                i.id === item.id ? { ...i, onderdeel_prijs_incl: v } : i
-                              )
-                            );
-                          }}
-                          onBlur={(e) => {
-                            const v = Number(e.target.value) || 0;
-                            void patchItem(item.id, { onderdeel_prijs_incl: v });
-                          }}
-                        />
-                      </label>
-                      <div
-                        className="sm:col-span-2"
-                        onBlur={(e) => {
-                          if (e.currentTarget.contains(e.relatedTarget as Node)) return;
-                          const current = items.find((i) => i.id === item.id);
-                          if (!current) return;
-                          void patchItem(item.id, {
-                            arbeid_uren: Number(current.arbeid_uren) || 0,
-                          });
-                        }}
-                      >
-                        <ArbeidUrenInput
-                          compact
-                          uren={
-                            item.arbeid_uren != null && Number(item.arbeid_uren) > 0
-                              ? String(item.arbeid_uren)
-                              : ""
+                .map((item) => {
+                  const drafts = onderdelenById[item.id] ?? itemToDrafts(item);
+                  const onderdeelTotaal = draftsToPayload(drafts).reduce(
+                    (sum, o) => sum + o.prijs_incl,
+                    0
+                  );
+                  return (
+                    <div
+                      key={item.id}
+                      className="rounded-xl border border-koopje-black/10 p-4"
+                    >
+                      <div className="grid gap-3">
+                        <label className="text-xs text-koopje-black/50">
+                          Naam
+                          <input
+                            className="mt-0.5 w-full rounded border border-koopje-black/20 px-2 py-1.5 text-sm"
+                            defaultValue={item.naam}
+                            onBlur={(e) => {
+                              const v = e.target.value.trim();
+                              if (v && v !== item.naam) {
+                                void patchItem(item.id, { naam: v });
+                              }
+                            }}
+                          />
+                        </label>
+                        <OnderdelenEditor
+                          drafts={drafts}
+                          onChange={(next) =>
+                            setOnderdelenById((prev) => ({
+                              ...prev,
+                              [item.id]: next,
+                            }))
                           }
-                          onUrenChange={(u) => {
-                            const v = parseFloat(u.replace(",", ".")) || 0;
-                            setItems((prev) =>
-                              prev.map((i) =>
-                                i.id === item.id ? { ...i, arbeid_uren: v } : i
-                              )
-                            );
-                          }}
+                          onCommit={(next) =>
+                            void patchItem(item.id, {
+                              onderdelen: draftsToPayload(next),
+                            })
+                          }
                         />
+                        <div
+                          onBlur={(e) => {
+                            if (e.currentTarget.contains(e.relatedTarget as Node)) {
+                              return;
+                            }
+                            const current = items.find((i) => i.id === item.id);
+                            if (!current) return;
+                            void patchItem(item.id, {
+                              arbeid_uren: Number(current.arbeid_uren) || 0,
+                            });
+                          }}
+                        >
+                          <ArbeidUrenInput
+                            compact
+                            uren={
+                              item.arbeid_uren != null && Number(item.arbeid_uren) > 0
+                                ? String(item.arbeid_uren)
+                                : ""
+                            }
+                            onUrenChange={(u) => {
+                              const v = parseFloat(u.replace(",", ".")) || 0;
+                              setItems((prev) =>
+                                prev.map((i) =>
+                                  i.id === item.id ? { ...i, arbeid_uren: v } : i
+                                )
+                              );
+                            }}
+                          />
+                        </div>
+                      </div>
+                      <div className="mt-2 flex items-center justify-between text-xs text-koopje-black/50">
+                        <span>
+                          Onderdelen €{onderdeelTotaal.toFixed(2)}
+                          {" · "}
+                          Arbeid ≈ €
+                          {arbeidPrijsIncl(Number(item.arbeid_uren)).toFixed(2)}
+                          {" · "}
+                          Totaal ≈ €
+                          {(
+                            onderdeelTotaal +
+                            arbeidPrijsIncl(Number(item.arbeid_uren))
+                          ).toFixed(2)}
+                        </span>
+                        <button
+                          type="button"
+                          className="text-red-600 hover:underline"
+                          onClick={() => void removeItem(item.id)}
+                        >
+                          Deactiveren
+                        </button>
                       </div>
                     </div>
-                    <div className="mt-2 flex items-center justify-between text-xs text-koopje-black/50">
-                      <span>
-                        Arbeid ≈ €{arbeidPrijsIncl(Number(item.arbeid_uren)).toFixed(2)} incl. 9%
-                        {" · "}
-                        Totaal ≈ €
-                        {(
-                          Number(item.onderdeel_prijs_incl) +
-                          arbeidPrijsIncl(Number(item.arbeid_uren))
-                        ).toFixed(2)}
-                      </span>
-                      <button
-                        type="button"
-                        className="text-red-600 hover:underline"
-                        onClick={() => void removeItem(item.id)}
-                      >
-                        Deactiveren
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
             </div>
 
             <div className="mt-6 rounded-xl border border-dashed border-koopje-black/20 p-4">
               <h3 className="text-sm font-medium text-koopje-black">Nieuwe standaardreparatie</h3>
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <label className="text-xs text-koopje-black/50 sm:col-span-2">
+              <div className="mt-3 space-y-3">
+                <label className="block text-xs text-koopje-black/50">
                   Naam
                   <input
                     placeholder="bijv. Trapsensor vervangen"
@@ -392,46 +483,11 @@ export default function ReparatiePrijzenlijstPage() {
                     onChange={(e) => setNewNaam(e.target.value)}
                   />
                 </label>
-                <div className="sm:col-span-2">
-                  <ProductAutocomplete
-                    label="Onderdeel (Shopify)"
-                    value={newOnderdeel}
-                    searchSource="shopify"
-                    placeholder="Zoek Shopify-product…"
-                    onChange={(title, prijs, meta) => {
-                      setNewOnderdeel(title);
-                      if (prijs != null && prijs !== "") {
-                        setNewPrijs(String(prijs));
-                      }
-                      if (meta !== undefined) {
-                        setNewShopifyProductId(meta.shopify_product_id ?? null);
-                        setNewShopifyVariantId(meta.shopify_variant_id ?? null);
-                      } else {
-                        // Vrije tekst zonder selectie → geen voorraadkoppeling.
-                        setNewShopifyProductId(null);
-                        setNewShopifyVariantId(null);
-                      }
-                    }}
-                  />
-                  <p className="mt-1 text-xs text-koopje-black/45">
-                    {newShopifyProductId
-                      ? `Shopify gekoppeld (product ${newShopifyProductId}${
-                          newShopifyVariantId ? ` / variant ${newShopifyVariantId}` : ""
-                        })`
-                      : "Kies een product uit de suggesties om voorraad correct af te schrijven."}
-                  </p>
-                </div>
-                <label className="text-xs text-koopje-black/50">
-                  Onderdeelprijs incl. €
-                  <input
-                    className="mt-0.5 w-full rounded border border-koopje-black/20 px-3 py-2 text-sm"
-                    value={newPrijs}
-                    onChange={(e) => setNewPrijs(e.target.value)}
-                  />
-                </label>
-                <div className="sm:col-span-2">
-                  <ArbeidUrenInput compact uren={newUren} onUrenChange={setNewUren} />
-                </div>
+                <OnderdelenEditor
+                  drafts={newOnderdelen}
+                  onChange={setNewOnderdelen}
+                />
+                <ArbeidUrenInput compact uren={newUren} onUrenChange={setNewUren} />
               </div>
               <button
                 type="button"

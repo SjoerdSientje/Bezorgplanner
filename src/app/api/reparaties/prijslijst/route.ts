@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAccountEmail } from "@/lib/account";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import {
+  legacyFieldsFromOnderdelen,
   listReparatieStandaardItems,
+  parseOnderdelenInput,
   type ReparatieStandaardItem,
 } from "@/lib/reparaties";
 
@@ -24,6 +26,26 @@ export async function GET(request: NextRequest) {
   }
 }
 
+function buildOnderdelenPayload(body: Record<string, unknown>) {
+  const onderdelen =
+    body.onderdelen !== undefined
+      ? parseOnderdelenInput(body.onderdelen)
+      : parseOnderdelenInput(
+          body.onderdeel_naam || body.shopify_product_id
+            ? [
+                {
+                  naam: String(body.onderdeel_naam ?? "").trim(),
+                  prijs_incl: Number(body.onderdeel_prijs_incl) || 0,
+                  shopify_product_id: body.shopify_product_id ?? null,
+                  shopify_variant_id: body.shopify_variant_id ?? null,
+                },
+              ]
+            : []
+        );
+  const legacy = legacyFieldsFromOnderdelen(onderdelen);
+  return { onderdelen, ...legacy };
+}
+
 export async function POST(request: NextRequest) {
   try {
     const ownerEmail = requireAccountEmail(request);
@@ -35,17 +57,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Naam verplicht." }, { status: 400 });
     }
 
+    const { onderdelen, ...legacy } = buildOnderdelenPayload(body);
+
     const payload = {
       owner_email: ownerEmail,
       naam,
-      onderdeel_naam: String(body.onderdeel_naam ?? "").trim() || null,
-      onderdeel_prijs_incl: Math.max(0, Number(body.onderdeel_prijs_incl) || 0),
-      shopify_product_id: body.shopify_product_id
-        ? Number(body.shopify_product_id)
-        : null,
-      shopify_variant_id: body.shopify_variant_id
-        ? Number(body.shopify_variant_id)
-        : null,
+      ...legacy,
+      onderdelen_json: onderdelen,
       arbeid_uren: Math.max(0, Number(body.arbeid_uren) || 0),
       sort_order: Number.isFinite(Number(body.sort_order))
         ? Number(body.sort_order)
@@ -79,26 +97,38 @@ export async function PATCH(request: NextRequest) {
 
     const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
     if (body.naam != null) patch.naam = String(body.naam).trim();
-    if (body.onderdeel_naam !== undefined) {
-      patch.onderdeel_naam = String(body.onderdeel_naam ?? "").trim() || null;
-    }
-    if (body.onderdeel_prijs_incl != null) {
-      patch.onderdeel_prijs_incl = Math.max(0, Number(body.onderdeel_prijs_incl) || 0);
-    }
     if (body.arbeid_uren != null) {
       patch.arbeid_uren = Math.max(0, Number(body.arbeid_uren) || 0);
     }
     if (body.sort_order != null) patch.sort_order = Number(body.sort_order) || 0;
     if (body.active != null) patch.active = Boolean(body.active);
-    if (body.shopify_product_id !== undefined) {
-      patch.shopify_product_id = body.shopify_product_id
-        ? Number(body.shopify_product_id)
-        : null;
-    }
-    if (body.shopify_variant_id !== undefined) {
-      patch.shopify_variant_id = body.shopify_variant_id
-        ? Number(body.shopify_variant_id)
-        : null;
+
+    if (body.onderdelen !== undefined) {
+      const onderdelen = parseOnderdelenInput(body.onderdelen);
+      const legacy = legacyFieldsFromOnderdelen(onderdelen);
+      patch.onderdelen_json = onderdelen;
+      Object.assign(patch, legacy);
+    } else {
+      // Legacy enkelveld-updates blijven werken.
+      if (body.onderdeel_naam !== undefined) {
+        patch.onderdeel_naam = String(body.onderdeel_naam ?? "").trim() || null;
+      }
+      if (body.onderdeel_prijs_incl != null) {
+        patch.onderdeel_prijs_incl = Math.max(
+          0,
+          Number(body.onderdeel_prijs_incl) || 0
+        );
+      }
+      if (body.shopify_product_id !== undefined) {
+        patch.shopify_product_id = body.shopify_product_id
+          ? Number(body.shopify_product_id)
+          : null;
+      }
+      if (body.shopify_variant_id !== undefined) {
+        patch.shopify_variant_id = body.shopify_variant_id
+          ? Number(body.shopify_variant_id)
+          : null;
+      }
     }
 
     const { data, error } = await supabase

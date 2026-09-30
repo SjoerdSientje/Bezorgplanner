@@ -9,6 +9,7 @@ import ProductAutocomplete from "@/components/ProductAutocomplete";
 import ArbeidUrenInput from "@/components/ArbeidUrenInput";
 import {
   arbeidPrijsIncl,
+  normalizeStandaardOnderdelen,
   reparatieSoortHeeftProducten,
   type ReparatieBetaalwijze,
   type ReparatieSoort,
@@ -127,6 +128,8 @@ export default function ReparatieNieuwPage() {
   function addStandaardRegel(id: string) {
     const s = standaard.find((i) => i.id === id);
     if (!s) return;
+    const onderdelen = normalizeStandaardOnderdelen(s);
+    const prijs = onderdelen.reduce((sum, o) => sum + (o.prijs_incl || 0), 0);
     setRegels((prev) => [
       ...prev,
       {
@@ -134,10 +137,10 @@ export default function ReparatieNieuwPage() {
         mode: "standaard",
         standaard_id: s.id,
         naam: s.naam,
-        onderdeel_naam: s.onderdeel_naam || s.naam,
-        onderdeel_prijs_incl: String(s.onderdeel_prijs_incl),
-        shopify_product_id: s.shopify_product_id,
-        shopify_variant_id: s.shopify_variant_id,
+        onderdeel_naam: onderdelen.map((o) => o.naam).join(" + ") || s.naam,
+        onderdeel_prijs_incl: String(prijs),
+        shopify_product_id: onderdelen[0]?.shopify_product_id ?? null,
+        shopify_variant_id: onderdelen[0]?.shopify_variant_id ?? null,
         arbeid_uren: String(s.arbeid_uren),
       },
     ]);
@@ -453,7 +456,8 @@ export default function ReparatieNieuwPage() {
                             <strong>{r.naam}</strong>
                             <span className="text-koopje-black/50">
                               {" "}
-                              · onderdeel €{r.onderdeel_prijs_incl} · {r.arbeid_uren} u arbeid (€
+                              · {r.onderdeel_naam || "onderdelen"} (€{r.onderdeel_prijs_incl}) ·{" "}
+                              {r.arbeid_uren} u arbeid (€
                               {arbeidPrijsIncl(parseFloat(r.arbeid_uren) || 0).toFixed(2)})
                             </span>
                           </p>

@@ -7,7 +7,9 @@ import {
   buildReparatieLineItemsJson,
   buildReparatieShopifyLineItems,
   calcVoorrijkostenForAddress,
+  legacyFieldsFromOnderdelen,
   listReparatieStandaardItems,
+  normalizeStandaardOnderdelen,
   productenTekstFromLineItems,
   reparatieSoortHeeftProducten,
   stripVoorrijFromRegels,
@@ -168,14 +170,17 @@ export async function POST(request: NextRequest) {
       if (r.kind === "standaard" && r.standaard_id) {
         const s = standaardById.get(String(r.standaard_id));
         if (!s) continue;
+        const onderdelen = normalizeStandaardOnderdelen(s);
+        const legacy = legacyFieldsFromOnderdelen(onderdelen);
         expanded.push({
           kind: "standaard",
           standaard_id: s.id,
           naam: s.naam,
-          onderdeel_naam: s.onderdeel_naam || s.naam,
-          onderdeel_prijs_incl: Number(s.onderdeel_prijs_incl) || 0,
-          shopify_product_id: s.shopify_product_id,
-          shopify_variant_id: s.shopify_variant_id,
+          onderdeel_naam: legacy.onderdeel_naam || s.naam,
+          onderdeel_prijs_incl: legacy.onderdeel_prijs_incl,
+          shopify_product_id: legacy.shopify_product_id,
+          shopify_variant_id: legacy.shopify_variant_id,
+          onderdelen,
           arbeid_uren: Number(s.arbeid_uren) || 0,
         });
       } else if (r.kind === "custom") {
@@ -485,14 +490,17 @@ export async function PATCH(request: NextRequest) {
       if (r.kind === "standaard" && r.standaard_id) {
         const s = standaardById.get(String(r.standaard_id));
         if (!s) continue;
+        const onderdelen = normalizeStandaardOnderdelen(s);
+        const legacy = legacyFieldsFromOnderdelen(onderdelen);
         expanded.push({
           kind: "standaard",
           standaard_id: s.id,
           naam: s.naam,
-          onderdeel_naam: s.onderdeel_naam || s.naam,
-          onderdeel_prijs_incl: Number(s.onderdeel_prijs_incl) || 0,
-          shopify_product_id: s.shopify_product_id,
-          shopify_variant_id: s.shopify_variant_id,
+          onderdeel_naam: legacy.onderdeel_naam || s.naam,
+          onderdeel_prijs_incl: legacy.onderdeel_prijs_incl,
+          shopify_product_id: legacy.shopify_product_id,
+          shopify_variant_id: legacy.shopify_variant_id,
+          onderdelen,
           arbeid_uren: Number(s.arbeid_uren) || 0,
         });
       } else if (r.kind === "custom") {

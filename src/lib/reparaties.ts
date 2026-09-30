@@ -19,6 +19,13 @@ export function reparatieSoortHeeftProducten(soort: ReparatieSoort): boolean {
   return soort === "reparatie_deur" || soort === "reparatie_terugbrengen";
 }
 
+export type ReparatieOnderdeel = {
+  naam: string;
+  prijs_incl: number;
+  shopify_product_id?: number | null;
+  shopify_variant_id?: number | null;
+};
+
 export type ReparatieStandaardItem = {
   id: string;
   owner_email: string;
@@ -27,6 +34,8 @@ export type ReparatieStandaardItem = {
   onderdeel_prijs_incl: number;
   shopify_product_id: number | null;
   shopify_variant_id: number | null;
+  /** Meerdere Shopify-onderdelen; leeg = legacy enkelveld. */
+  onderdelen_json?: ReparatieOnderdeel[] | null;
   arbeid_uren: number;
   sort_order: number;
   active: boolean;
@@ -86,10 +95,94 @@ export type ReparatieRegelInput = {
   onderdeel_prijs_incl?: number | null;
   shopify_product_id?: number | null;
   shopify_variant_id?: number | null;
+  /** Meerdere onderdelen (standaardreparatie of custom). */
+  onderdelen?: ReparatieOnderdeel[] | null;
   arbeid_uren?: number | null;
   /** Voorrijkosten bedrag incl. (meestal 21%). */
   voorrij_bedrag?: number | null;
 };
+
+/** Parse/normalize onderdelen uit standaarditem (nieuw of legacy enkelveld). */
+export function normalizeStandaardOnderdelen(
+  item: Pick<
+    ReparatieStandaardItem,
+    | "naam"
+    | "onderdeel_naam"
+    | "onderdeel_prijs_incl"
+    | "shopify_product_id"
+    | "shopify_variant_id"
+    | "onderdelen_json"
+  >
+): ReparatieOnderdeel[] {
+  const raw = item.onderdelen_json;
+  if (Array.isArray(raw) && raw.length > 0) {
+    const out: ReparatieOnderdeel[] = [];
+    for (const entry of raw) {
+      if (!entry || typeof entry !== "object") continue;
+      const r = entry as Record<string, unknown>;
+      const naam = String(r.naam ?? "").trim();
+      if (!naam) continue;
+      out.push({
+        naam,
+        prijs_incl: Math.max(0, Number(r.prijs_incl) || 0),
+        shopify_product_id:
+          r.shopify_product_id != null ? Number(r.shopify_product_id) : null,
+        shopify_variant_id:
+          r.shopify_variant_id != null ? Number(r.shopify_variant_id) : null,
+      });
+    }
+    if (out.length > 0) return out;
+  }
+  const naam = String(item.onderdeel_naam || item.naam || "").trim();
+  if (!naam && item.shopify_product_id == null) return [];
+  return [
+    {
+      naam: naam || "Onderdeel",
+      prijs_incl: Math.max(0, Number(item.onderdeel_prijs_incl) || 0),
+      shopify_product_id: item.shopify_product_id ?? null,
+      shopify_variant_id: item.shopify_variant_id ?? null,
+    },
+  ];
+}
+
+export function parseOnderdelenInput(raw: unknown): ReparatieOnderdeel[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ReparatieOnderdeel[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const r = entry as Record<string, unknown>;
+    const naam = String(r.naam ?? r.onderdeel_naam ?? "").trim();
+    if (!naam) continue;
+    out.push({
+      naam,
+      prijs_incl: Math.max(0, Number(r.prijs_incl ?? r.onderdeel_prijs_incl) || 0),
+      shopify_product_id:
+        r.shopify_product_id != null ? Number(r.shopify_product_id) : null,
+      shopify_variant_id:
+        r.shopify_variant_id != null ? Number(r.shopify_variant_id) : null,
+    });
+  }
+  return out;
+}
+
+/** Legacy enkelvelden synchroon houden met onderdelenlijst. */
+export function legacyFieldsFromOnderdelen(onderdelen: ReparatieOnderdeel[]): {
+  onderdeel_naam: string | null;
+  onderdeel_prijs_incl: number;
+  shopify_product_id: number | null;
+  shopify_variant_id: number | null;
+} {
+  const first = onderdelen[0];
+  return {
+    onderdeel_naam:
+      onderdelen.map((o) => o.naam).filter(Boolean).join(" + ") || null,
+    onderdeel_prijs_incl: Math.round(
+      onderdelen.reduce((sum, o) => sum + (Number(o.prijs_incl) || 0), 0) * 100
+    ) / 100,
+    shopify_product_id: first?.shopify_product_id ?? null,
+    shopify_variant_id: first?.shopify_variant_id ?? null,
+  };
+}
 
 /** Bouw Shopify-achtige line items: onderdelen 21%, arbeid 9% (titel Arbeidskosten…), voorrij 21%. */
 export function buildReparatieShopifyLineItems(regels: ReparatieRegelInput[]): ShopifyLineItem[] {
@@ -108,16 +201,34 @@ export function buildReparatieShopifyLineItems(regels: ReparatieRegelInput[]): S
       continue;
     }
 
-    const onderdeelPrijs = Number(r.onderdeel_prijs_incl ?? 0);
-    const onderdeelNaam = String(r.onderdeel_naam ?? r.naam ?? "").trim();
-    if (onderdeelNaam && onderdeelPrijs >= 0.01) {
+    const onderdelen: ReparatieOnderdeel[] =
+      Array.isArray(r.onderdelen) && r.onderdelen.length > 0
+        ? r.onderdelen
+        : (() => {
+            const onderdeelNaam = String(r.onderdeel_naam ?? r.naam ?? "").trim();
+            const onderdeelPrijs = Number(r.onderdeel_prijs_incl ?? 0);
+            if (!onderdeelNaam) return [];
+            return [
+              {
+                naam: onderdeelNaam,
+                prijs_incl: onderdeelPrijs,
+                shopify_product_id: r.shopify_product_id ?? null,
+                shopify_variant_id: r.shopify_variant_id ?? null,
+              },
+            ];
+          })();
+
+    for (const o of onderdelen) {
+      const naam = String(o.naam ?? "").trim();
+      const prijs = Number(o.prijs_incl ?? 0);
+      if (!naam || prijs < 0.01) continue;
       out.push({
-        name: onderdeelNaam,
-        price: onderdeelPrijs,
+        name: naam,
+        price: prijs,
         quantity: 1,
         properties: [],
-        product_id: r.shopify_product_id ?? undefined,
-        variant_id: r.shopify_variant_id ?? undefined,
+        product_id: o.shopify_product_id ?? undefined,
+        variant_id: o.shopify_variant_id ?? undefined,
       });
     }
 
@@ -262,6 +373,7 @@ export function parseStoredReparatieRegels(raw: unknown): ReparatieRegelInput[] 
           r.shopify_product_id != null ? Number(r.shopify_product_id) : null,
         shopify_variant_id:
           r.shopify_variant_id != null ? Number(r.shopify_variant_id) : null,
+        onderdelen: parseOnderdelenInput(r.onderdelen),
         arbeid_uren: Number(r.arbeid_uren) || 0,
       });
     } else if (kind === "custom") {
@@ -274,6 +386,7 @@ export function parseStoredReparatieRegels(raw: unknown): ReparatieRegelInput[] 
           r.shopify_product_id != null ? Number(r.shopify_product_id) : null,
         shopify_variant_id:
           r.shopify_variant_id != null ? Number(r.shopify_variant_id) : null,
+        onderdelen: parseOnderdelenInput(r.onderdelen),
         arbeid_uren: Number(r.arbeid_uren) || 0,
       });
     }
