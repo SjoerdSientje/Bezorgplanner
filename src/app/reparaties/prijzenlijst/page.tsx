@@ -175,6 +175,11 @@ export default function ReparatiePrijzenlijstPage() {
     emptyOnderdeel(),
   ]);
   const [newUren, setNewUren] = useState("1");
+  const [expandedIds, setExpandedIds] = useState<Record<string, boolean>>({});
+
+  function toggleExpanded(id: string) {
+    setExpandedIds((prev) => ({ ...prev, [id]: !prev[id] }));
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -379,105 +384,7 @@ export default function ReparatiePrijzenlijstPage() {
               {ARBEID_UUR_PRIJS_INCL.toFixed(2)} incl. 9% BTW.
             </p>
 
-            <div className="mt-4 space-y-3">
-              {items
-                .filter((i) => i.active)
-                .map((item) => {
-                  const drafts = onderdelenById[item.id] ?? itemToDrafts(item);
-                  const onderdeelTotaal = draftsToPayload(drafts).reduce(
-                    (sum, o) => sum + o.prijs_incl,
-                    0
-                  );
-                  return (
-                    <div
-                      key={item.id}
-                      className="rounded-xl border border-koopje-black/10 p-4"
-                    >
-                      <div className="grid gap-3">
-                        <label className="text-xs text-koopje-black/50">
-                          Naam
-                          <input
-                            className="mt-0.5 w-full rounded border border-koopje-black/20 px-2 py-1.5 text-sm"
-                            defaultValue={item.naam}
-                            onBlur={(e) => {
-                              const v = e.target.value.trim();
-                              if (v && v !== item.naam) {
-                                void patchItem(item.id, { naam: v });
-                              }
-                            }}
-                          />
-                        </label>
-                        <OnderdelenEditor
-                          drafts={drafts}
-                          onChange={(next) =>
-                            setOnderdelenById((prev) => ({
-                              ...prev,
-                              [item.id]: next,
-                            }))
-                          }
-                          onCommit={(next) =>
-                            void patchItem(item.id, {
-                              onderdelen: draftsToPayload(next),
-                            })
-                          }
-                        />
-                        <div
-                          onBlur={(e) => {
-                            if (e.currentTarget.contains(e.relatedTarget as Node)) {
-                              return;
-                            }
-                            const current = items.find((i) => i.id === item.id);
-                            if (!current) return;
-                            void patchItem(item.id, {
-                              arbeid_uren: Number(current.arbeid_uren) || 0,
-                            });
-                          }}
-                        >
-                          <ArbeidUrenInput
-                            compact
-                            uren={
-                              item.arbeid_uren != null && Number(item.arbeid_uren) > 0
-                                ? String(item.arbeid_uren)
-                                : ""
-                            }
-                            onUrenChange={(u) => {
-                              const v = parseFloat(u.replace(",", ".")) || 0;
-                              setItems((prev) =>
-                                prev.map((i) =>
-                                  i.id === item.id ? { ...i, arbeid_uren: v } : i
-                                )
-                              );
-                            }}
-                          />
-                        </div>
-                      </div>
-                      <div className="mt-2 flex items-center justify-between text-xs text-koopje-black/50">
-                        <span>
-                          Onderdelen €{onderdeelTotaal.toFixed(2)}
-                          {" · "}
-                          Arbeid ≈ €
-                          {arbeidPrijsIncl(Number(item.arbeid_uren)).toFixed(2)}
-                          {" · "}
-                          Totaal ≈ €
-                          {(
-                            onderdeelTotaal +
-                            arbeidPrijsIncl(Number(item.arbeid_uren))
-                          ).toFixed(2)}
-                        </span>
-                        <button
-                          type="button"
-                          className="text-red-600 hover:underline"
-                          onClick={() => void removeItem(item.id)}
-                        >
-                          Deactiveren
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-            </div>
-
-            <div className="mt-6 rounded-xl border border-dashed border-koopje-black/20 p-4">
+            <div className="mt-4 rounded-xl border border-dashed border-koopje-black/20 p-4">
               <h3 className="text-sm font-medium text-koopje-black">Nieuwe standaardreparatie</h3>
               <div className="mt-3 space-y-3">
                 <label className="block text-xs text-koopje-black/50">
@@ -503,6 +410,156 @@ export default function ReparatiePrijzenlijstPage() {
               >
                 Toevoegen
               </button>
+            </div>
+
+            <div className="mt-6 space-y-2">
+              {items
+                .filter((i) => i.active)
+                .map((item) => {
+                  const drafts = onderdelenById[item.id] ?? itemToDrafts(item);
+                  const onderdeelTotaal = draftsToPayload(drafts).reduce(
+                    (sum, o) => sum + o.prijs_incl,
+                    0
+                  );
+                  const arbeid = arbeidPrijsIncl(Number(item.arbeid_uren));
+                  const totaal = onderdeelTotaal + arbeid;
+                  const expanded = Boolean(expandedIds[item.id]);
+                  const onderdeelSamenvatting =
+                    drafts
+                      .map((d) => d.naam.trim())
+                      .filter(Boolean)
+                      .join(" · ") || "Geen onderdelen";
+
+                  return (
+                    <div
+                      key={item.id}
+                      className="rounded-xl border border-koopje-black/10"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => toggleExpanded(item.id)}
+                        className="flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-stone-50"
+                        aria-expanded={expanded}
+                      >
+                        <span
+                          className={`mt-0.5 shrink-0 text-koopje-black/40 transition ${
+                            expanded ? "rotate-90" : ""
+                          }`}
+                          aria-hidden
+                        >
+                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M9 5l7 7-7 7"
+                            />
+                          </svg>
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm font-medium text-koopje-black">
+                            {item.naam}
+                          </span>
+                          <span className="mt-0.5 block truncate text-xs text-koopje-black/50">
+                            {onderdeelSamenvatting}
+                          </span>
+                        </span>
+                        <span className="shrink-0 text-right text-xs text-koopje-black/55">
+                          <span className="block font-medium text-koopje-black/80">
+                            €{totaal.toFixed(2)}
+                          </span>
+                          <span className="block">
+                            {Number(item.arbeid_uren) || 0} u arbeid
+                          </span>
+                        </span>
+                      </button>
+
+                      {expanded && (
+                        <div className="border-t border-koopje-black/10 px-4 pb-4 pt-3">
+                          <div className="grid gap-3">
+                            <label className="text-xs text-koopje-black/50">
+                              Naam
+                              <input
+                                className="mt-0.5 w-full rounded border border-koopje-black/20 px-2 py-1.5 text-sm"
+                                defaultValue={item.naam}
+                                onBlur={(e) => {
+                                  const v = e.target.value.trim();
+                                  if (v && v !== item.naam) {
+                                    void patchItem(item.id, { naam: v });
+                                  }
+                                }}
+                              />
+                            </label>
+                            <OnderdelenEditor
+                              drafts={drafts}
+                              onChange={(next) =>
+                                setOnderdelenById((prev) => ({
+                                  ...prev,
+                                  [item.id]: next,
+                                }))
+                              }
+                              onCommit={(next) =>
+                                void patchItem(item.id, {
+                                  onderdelen: draftsToPayload(next),
+                                })
+                              }
+                            />
+                            <div
+                              onBlur={(e) => {
+                                if (
+                                  e.currentTarget.contains(e.relatedTarget as Node)
+                                ) {
+                                  return;
+                                }
+                                const current = items.find((i) => i.id === item.id);
+                                if (!current) return;
+                                void patchItem(item.id, {
+                                  arbeid_uren: Number(current.arbeid_uren) || 0,
+                                });
+                              }}
+                            >
+                              <ArbeidUrenInput
+                                compact
+                                uren={
+                                  item.arbeid_uren != null &&
+                                  Number(item.arbeid_uren) > 0
+                                    ? String(item.arbeid_uren)
+                                    : ""
+                                }
+                                onUrenChange={(u) => {
+                                  const v = parseFloat(u.replace(",", ".")) || 0;
+                                  setItems((prev) =>
+                                    prev.map((i) =>
+                                      i.id === item.id
+                                        ? { ...i, arbeid_uren: v }
+                                        : i
+                                    )
+                                  );
+                                }}
+                              />
+                            </div>
+                          </div>
+                          <div className="mt-3 flex items-center justify-between text-xs text-koopje-black/50">
+                            <span>
+                              Onderdelen €{onderdeelTotaal.toFixed(2)}
+                              {" · "}
+                              Arbeid ≈ €{arbeid.toFixed(2)}
+                              {" · "}
+                              Totaal ≈ €{totaal.toFixed(2)}
+                            </span>
+                            <button
+                              type="button"
+                              className="text-red-600 hover:underline"
+                              onClick={() => void removeItem(item.id)}
+                            >
+                              Deactiveren
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
             </div>
           </section>
         </div>
