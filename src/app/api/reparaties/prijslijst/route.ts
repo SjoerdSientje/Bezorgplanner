@@ -19,10 +19,14 @@ export async function GET(request: NextRequest) {
     const items = await listReparatieStandaardItems(supabase, ownerEmail, {
       includeInactive,
     });
-    return NextResponse.json({ items });
+    return NextResponse.json(
+      { items },
+      { headers: { "Cache-Control": "no-store" } }
+    );
   } catch (e) {
     const message = e instanceof Error ? e.message : "Ophalen mislukt.";
-    return NextResponse.json({ error: message }, { status: 401 });
+    const status = /niet ingelogd|ongeldig account/i.test(message) ? 401 : 500;
+    return NextResponse.json({ error: message }, { status });
   }
 }
 

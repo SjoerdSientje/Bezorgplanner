@@ -121,6 +121,8 @@ function storedToDraft(raw: unknown): DraftRegel[] {
 export default function ReparatiesGeplandPage() {
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [standaard, setStandaard] = useState<ReparatieStandaardItem[]>([]);
+  const [standaardLoading, setStandaardLoading] = useState(true);
+  const [standaardError, setStandaardError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [edit, setEdit] = useState<EditDraft | null>(null);
@@ -128,6 +130,37 @@ export default function ReparatiesGeplandPage() {
   const [saving, setSaving] = useState(false);
   const [voorrij, setVoorrij] = useState<{ km: number; bedrag: number } | null>(null);
   const [voorrijLoading, setVoorrijLoading] = useState(false);
+
+  const loadStandaard = useCallback(async () => {
+    setStandaardLoading(true);
+    setStandaardError(null);
+    let lastError: string | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const res = await fetch(`/api/reparaties/prijslijst?t=${Date.now()}`, {
+          cache: "no-store",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(
+            typeof data?.error === "string" ? data.error : "Prijzenlijst laden mislukt"
+          );
+        }
+        setStandaard(Array.isArray(data.items) ? data.items : []);
+        setStandaardError(null);
+        setStandaardLoading(false);
+        return;
+      } catch (e) {
+        lastError = e instanceof Error ? e.message : "Prijzenlijst laden mislukt";
+        if (attempt < 2) {
+          await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
+        }
+      }
+    }
+    setStandaard([]);
+    setStandaardError(lastError);
+    setStandaardLoading(false);
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -146,11 +179,8 @@ export default function ReparatiesGeplandPage() {
 
   useEffect(() => {
     void load();
-    void fetch("/api/reparaties/prijslijst")
-      .then((r) => r.json())
-      .then((d) => setStandaard(d.items ?? []))
-      .catch(() => {});
-  }, [load]);
+    void loadStandaard();
+  }, [load, loadStandaard]);
 
   const volledigAdres = useMemo(() => {
     if (!edit) return "";
@@ -635,10 +665,12 @@ export default function ReparatiesGeplandPage() {
                       {(edit.soort === "reparatie_terugbrengen" ||
                         !edit.producten_nog_niet_bekend) && (
                         <>
-                          <div className="flex flex-wrap gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
                             <select
+                              key={`standaard-${standaard.map((s) => s.id).join("-") || "leeg"}`}
                               className="rounded-lg border border-koopje-black/20 px-2 py-1.5 text-sm"
                               defaultValue=""
+                              disabled={standaardLoading || standaard.length === 0}
                               onChange={(e) => {
                                 if (e.target.value) {
                                   addStandaardRegel(e.target.value);
@@ -646,7 +678,13 @@ export default function ReparatiesGeplandPage() {
                                 }
                               }}
                             >
-                              <option value="">+ Standaardreparatie…</option>
+                              <option value="">
+                                {standaardLoading
+                                  ? "Standaardreparaties laden…"
+                                  : standaard.length === 0
+                                    ? "Geen standaardreparaties"
+                                    : "+ Standaardreparatie…"}
+                              </option>
                               {standaard.map((s) => (
                                 <option key={s.id} value={s.id}>
                                   {s.naam}
@@ -660,7 +698,20 @@ export default function ReparatiesGeplandPage() {
                             >
                               + Geen standaard (Shopify + uren)
                             </button>
+                            {(standaardError ||
+                              (!standaardLoading && standaard.length === 0)) && (
+                              <button
+                                type="button"
+                                onClick={() => void loadStandaard()}
+                                className="text-xs text-koopje-orange hover:underline"
+                              >
+                                Opnieuw laden
+                              </button>
+                            )}
                           </div>
+                          {standaardError && (
+                            <p className="text-xs text-red-600">{standaardError}</p>
+                          )}
 
                           {edit.regels.map((r) => (
                             <div
