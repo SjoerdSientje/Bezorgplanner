@@ -85,8 +85,10 @@ export default function ProductAutocomplete({
   const [loading, setLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const focusedRef = useRef(false);
   const productKindRef = useRef(productKind);
   productKindRef.current = productKind;
+  const fetchSeqRef = useRef(0);
 
   const searchPath =
     searchSource === "shopify" ? "/api/shopify/product-search" : "/api/inventory/search";
@@ -94,6 +96,7 @@ export default function ProductAutocomplete({
   useEffect(() => {
     function handler(e: MouseEvent) {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        focusedRef.current = false;
         setShowSuggestions(false);
       }
     }
@@ -101,18 +104,24 @@ export default function ProductAutocomplete({
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  // Bij wisselen fiets/extra: suggesties legen en opnieuw zoeken met huidige waarde.
+  // Bij wisselen fiets/extra: suggesties legen; alleen opnieuw zoeken als het veld focus heeft.
   useEffect(() => {
     if (searchSource !== "shopify") return;
     setSuggestions([]);
     setShowSuggestions(false);
     setActiveIndex(-1);
-    if (value.trim().length >= MIN_QUERY_LEN) {
+    if (focusedRef.current && value.trim().length >= MIN_QUERY_LEN) {
       if (debounceRef.current) clearTimeout(debounceRef.current);
       debounceRef.current = setTimeout(() => fetchSuggestions(value), DEBOUNCE_MS);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- alleen productKind-wissel
   }, [productKind, searchSource]);
+
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, []);
 
   function fetchSuggestions(query: string) {
     if (query.length < MIN_QUERY_LEN) {
@@ -121,6 +130,7 @@ export default function ProductAutocomplete({
       return;
     }
 
+    const seq = ++fetchSeqRef.current;
     setLoading(true);
     const kind = productKindRef.current;
     const kindParam =
@@ -130,16 +140,21 @@ export default function ProductAutocomplete({
     fetch(`${searchPath}?q=${encodeURIComponent(query)}${kindParam}`)
       .then((res) => res.json())
       .then((data: { results?: SearchResult[] }) => {
+        if (seq !== fetchSeqRef.current) return;
         const results = data?.results ?? [];
         setSuggestions(results);
-        setShowSuggestions(results.length > 0);
+        // Alleen openen als de gebruiker nog in het veld zit — voorkomt popups na remount/save.
+        setShowSuggestions(focusedRef.current && results.length > 0);
         setActiveIndex(-1);
       })
       .catch(() => {
+        if (seq !== fetchSeqRef.current) return;
         setSuggestions([]);
         setShowSuggestions(false);
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (seq === fetchSeqRef.current) setLoading(false);
+      });
   }
 
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -199,7 +214,17 @@ export default function ProductAutocomplete({
           onChange={handleChange}
           onKeyDown={handleKeyDown}
           onFocus={() => {
-            if (suggestions.length > 0) setShowSuggestions(true);
+            focusedRef.current = true;
+            if (value.trim().length >= MIN_QUERY_LEN) {
+              fetchSuggestions(value);
+            } else if (suggestions.length > 0) {
+              setShowSuggestions(true);
+            }
+          }}
+          onBlur={() => {
+            // Klik op suggestie gebruikt mousedown+preventDefault; blur daarna negeren via focused.
+            focusedRef.current = false;
+            setShowSuggestions(false);
           }}
           placeholder={placeholder}
           className={inputCls}

@@ -35,11 +35,17 @@ function emptyOnderdeel(): DraftOnderdeel {
   };
 }
 
-function itemToDrafts(item: ReparatieStandaardItem): DraftOnderdeel[] {
+function itemToDrafts(
+  item: ReparatieStandaardItem,
+  prev?: DraftOnderdeel[]
+): DraftOnderdeel[] {
   const onderdelen = normalizeStandaardOnderdelen(item);
-  if (onderdelen.length === 0) return [emptyOnderdeel()];
-  return onderdelen.map((o) => ({
-    key: mkKey(),
+  if (onderdelen.length === 0) {
+    return prev?.length ? prev : [emptyOnderdeel()];
+  }
+  return onderdelen.map((o, i) => ({
+    // Stabiele keys behouden zodat ProductAutocomplete niet remount na opslaan.
+    key: prev?.[i]?.key ?? mkKey(),
     naam: o.naam,
     prijs_incl: o.prijs_incl > 0 ? String(o.prijs_incl) : "",
     shopify_product_id: o.shopify_product_id ?? null,
@@ -264,7 +270,7 @@ export default function ReparatiePrijzenlijstPage() {
       if (patch.onderdelen !== undefined) {
         setOnderdelenById((prev) => ({
           ...prev,
-          [id]: itemToDrafts(updated),
+          [id]: itemToDrafts(updated, prev[id]),
         }));
       }
     } catch (e) {
