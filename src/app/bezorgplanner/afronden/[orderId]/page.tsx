@@ -218,7 +218,7 @@ export default function AfrondenVragenlijstPage({
       .catch(() => {});
   }, []);
 
-  const BEZORGER_OPTIES = ["Tristan", "Eef", "Silas"] as const;
+  const BEZORGER_OPTIES = ["Tristan", "Eef", "Silas", "Joe", "Hugo"] as const;
   const [bezorgerKeuze, setBezorgerKeuze] = useState<string>("");
   const [bezorgerAnders, setBezorgerAnders] = useState("");
   const bezorgerNaam =
