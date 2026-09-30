@@ -70,6 +70,13 @@ export function arbeidPrijsIncl(uren: number): number {
   return Math.round(u * ARBEID_UUR_PRIJS_INCL * 100) / 100;
 }
 
+/** Arbeidskosten incl. → uren (omgekeerde van arbeidPrijsIncl). */
+export function arbeidUrenFromPrijsIncl(prijsIncl: number): number {
+  const p = Math.max(0, Number(prijsIncl) || 0);
+  if (p < 0.01 || ARBEID_UUR_PRIJS_INCL <= 0) return 0;
+  return Math.round((p / ARBEID_UUR_PRIJS_INCL) * 10000) / 10000;
+}
+
 export type ReparatieRegelInput = {
   kind: "standaard" | "custom" | "voorrijkosten";
   /** Standaard-reparatie id (alleen kind=standaard). */

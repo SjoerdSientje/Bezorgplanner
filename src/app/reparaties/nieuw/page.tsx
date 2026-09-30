@@ -6,8 +6,8 @@ import { useRouter } from "next/navigation";
 import Header from "@/components/Header";
 import AdresAutocomplete from "@/components/AdresAutocomplete";
 import ProductAutocomplete from "@/components/ProductAutocomplete";
+import ArbeidUrenInput from "@/components/ArbeidUrenInput";
 import {
-  ARBEID_UUR_PRIJS_INCL,
   arbeidPrijsIncl,
   reparatieSoortHeeftProducten,
   type ReparatieBetaalwijze,
@@ -496,22 +496,17 @@ export default function ReparatieNieuwPage() {
                                 }
                               />
                             </label>
-                            <label className="block text-xs">
-                              Arbeidsuren (× €{ARBEID_UUR_PRIJS_INCL} incl. 9%)
-                              <input
-                                className="mt-0.5 w-full rounded border px-2 py-1.5"
-                                value={r.arbeid_uren}
-                                onChange={(e) =>
-                                  setRegels((prev) =>
-                                    prev.map((x) =>
-                                      x.key === r.key
-                                        ? { ...x, arbeid_uren: e.target.value }
-                                        : x
-                                    )
+                            <ArbeidUrenInput
+                              compact
+                              uren={r.arbeid_uren}
+                              onUrenChange={(u) =>
+                                setRegels((prev) =>
+                                  prev.map((x) =>
+                                    x.key === r.key ? { ...x, arbeid_uren: u } : x
                                   )
-                                }
-                              />
-                            </label>
+                                )
+                              }
+                            />
                           </div>
                         )}
                         <button

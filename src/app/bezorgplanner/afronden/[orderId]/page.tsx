@@ -11,9 +11,9 @@ import {
   type ProductDefaultItemsRulesV2,
 } from "@/lib/product-default-items-rules";
 import ProductAutocomplete from "@/components/ProductAutocomplete";
+import ArbeidUrenInput from "@/components/ArbeidUrenInput";
 import {
   ARBEID_UUR_PRIJS_INCL,
-  arbeidPrijsIncl,
   parseStoredReparatieRegels,
 } from "@/lib/reparaties";
 
@@ -437,28 +437,19 @@ export default function AfrondenVragenlijstPage({
                                 }
                               />
                             </label>
-                            <label className="mt-2 block text-xs">
-                              Arbeidsuren
-                              <input
-                                className="mt-0.5 w-full rounded border px-2 py-1.5 text-sm"
-                                value={r.arbeid_uren}
-                                onChange={(e) =>
+                            <div className="mt-2">
+                              <ArbeidUrenInput
+                                compact
+                                uren={r.arbeid_uren}
+                                onUrenChange={(u) =>
                                   setReparatieRegels((prev) =>
                                     prev.map((x) =>
-                                      x.key === r.key
-                                        ? { ...x, arbeid_uren: e.target.value }
-                                        : x
+                                      x.key === r.key ? { ...x, arbeid_uren: u } : x
                                     )
                                   )
                                 }
                               />
-                            </label>
-                            <p className="mt-1 text-xs text-koopje-black/50">
-                              Arbeid ≈ €
-                              {arbeidPrijsIncl(
-                                parseFloat(r.arbeid_uren.replace(",", ".")) || 0
-                              ).toFixed(2)}
-                            </p>
+                            </div>
                             <button
                               type="button"
                               className="mt-2 text-xs text-red-600"

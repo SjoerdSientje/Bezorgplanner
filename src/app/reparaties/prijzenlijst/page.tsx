@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import Header from "@/components/Header";
 import ProductAutocomplete from "@/components/ProductAutocomplete";
+import ArbeidUrenInput from "@/components/ArbeidUrenInput";
 import {
   ARBEID_UUR_PRIJS_INCL,
   arbeidPrijsIncl,
@@ -328,21 +329,34 @@ export default function ReparatiePrijzenlijstPage() {
                           }}
                         />
                       </label>
-                      <label className="text-xs text-koopje-black/50">
-                        Arbeidsuren
-                        <input
-                          type="number"
-                          step="0.25"
-                          className="mt-0.5 w-full rounded border border-koopje-black/20 px-2 py-1.5 text-sm"
-                          defaultValue={item.arbeid_uren}
-                          onBlur={(e) => {
-                            const v = Number(e.target.value) || 0;
-                            if (v !== Number(item.arbeid_uren)) {
-                              void patchItem(item.id, { arbeid_uren: v });
-                            }
+                      <div
+                        className="sm:col-span-2"
+                        onBlur={(e) => {
+                          if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                          const current = items.find((i) => i.id === item.id);
+                          if (!current) return;
+                          void patchItem(item.id, {
+                            arbeid_uren: Number(current.arbeid_uren) || 0,
+                          });
+                        }}
+                      >
+                        <ArbeidUrenInput
+                          compact
+                          uren={
+                            item.arbeid_uren != null && Number(item.arbeid_uren) > 0
+                              ? String(item.arbeid_uren)
+                              : ""
+                          }
+                          onUrenChange={(u) => {
+                            const v = parseFloat(u.replace(",", ".")) || 0;
+                            setItems((prev) =>
+                              prev.map((i) =>
+                                i.id === item.id ? { ...i, arbeid_uren: v } : i
+                              )
+                            );
                           }}
                         />
-                      </label>
+                      </div>
                     </div>
                     <div className="mt-2 flex items-center justify-between text-xs text-koopje-black/50">
                       <span>
@@ -415,14 +429,9 @@ export default function ReparatiePrijzenlijstPage() {
                     onChange={(e) => setNewPrijs(e.target.value)}
                   />
                 </label>
-                <label className="text-xs text-koopje-black/50">
-                  Arbeidsuren
-                  <input
-                    className="mt-0.5 w-full rounded border border-koopje-black/20 px-3 py-2 text-sm"
-                    value={newUren}
-                    onChange={(e) => setNewUren(e.target.value)}
-                  />
-                </label>
+                <div className="sm:col-span-2">
+                  <ArbeidUrenInput compact uren={newUren} onUrenChange={setNewUren} />
+                </div>
               </div>
               <button
                 type="button"
