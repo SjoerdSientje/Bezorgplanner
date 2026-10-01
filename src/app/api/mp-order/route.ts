@@ -226,8 +226,9 @@ export async function PATCH(request: NextRequest) {
 
     try {
       const deductionLineItems = buildMpDeductionLineItems(productenLijst, productRules);
+      const { reserveInventoryForMpOrder, clearReservationsForOrder } =
+        await import("@/lib/inventory-reservations");
       if (deductionLineItems.length) {
-        const { reserveInventoryForMpOrder } = await import("@/lib/inventory-reservations");
         await reserveInventoryForMpOrder(
           supabase,
           ownerEmail,
@@ -238,6 +239,15 @@ export async function PATCH(request: NextRequest) {
             customerName: naam,
             customerPhone: e164 || telefoonRaw || null,
           }
+        );
+      } else {
+        // Geen aftrekbare producten meer → reservering volledig vrijgeven.
+        await clearReservationsForOrder(
+          supabase,
+          ownerEmail,
+          "marktplaats",
+          data.id,
+          { skipAlerts: true }
         );
       }
     } catch (invErr) {

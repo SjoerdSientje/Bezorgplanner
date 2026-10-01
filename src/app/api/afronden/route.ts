@@ -288,11 +288,13 @@ export async function POST(request: NextRequest) {
         }
       }
       try {
-        const {
-          deductInventoryForReparatieOrder,
-          reparatieLineItemsForInventoryDeduction,
-        } = await import("@/lib/inventory");
-        await deductInventoryForReparatieOrder(
+        const { commitInventoryForReparatieOrder } = await import(
+          "@/lib/inventory-reservations"
+        );
+        const { reparatieLineItemsForInventoryDeduction } = await import(
+          "@/lib/inventory"
+        );
+        await commitInventoryForReparatieOrder(
           supabase,
           ownerEmail,
           orderId,
@@ -300,7 +302,23 @@ export async function POST(request: NextRequest) {
           reparatieLineItemsForInventoryDeduction(reparatieLineItemsForDeduct)
         );
       } catch (invErr) {
-        console.error("[api/afronden] reparatie inventory deduct:", invErr);
+        console.error("[api/afronden] reparatie inventory commit:", invErr);
+      }
+    } else if (order.type === "reparatie_deur" && convertedToOphalen) {
+      // Omgezet naar ophalen: geen producten meer → reservering vrijgeven.
+      try {
+        const { clearReservationsForOrder } = await import(
+          "@/lib/inventory-reservations"
+        );
+        await clearReservationsForOrder(
+          supabase,
+          ownerEmail,
+          "reparatie",
+          orderId,
+          { skipAlerts: true }
+        );
+      } catch (invErr) {
+        console.error("[api/afronden] reparatie reservation clear (ophalen):", invErr);
       }
     }
 

@@ -6,6 +6,7 @@
 import { createHmac, timingSafeEqual } from "crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ShopifyLineItem, ShopifyOrder, ShopifyShippingLine } from "@/lib/shopify-order";
+import { effectiveShopifyLineQuantity } from "@/lib/shopify-order";
 import {
   isShopifyProductActive,
   type ShopifyAdminProduct,
@@ -341,8 +342,8 @@ function parseMoneyAmount(value: string | number | null | undefined): number {
 
 function lineItemNetTotalIncl(li: ShopifyLineItem): number {
   const price = parseMoneyAmount(li.price);
-  const qty = Math.max(1, Math.floor(Number(li.quantity ?? 1)));
-  if (!Number.isFinite(price)) return 0;
+  const qty = effectiveShopifyLineQuantity(li);
+  if (qty <= 0 || !Number.isFinite(price)) return 0;
   let total = price * qty;
   const discount = parseMoneyAmount(li.total_discount);
   if (Number.isFinite(discount)) total -= discount;
@@ -354,7 +355,8 @@ function lineItemNetTotalIncl(li: ShopifyLineItem): number {
 }
 
 function lineItemUnitPriceIncl(li: ShopifyLineItem): number {
-  const qty = Math.max(1, Math.floor(Number(li.quantity ?? 1)));
+  const qty = effectiveShopifyLineQuantity(li);
+  if (qty <= 0) return 0;
   return lineItemNetTotalIncl(li) / qty;
 }
 
@@ -401,10 +403,10 @@ function invoiceDetailLineTotalIncl(detail: MoneybirdInvoiceDetailPayload): numb
   return excl * vatMultiplierForTaxRateId(detail.tax_rate_id);
 }
 
-/** Ordertotaal incl. BTW — total_price, current_total_price of som van regels. */
+/** Ordertotaal incl. BTW — current_total_price (na edit), anders total_price, anders som. */
 export function shopifyOrderBillableTotalIncl(order: ShopifyOrder): number {
-  const fromTotal = parseMoneyAmount(order.total_price);
   const fromCurrent = parseMoneyAmount(order.current_total_price);
+  const fromTotal = parseMoneyAmount(order.total_price);
   const lineSum = (order.line_items ?? []).reduce(
     (sum, li) => sum + lineItemNetTotalIncl(li),
     0
@@ -414,8 +416,8 @@ export function shopifyOrderBillableTotalIncl(order: ShopifyOrder): number {
     0
   );
 
-  if (Number.isFinite(fromTotal)) return Math.max(0, fromTotal);
   if (Number.isFinite(fromCurrent)) return Math.max(0, fromCurrent);
+  if (Number.isFinite(fromTotal)) return Math.max(0, fromTotal);
   return lineSum + shippingSum;
 }
 
@@ -465,9 +467,11 @@ async function buildInvoiceDetailsFromShopifyOrder(
   for (const li of order.line_items ?? []) {
     const description = String(li.name ?? "").trim();
     if (!description) continue;
+    const qty = effectiveShopifyLineQuantity(li);
+    if (qty <= 0) continue;
     const unitIncl = lineItemUnitPriceIncl(li);
     if (unitIncl < 0.01) continue;
-    const amount = Math.max(1, Math.floor(Number(li.quantity ?? 1)));
+    const amount = Math.max(1, qty);
     const productId = await moneybirdProductIdForShopifyProduct(li.product_id);
     const { taxRateId, vatMultiplier } = resolveInvoiceTaxForTitle(description);
     if (

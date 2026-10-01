@@ -295,11 +295,22 @@ export async function POST(request: NextRequest) {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     const shopifyOrderId = String(order.id ?? "").trim();
     const isCreate = topic === "orders/create";
-    const isUpdate = topic === "orders/updated";
+    const isUpdate =
+      topic === "orders/updated" || topic === "orders/edited";
     const isDelete = topic === "orders/deleted" || topic === "orders/delete";
+    const isCancelledTopic = topic === "orders/cancelled";
+    const financial = String(order.financial_status ?? "").toLowerCase();
+    // Volledige terugbetaling / void zonder aparte cancel: zelfde cleanup als annuleren.
+    const isFullyRefunded =
+      financial === "refunded" || financial === "voided";
 
-    // Verwijderen / annuleren
-    if (isDelete || Boolean(order.cancelled_at)) {
+    // Verwijderen / annuleren / volledig terugbetaald
+    if (
+      isDelete ||
+      isCancelledTopic ||
+      Boolean(order.cancelled_at) ||
+      isFullyRefunded
+    ) {
       if (!shopifyOrderId) {
         return NextResponse.json({ ok: true, skipped: "missing_order_id" }, { status: 200 });
       }
@@ -312,7 +323,11 @@ export async function POST(request: NextRequest) {
         {
           ok: true,
           deleted: true,
-          reason: isDelete ? "orders/deleted" : "cancelled",
+          reason: isDelete
+            ? "orders/deleted"
+            : isFullyRefunded && !order.cancelled_at
+              ? "refunded"
+              : "cancelled",
           shopifyOrderId,
         },
         { status: 200 }

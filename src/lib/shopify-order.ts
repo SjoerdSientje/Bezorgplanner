@@ -41,6 +41,12 @@ export interface ShopifyLineItem {
   price?: string | number | null;
   /** Aantal stuks; ontbreekt in sommige payloads → 1. */
   quantity?: number | null;
+  /**
+   * Resterend aantal na order-edit (Shopify REST).
+   * Verwijderde regels blijven in `line_items` met oorspronkelijke `quantity`
+   * en `current_quantity: 0`.
+   */
+  current_quantity?: number | null;
   product_id?: string | number | null;
   variant_id?: string | number | null;
   /**
@@ -85,6 +91,50 @@ export interface ShopifyOrder {
 }
 
 const PRICE_LIMIT_FIETS = 500;
+
+/**
+ * Effectieve hoeveelheid na Shopify order-edit.
+ * `current_quantity` wint (ook 0 = verwijderd); anders `quantity`; ontbreekt → 1.
+ */
+export function effectiveShopifyLineQuantity(item: ShopifyLineItem): number {
+  if (item.current_quantity != null && String(item.current_quantity).trim() !== "") {
+    const raw = item.current_quantity;
+    const n =
+      typeof raw === "number" ? raw : parseFloat(String(raw).replace(",", "."));
+    if (!Number.isFinite(n)) return 0;
+    return Math.max(0, Math.round(n));
+  }
+  if (item.quantity == null || String(item.quantity).trim() === "") return 1;
+  const n =
+    typeof item.quantity === "number"
+      ? item.quantity
+      : parseFloat(String(item.quantity).replace(",", "."));
+  if (!Number.isFinite(n)) return 1;
+  return Math.max(0, Math.round(n));
+}
+
+/** Line items die na edit nog actief zijn (current_quantity > 0). */
+export function activeShopifyLineItems(
+  order: Pick<ShopifyOrder, "line_items">
+): ShopifyLineItem[] {
+  return (order.line_items ?? []).filter((li) => effectiveShopifyLineQuantity(li) > 0);
+}
+
+/** Ordertotaal: prefer `current_total_price` (na edit) boven `total_price`. */
+export function shopifyOrderCurrentTotal(order: ShopifyOrder): number {
+  const current = order.current_total_price;
+  if (current != null && String(current).trim() !== "") {
+    const n =
+      typeof current === "string" ? parseFloat(current) : Number(current);
+    if (Number.isFinite(n)) return n;
+  }
+  const total = order.total_price;
+  if (total != null && String(total).trim() !== "") {
+    const n = typeof total === "string" ? parseFloat(total) : Number(total);
+    if (Number.isFinite(n)) return n;
+  }
+  return 0;
+}
 
 /** Fietsregel: unitprijs boven drempel (Shopify) óf property Levering (o.a. MP). */
 function isFietsShopifyLineItem(item: ShopifyLineItem): boolean {
@@ -179,9 +229,11 @@ export function qualifiesForPakketjes(order: ShopifyOrder): boolean {
   );
   if (hasServiceKeyword) return false;
   // Fietslevering (unitprijs > €500 of Levering-property) hoort in ritjes, ook bij laag restantbedrag.
-  const hasFietsLine = (order.line_items ?? []).some((li) => isFietsShopifyLineItem(li));
+  const hasFietsLine = activeShopifyLineItems(order).some((li) =>
+    isFietsShopifyLineItem(li)
+  );
   if (hasFietsLine) return false;
-  const total = parseFloat(String(order.total_price ?? 0));
+  const total = shopifyOrderCurrentTotal(order);
   const hasSpecialServiceItem = Boolean(getSpecialServiceProduct(order));
   const qualifiesByTotal = total > 0 && total < PAKKETJES_MAX_PRIJS;
   const qualifiesBySpecialService = total === 0 && hasSpecialServiceItem;
@@ -190,7 +242,7 @@ export function qualifiesForPakketjes(order: ShopifyOrder): boolean {
   const fs = String(order.fulfillment_status ?? "").toLowerCase();
   if (fs === "fulfilled") return false;
 
-  const lineItems = order.line_items ?? [];
+  const lineItems = activeShopifyLineItems(order);
   const physicalLines = lineItems.filter(
     (li) => !isOnderhoudspakketLineName(String(li.name ?? ""))
   );
@@ -215,11 +267,11 @@ export function shopifyOrderCreatedAt(order: ShopifyOrder): Date {
 
 export function extractPakketjesLineItems(order: ShopifyOrder): { name: string; quantity: number }[] {
   const out: { name: string; quantity: number }[] = [];
-  for (const li of order.line_items ?? []) {
+  for (const li of activeShopifyLineItems(order)) {
     const name = String(li.name ?? "").trim();
     if (!name) continue;
     if (isOnderhoudspakketLineName(name)) continue;
-    const qty = Math.max(1, Number(li.quantity ?? 1) || 1);
+    const qty = Math.max(1, effectiveShopifyLineQuantity(li));
     out.push({ name, quantity: qty });
   }
   // Voeg special service toe uit note of shipping lines (niet uit line_items — die staan er al in).
@@ -237,7 +289,7 @@ export function passesRitjesFilter(order: ShopifyOrder): boolean {
   if (order.cancelled_at) return false;
   if (isShowroomShippingOrder(order)) return false;
 
-  const totalPrice = parseFloat(String(order.total_price ?? 0));
+  const totalPrice = shopifyOrderCurrentTotal(order);
   const tags = (order.tags ?? "").toLowerCase();
   const hasSpecialServiceItem = Boolean(getSpecialServiceProduct(order));
 
@@ -405,7 +457,7 @@ function splitBikesOnAmpersand(title: string): string[] {
 
 function getAantalFietsen(order: ShopifyOrder): number | null {
   const tags = (order.tags ?? "").toLowerCase();
-  const lineItems = order.line_items ?? [];
+  const lineItems = activeShopifyLineItems(order);
 
   // Reparatie aan huis = geen fietsen meenemen in de bus
   if (tags.includes("reparatie aan huis")) return 0;
@@ -422,22 +474,19 @@ function getAantalFietsen(order: ShopifyOrder): number | null {
     .reduce((sum, item) => {
       // Elke '&' in de titel is een extra fiets
       const bikeCount = splitBikesOnAmpersand(item.name ?? "").length || 1;
-      return sum + bikeCount;
+      const qty = effectiveShopifyLineQuantity(item);
+      return sum + bikeCount * Math.max(1, qty);
     }, 0);
   return count || null;
 }
 
 function getProducten(order: ShopifyOrder): string {
-  const items = order.line_items ?? [];
+  const items = activeShopifyLineItems(order);
   const names: string[] = [];
   for (const item of items) {
     const name = (item.name ?? "").trim();
     if (!name) continue;
-    const qtyRaw = item.quantity;
-    const qty =
-      qtyRaw == null
-        ? 1
-        : Math.max(1, Math.round(typeof qtyRaw === "number" ? qtyRaw : parseFloat(String(qtyRaw))) || 1);
+    const qty = Math.max(1, effectiveShopifyLineQuantity(item));
 
     if (name.includes("&")) {
       // Elke fiets na '&' als aparte regel tonen
@@ -473,9 +522,7 @@ export type StructuredLineItem = LineItemForJson & {
 };
 
 function getShopifyLineItemQuantity(item: ShopifyLineItem): number {
-  const q = item.quantity;
-  if (q == null) return 1;
-  return Math.max(1, Math.round(typeof q === "number" ? q : parseFloat(String(q))) || 1);
+  return Math.max(1, effectiveShopifyLineQuantity(item));
 }
 
 function shopifySourceIds(item: ShopifyLineItem): Pick<StructuredLineItem, "product_id" | "variant_id" | "quantity"> {
@@ -500,11 +547,8 @@ function parseMoney(v: unknown): number {
  */
 export function getShopifyLineItemLineTotal(item: ShopifyLineItem): number {
   const unit = parseMoney(item.price);
-  const q = item.quantity;
-  const qty =
-    q == null
-      ? 1
-      : Math.max(1, Math.round(typeof q === "number" ? q : parseFloat(String(q))) || 1);
+  const qty = effectiveShopifyLineQuantity(item);
+  if (qty <= 0) return 0;
 
   let discount = parseMoney(item.total_discount);
   if (discount <= 0 && Array.isArray(item.discount_allocations)) {
@@ -688,7 +732,7 @@ export function buildStructuredLineItems(
   order: Pick<ShopifyOrder, "line_items">,
   rules: ProductDefaultItemsRulesV2 = DEFAULT_PRODUCT_RULES_V2
 ): StructuredLineItem[] {
-  const items = order.line_items ?? [];
+  const items = activeShopifyLineItems(order);
   if (!items.length) return [];
 
   const volledigRijklaarOrder = orderHasVolledigRijklaarSurcharge(items);
@@ -1122,8 +1166,6 @@ export function pakketjesShopifyRelevantFieldsEqual(
 }
 
 function totalPriceNumber(order: ShopifyOrder): number | null {
-  const p = order.total_price;
-  if (p == null) return null;
-  const n = typeof p === "string" ? parseFloat(p) : Number(p);
-  return isNaN(n) ? null : n;
+  const n = shopifyOrderCurrentTotal(order);
+  return Number.isFinite(n) ? n : null;
 }

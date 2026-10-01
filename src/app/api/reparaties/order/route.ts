@@ -492,6 +492,25 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Aan huis met bekende producten: reserveren tot afronden/verwijderen.
+    if (soort === "reparatie_deur" && !productenNogNietBekend) {
+      try {
+        const { reserveInventoryForReparatieOrder } = await import(
+          "@/lib/inventory-reservations"
+        );
+        await reserveInventoryForReparatieOrder(
+          supabase,
+          ownerEmail,
+          order.id,
+          orderNummer,
+          reparatieLineItemsForInventoryDeduction(lineItems),
+          { customerName: naam, customerPhone: e164 || telefoon || null }
+        );
+      } catch (invErr) {
+        console.error("[reparaties] inventory reserve (deur):", invErr);
+      }
+    }
+
     return NextResponse.json({
       order: { ...order, moneybird_invoice_id: moneybirdInvoiceId },
     });
@@ -774,6 +793,33 @@ export async function PATCH(request: NextRequest) {
       .from("orders")
       .update({ moneybird_invoice_id: moneybirdInvoiceId })
       .eq("id", orderId);
+
+    // Aan huis: reserveringen syncen bij bekende producten; anders vrijgeven.
+    // Terugbrengen/ophalen: geen open reservering (terugbrengen schreef al af).
+    try {
+      const { reserveInventoryForReparatieOrder, clearReservationsForOrder } =
+        await import("@/lib/inventory-reservations");
+      if (soort === "reparatie_deur" && !productenNogNietBekend) {
+        await reserveInventoryForReparatieOrder(
+          supabase,
+          ownerEmail,
+          orderId,
+          String(order.order_nummer ?? orderId),
+          reparatieLineItemsForInventoryDeduction(lineItems),
+          { customerName: naam, customerPhone: e164 || telefoon || null }
+        );
+      } else {
+        await clearReservationsForOrder(
+          supabase,
+          ownerEmail,
+          "reparatie",
+          orderId,
+          { skipAlerts: true }
+        );
+      }
+    } catch (invErr) {
+      console.error("[reparaties] inventory reserve sync (patch):", invErr);
+    }
 
     return NextResponse.json({
       order: { ...order, moneybird_invoice_id: moneybirdInvoiceId },

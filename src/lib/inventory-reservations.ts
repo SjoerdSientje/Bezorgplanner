@@ -22,9 +22,9 @@ import {
 } from "@/lib/inventory";
 import { AUTO_FINALIZE_INVOICE_BELOW_EUR, shopifyOrderBillableTotalIncl } from "@/lib/moneybird";
 import { loadProductDefaultItemsRules } from "@/lib/product-rules-server";
-import type { ShopifyOrder } from "@/lib/shopify-order";
+import { activeShopifyLineItems, type ShopifyOrder } from "@/lib/shopify-order";
 
-export type InventoryReservationSource = "shopify" | "marktplaats";
+export type InventoryReservationSource = "shopify" | "marktplaats" | "reparatie";
 
 export type InventoryReservationRow = {
   id: string;
@@ -448,7 +448,7 @@ export async function reserveInventoryForShopifyOrder(
 ): Promise<void> {
   const shopifyOrderId = String(order.id ?? "").trim();
   if (!shopifyOrderId) return;
-  const rawItems = order.line_items ?? [];
+  const rawItems = activeShopifyLineItems(order);
   if (rawItems.length === 0) return;
 
   const orderReference = String(order.name ?? shopifyOrderId);
@@ -493,7 +493,7 @@ export async function syncReservationsForShopifyOrderUpdate(
   if (!shopifyOrderId) return;
 
   const orderReference = String(order.name ?? shopifyOrderId);
-  const rawItems = order.line_items ?? [];
+  const activeItems = activeShopifyLineItems(order);
 
   for (const ownerEmail of allAccountEmails()) {
     const applies = shopifyWebhookOrderAppliesToOwner(ownerEmail, order.note);
@@ -531,13 +531,13 @@ export async function syncReservationsForShopifyOrderUpdate(
       continue;
     }
 
-    if (rawItems.length === 0) {
+    if (activeItems.length === 0) {
       await clearReservationsForOrder(supabase, ownerEmail, "shopify", shopifyOrderId);
       continue;
     }
 
     const rules = await loadProductDefaultItemsRules(supabase, ownerEmail);
-    const lineItems = buildInventoryDeductionLineItems(rawItems, rules);
+    const lineItems = buildInventoryDeductionLineItems(activeItems, rules);
     await syncReservationsForOrder(supabase, {
       ownerEmail,
       source: "shopify",
@@ -599,7 +599,7 @@ export async function maybeCommitInventoryOnShopifyFulfilled(
   const shopifyOrderId = String(order.id ?? "").trim();
   if (!shopifyOrderId) return;
 
-  const rawItems = order.line_items ?? [];
+  const rawItems = activeShopifyLineItems(order);
   const orderReference = String(order.name ?? shopifyOrderId);
 
   for (const ownerEmail of allAccountEmails()) {
@@ -647,6 +647,66 @@ export async function reserveInventoryForMpOrder(
       customerPhone: meta?.customerPhone ?? null,
     },
   });
+}
+
+/** Reservering voor reparatie-aan-huis met bekende producten (vrijgeven bij delete). */
+export async function reserveInventoryForReparatieOrder(
+  supabase: SupabaseClient,
+  ownerEmail: string,
+  orderId: string,
+  orderNummer: string,
+  lineItems: LineItemForDeduction[],
+  meta?: { customerName?: string | null; customerPhone?: string | null }
+): Promise<void> {
+  if (await hasOrderDeduction(supabase, ownerEmail, "reparatie", orderId)) {
+    await clearReservationsForOrder(supabase, ownerEmail, "reparatie", orderId, {
+      skipAlerts: true,
+    });
+    return;
+  }
+
+  if (lineItems.length === 0) {
+    await clearReservationsForOrder(supabase, ownerEmail, "reparatie", orderId, {
+      skipAlerts: true,
+    });
+    return;
+  }
+
+  await syncReservationsForOrder(supabase, {
+    ownerEmail,
+    source: "reparatie",
+    externalOrderId: orderId,
+    lineItems,
+    meta: {
+      orderDbId: orderId,
+      orderNummer,
+      customerName: meta?.customerName ?? null,
+      customerPhone: meta?.customerPhone ?? null,
+    },
+  });
+}
+
+export async function commitInventoryForReparatieOrder(
+  supabase: SupabaseClient,
+  ownerEmail: string,
+  orderId: string,
+  orderNummer: string,
+  lineItemsFallback?: LineItemForDeduction[]
+): Promise<void> {
+  const result = await commitReservationsForOrder(supabase, {
+    ownerEmail,
+    source: "reparatie",
+    externalOrderId: orderId,
+    orderReference: orderNummer || orderId,
+    lineItemsFallback,
+  });
+  if (result.committed) {
+    console.info(
+      "[inventory-reservations] reparatie afronden — voorraad afgeschreven",
+      orderNummer,
+      ownerEmail
+    );
+  }
 }
 
 export async function commitInventoryForMpOrder(
@@ -898,7 +958,13 @@ export async function cleanupStaleInventoryReservations(
     const source = String(row.source ?? "") as InventoryReservationSource;
     const externalOrderId = String(row.external_order_id ?? "").trim();
     if (!ownerEmail || !externalOrderId) continue;
-    if (source !== "shopify" && source !== "marktplaats") continue;
+    if (
+      source !== "shopify" &&
+      source !== "marktplaats" &&
+      source !== "reparatie"
+    ) {
+      continue;
+    }
     const key = `${ownerEmail}|${source}|${externalOrderId}`;
     const existing = groups.get(key);
     if (existing) {
@@ -922,7 +988,7 @@ export async function cleanupStaleInventoryReservations(
 
     if (await hasOrderDeduction(supabase, g.ownerEmail, g.source, g.externalOrderId)) {
       reason = "already_deducted";
-    } else if (g.source === "marktplaats") {
+    } else if (g.source === "marktplaats" || g.source === "reparatie") {
       const { data: order } = await supabase
         .from("orders")
         .select("id, status, afgerond_at")
@@ -943,14 +1009,13 @@ export async function cleanupStaleInventoryReservations(
       }
     } else {
       // shopify
-      let orderQuery = supabase
+      const { data: order } = await supabase
         .from("orders")
         .select("id, status, afgerond_at")
         .eq("owner_email", g.ownerEmail)
         .eq("source", "shopify")
         .eq("order_id", g.externalOrderId)
         .maybeSingle();
-      const { data: order } = await orderQuery;
       if (!order) {
         reason = "order_missing";
       } else if (

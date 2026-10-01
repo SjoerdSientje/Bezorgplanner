@@ -139,6 +139,10 @@ export async function DELETE(
             { skipAlerts: true }
           );
         }
+      } else if (source === "reparatie") {
+        await clearReservationsForOrder(supabase, ownerEmail, "reparatie", id, {
+          skipAlerts: true,
+        });
       }
     } catch (resErr) {
       console.error("[api/orders DELETE] reservations:", resErr);
@@ -157,6 +161,22 @@ export async function DELETE(
         });
       } catch (mbErr) {
         console.error("[api/orders DELETE] reparatie invoice:", mbErr);
+      }
+    }
+
+    // Shopify: conceptfactuur verwijderen.
+    if (source === "shopify") {
+      const shopifyOrderId = String(order.order_id ?? "").trim();
+      if (shopifyOrderId) {
+        try {
+          const { deleteSalesInvoiceForShopifyOrderId, isMoneybirdConfigured } =
+            await import("@/lib/moneybird");
+          if (isMoneybirdConfigured()) {
+            await deleteSalesInvoiceForShopifyOrderId(shopifyOrderId);
+          }
+        } catch (mbErr) {
+          console.error("[api/orders DELETE] shopify invoice:", mbErr);
+        }
       }
     }
 
