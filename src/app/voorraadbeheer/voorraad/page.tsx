@@ -599,11 +599,10 @@ export default function VoorraadbeheerPage() {
       });
       const metaData = await metaRes.json().catch(() => ({}));
       if (!metaRes.ok) throw new Error(metaData?.error ?? "Opslaan mislukt");
-      if (metaData.shopifyPush && metaData.shopifyPush.ok === false) {
-        throw new Error(
-          `Shopify-update mislukt: ${metaData.shopifyPush.detail ?? "onbekend"}`
-        );
-      }
+      const shopifyWarn =
+        metaData.shopifyPush && metaData.shopifyPush.ok === false
+          ? String(metaData.shopifyPush.detail ?? "Shopify-update mislukt")
+          : null;
 
       // Aantal 0 = alleen info opslaan (geen voorraadmutatie), behalve bij correctie → voorraad op 0.
       const skipStockMutation = qty === 0 && mutationType !== "correctie";
@@ -623,7 +622,13 @@ export default function VoorraadbeheerPage() {
       }
 
       closeModals();
-      setMessage(skipStockMutation ? "Opgeslagen." : "Voorraad bijgewerkt.");
+      if (shopifyWarn) {
+        setMessage(
+          `${skipStockMutation ? "Lokaal opgeslagen" : "Voorraad bijgewerkt"}, maar Shopify niet: ${shopifyWarn}`
+        );
+      } else {
+        setMessage(skipStockMutation ? "Opgeslagen." : "Voorraad bijgewerkt.");
+      }
       await load(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Mutatie mislukt");

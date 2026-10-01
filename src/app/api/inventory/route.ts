@@ -175,6 +175,7 @@ export async function PATCH(request: NextRequest) {
                 data.restock_datum == null ? null : String(data.restock_datum),
             }
           );
+          const firstFail = result.failed[0]?.error;
           shopifyPush = {
             ok: result.failed.length === 0,
             updated: result.updated,
@@ -182,7 +183,9 @@ export async function PATCH(request: NextRequest) {
             detail:
               result.failed.length === 0
                 ? `${result.updated} Shopify-product(en) bijgewerkt`
-                : `${result.updated} ok, ${result.failed.length} mislukt`,
+                : firstFail
+                  ? firstFail
+                  : `${result.updated} ok, ${result.failed.length} mislukt`,
           };
         }
       } catch (pushErr) {

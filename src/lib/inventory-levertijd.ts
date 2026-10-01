@@ -260,6 +260,24 @@ export async function pushInventoryLevertijdMetafieldsToShopify(
   return { levertijd: levertijdAction, restockDatum: restockAction };
 }
 
+function formatShopifyPushError(err: unknown): string {
+  if (!(err instanceof Error)) return "onbekende fout";
+  const detail =
+    "detail" in err ? (err as { detail?: unknown }).detail : undefined;
+  const detailText =
+    typeof detail === "string"
+      ? detail
+      : detail && typeof detail === "object" && "errors" in detail
+        ? String((detail as { errors: unknown }).errors)
+        : detail
+          ? JSON.stringify(detail)
+          : "";
+  if (/write_products/i.test(detailText) || /write_products/i.test(err.message)) {
+    return "Shopify-app mist write_products-scope (nu alleen lezen). Voeg write_products toe in het Shopify Dev Dashboard en herinstalleer/goedkeur de app.";
+  }
+  return detailText ? `${err.message}: ${detailText}` : err.message;
+}
+
 /**
  * Zelfde metafields naar meerdere Shopify-producten (alle koppelingen van één voorraadregel).
  */
@@ -288,7 +306,7 @@ export async function pushInventoryLevertijdMetafieldsToShopifyProducts(
     } catch (err) {
       failed.push({
         shopifyProductId,
-        error: err instanceof Error ? err.message : "onbekende fout",
+        error: formatShopifyPushError(err),
       });
     }
   }
