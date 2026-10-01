@@ -50,7 +50,7 @@ export type InventoryReservationOrderView = {
   orderNummer: string | null;
   customerName: string | null;
   customerPhone: string | null;
-  /** Live uit orders (ritjes): bezorgtijd_voorkeur of datum. */
+  /** Live uit orders (ritjes): datum_opmerking (voorkeursdatum), anders planning-datum. */
   voorkeursdatum: string | null;
 };
 
@@ -805,22 +805,28 @@ export async function listReservationsForInventoryProduct(
     )
   );
 
-  const orderById = new Map<
-    string,
-    { bezorgtijd_voorkeur: string | null; datum: string | null; naam: string | null; telefoon_e164: string | null; telefoon_nummer: string | null; order_nummer: string | null }
-  >();
+  type OrderLiveMeta = {
+    datum_opmerking: string | null;
+    datum: string | null;
+    naam: string | null;
+    telefoon_e164: string | null;
+    telefoon_nummer: string | null;
+    order_nummer: string | null;
+  };
+
+  const orderById = new Map<string, OrderLiveMeta>();
 
   if (orderDbIds.length > 0) {
     const { data: orders } = await supabase
       .from("orders")
       .select(
-        "id, bezorgtijd_voorkeur, datum, naam, telefoon_e164, telefoon_nummer, order_nummer"
+        "id, datum_opmerking, datum, naam, telefoon_e164, telefoon_nummer, order_nummer"
       )
       .eq("owner_email", ownerEmail)
       .in("id", orderDbIds);
     for (const o of orders ?? []) {
       orderById.set(String(o.id), {
-        bezorgtijd_voorkeur: o.bezorgtijd_voorkeur ?? null,
+        datum_opmerking: o.datum_opmerking ?? null,
         datum: o.datum ?? null,
         naam: o.naam ?? null,
         telefoon_e164: o.telefoon_e164 ?? null,
@@ -834,19 +840,19 @@ export async function listReservationsForInventoryProduct(
   const shopifyExternals = reservationsRaw
     .filter((r) => r.source === "shopify" && !r.order_db_id)
     .map((r) => r.external_order_id);
-  const shopifyOrderByExternal = new Map<string, (typeof orderById extends Map<string, infer V> ? V : never)>();
+  const shopifyOrderByExternal = new Map<string, OrderLiveMeta>();
   if (shopifyExternals.length > 0) {
     const { data: orders } = await supabase
       .from("orders")
       .select(
-        "id, order_id, bezorgtijd_voorkeur, datum, naam, telefoon_e164, telefoon_nummer, order_nummer"
+        "id, order_id, datum_opmerking, datum, naam, telefoon_e164, telefoon_nummer, order_nummer"
       )
       .eq("owner_email", ownerEmail)
       .eq("source", "shopify")
       .in("order_id", shopifyExternals);
     for (const o of orders ?? []) {
       shopifyOrderByExternal.set(String(o.order_id), {
-        bezorgtijd_voorkeur: o.bezorgtijd_voorkeur ?? null,
+        datum_opmerking: o.datum_opmerking ?? null,
         datum: o.datum ?? null,
         naam: o.naam ?? null,
         telefoon_e164: o.telefoon_e164 ?? null,
@@ -861,7 +867,7 @@ export async function listReservationsForInventoryProduct(
       (r.order_db_id ? orderById.get(r.order_db_id) : null) ??
       (r.source === "shopify" ? shopifyOrderByExternal.get(r.external_order_id) : null);
     const voorkeursdatum =
-      String(live?.bezorgtijd_voorkeur ?? "").trim() ||
+      String(live?.datum_opmerking ?? "").trim() ||
       String(live?.datum ?? "").trim() ||
       null;
     const phone =

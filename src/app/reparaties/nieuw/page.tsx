@@ -110,7 +110,7 @@ export default function ReparatieNieuwPage() {
     () =>
       [adres.straatnaam, adres.huisnummer, adres.postcode, adres.woonplaats]
         .filter(Boolean)
-        .join(" ")
+        .join(", ")
         .trim(),
     [adres]
   );
@@ -405,7 +405,14 @@ export default function ReparatieNieuwPage() {
 
             <AdresAutocomplete
               velden={adres}
-              onChange={setAdres}
+              onChange={(v) =>
+                setAdres({
+                  straatnaam: v.straatnaam,
+                  huisnummer: v.huisnummer,
+                  postcode: v.postcode,
+                  woonplaats: v.woonplaats,
+                })
+              }
             />
 
             <div className="rounded-lg bg-stone-50 px-3 py-2 text-sm text-koopje-black/70">

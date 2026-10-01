@@ -26,6 +26,7 @@ import {
 } from "@/lib/moneybird";
 import type { ShopifyLineItem } from "@/lib/shopify-order";
 import { resolveDutchAddressParts } from "@/lib/pdok-geocode";
+import { formatPostcodeNl, formatVolledigAdres } from "@/lib/adres-fields";
 import {
   deductInventoryForReparatieOrder,
   reparatieLineItemsForInventoryDeduction,
@@ -76,13 +77,19 @@ async function enrichAdresFields(input: {
         postcode = resolved.postcode;
       }
       woonplaats = woonplaats || resolved.woonplaats;
+      if (!/^\d{4}\s*[A-Za-z]{2}$/.test(postcode) && resolved.weergavenaam) {
+        const m = resolved.weergavenaam.match(/\b(\d{4}\s*[A-Za-z]{2})\b/i);
+        if (m) postcode = formatPostcodeNl(m[1]);
+      }
     }
   }
 
-  const volledigAdres = [straatnaam, huisnummer, postcode, woonplaats]
-    .filter(Boolean)
-    .join(", ")
-    .trim();
+  const volledigAdres = formatVolledigAdres({
+    straatnaam,
+    huisnummer,
+    postcode,
+    woonplaats,
+  });
 
   return { straatnaam, huisnummer, postcode, woonplaats, volledigAdres };
 }

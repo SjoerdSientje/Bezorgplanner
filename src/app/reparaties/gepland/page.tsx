@@ -6,6 +6,7 @@ import Header from "@/components/Header";
 import AdresAutocomplete from "@/components/AdresAutocomplete";
 import ProductAutocomplete from "@/components/ProductAutocomplete";
 import ArbeidUrenInput from "@/components/ArbeidUrenInput";
+import { splitVolledigAdres } from "@/lib/adres-fields";
 import {
   arbeidPrijsIncl,
   normalizeStandaardOnderdelen,
@@ -76,54 +77,6 @@ type EditDraft = {
 
 function mkKey() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function splitAdres(volledig: string): {
-  straatnaam: string;
-  huisnummer: string;
-  postcode: string;
-  woonplaats: string;
-} {
-  const trimmed = volledig.trim();
-  if (!trimmed) {
-    return { straatnaam: "", huisnummer: "", postcode: "", woonplaats: "" };
-  }
-
-  // Nieuw formaat: "Straat 12, 1234 AB, Amsterdam"
-  const comma = trimmed.split(",").map((s) => s.trim()).filter(Boolean);
-  if (comma.length >= 2) {
-    const straatHuis = comma[0] ?? "";
-    const postcode = comma[1] ?? "";
-    const woonplaats = comma.slice(2).join(", ");
-    const sh = straatHuis.split(/\s+/).filter(Boolean);
-    const huisnummer = sh.length > 1 ? (sh[sh.length - 1] ?? "") : "";
-    const straatnaam =
-      sh.length > 1 ? sh.slice(0, -1).join(" ") : straatHuis;
-    // Als 2e deel geen postcode is (oud/afwijkend), val terug op space-parse.
-    if (/^\d{4}\s*[A-Za-z]{2}$/i.test(postcode)) {
-      return { straatnaam, huisnummer, postcode, woonplaats };
-    }
-  }
-
-  const parts = trimmed.split(/\s+/).filter(Boolean);
-  const postcodeIdx = parts.findIndex(
-    (p) => /^\d{4}[A-Za-z]{2}$/i.test(p) || /^\d{4}$/.test(p)
-  );
-  if (postcodeIdx < 0) {
-    return { straatnaam: trimmed, huisnummer: "", postcode: "", woonplaats: "" };
-  }
-  let postcode = parts[postcodeIdx] ?? "";
-  let woonplaats = "";
-  if (parts[postcodeIdx + 1] && /^[A-Za-z]{2}$/i.test(parts[postcodeIdx + 1]!)) {
-    postcode = `${parts[postcodeIdx]} ${parts[postcodeIdx + 1]}`;
-    woonplaats = parts.slice(postcodeIdx + 2).join(" ");
-  } else {
-    woonplaats = parts.slice(postcodeIdx + 1).join(" ");
-  }
-  const before = parts.slice(0, postcodeIdx);
-  const huisnummer = before[before.length - 1] ?? "";
-  const straatnaam = before.slice(0, -1).join(" ") || before.join(" ");
-  return { straatnaam, huisnummer, postcode, woonplaats };
 }
 
 function storedToDraft(raw: unknown): DraftRegel[] {
@@ -316,7 +269,7 @@ export default function ReparatiesGeplandPage() {
   }
 
   function startEdit(o: OrderRow) {
-    const adres = splitAdres(o.volledig_adres ?? "");
+    const adres = splitVolledigAdres(o.volledig_adres ?? "");
     const soort = o.type as ReparatieSoort;
     setEdit({
       id: o.id,
@@ -667,13 +620,17 @@ export default function ReparatiesGeplandPage() {
                       woonplaats: edit.woonplaats,
                     }}
                     onChange={(v) =>
-                      setEdit({
-                        ...edit,
-                        straatnaam: v.straatnaam,
-                        huisnummer: v.huisnummer,
-                        postcode: v.postcode,
-                        woonplaats: v.woonplaats,
-                      })
+                      setEdit((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              straatnaam: v.straatnaam,
+                              huisnummer: v.huisnummer,
+                              postcode: v.postcode,
+                              woonplaats: v.woonplaats,
+                            }
+                          : prev
+                      )
                     }
                   />
 

@@ -162,6 +162,12 @@ export default function AdresAutocomplete({ velden, onChange }: Props) {
     veldenRef.current = velden;
   }, [velden]);
 
+  /** Direct ref bijwerken zodat snelle toetsaanslagen/selectie geen velden (postcode) wissen. */
+  function pushVelden(next: AdresVelden) {
+    veldenRef.current = next;
+    onChange(next);
+  }
+
   // Sluit dropdown bij klik buiten component
   useEffect(() => {
     function handler(e: MouseEvent) {
@@ -229,13 +235,13 @@ export default function AdresAutocomplete({ velden, onChange }: Props) {
 
   function handleStraatnaamChange(e: React.ChangeEvent<HTMLInputElement>) {
     const val = e.target.value;
-    onChange({ ...veldenRef.current, straatnaam: val });
+    pushVelden({ ...veldenRef.current, straatnaam: val });
     scheduleFetch(buildQuery({ straatnaam: val }));
   }
 
   function handleHuisnummerChange(e: React.ChangeEvent<HTMLInputElement>) {
     const val = e.target.value;
-    onChange({ ...veldenRef.current, huisnummer: val });
+    pushVelden({ ...veldenRef.current, huisnummer: val });
     if (veldenRef.current.straatnaam.trim().length >= MIN_QUERY_LEN || val.trim().length >= 1) {
       scheduleFetch(buildQuery({ huisnummer: val }));
     }
@@ -243,7 +249,7 @@ export default function AdresAutocomplete({ velden, onChange }: Props) {
 
   function handlePostcodeChange(e: React.ChangeEvent<HTMLInputElement>) {
     const val = e.target.value;
-    onChange({ ...veldenRef.current, postcode: val });
+    pushVelden({ ...veldenRef.current, postcode: val });
     const compact = val.replace(/\s/g, "");
     if (compact.length >= 4) {
       scheduleFetch(buildQuery({ postcode: val }));
@@ -252,7 +258,7 @@ export default function AdresAutocomplete({ velden, onChange }: Props) {
 
   function handleWoonplaatsChange(e: React.ChangeEvent<HTMLInputElement>) {
     const val = e.target.value;
-    onChange({ ...veldenRef.current, woonplaats: val });
+    pushVelden({ ...veldenRef.current, woonplaats: val });
     if (
       veldenRef.current.straatnaam.trim().length >= MIN_QUERY_LEN ||
       val.trim().length >= MIN_QUERY_LEN
@@ -267,12 +273,12 @@ export default function AdresAutocomplete({ velden, onChange }: Props) {
     setActiveIndex(-1);
 
     // Direct toepassen (postcode zit al in /free) — niet wachten op lookup.
-    onChange(docToVelden(doc));
+    pushVelden(docToVelden(doc));
 
     if (!doc.id) return;
     const looked = await lookupById(doc.id);
     if (!looked) return;
-    onChange(docToVelden(mergeDoc(doc, looked)));
+    pushVelden(docToVelden(mergeDoc(doc, looked)));
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {

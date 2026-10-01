@@ -121,16 +121,28 @@ export async function resolveDutchAddressParts(input: {
     const postcode = formatPostcodeNl(doc.postcode) || postIn;
     const straatnaam = String(doc.straatnaam ?? "").trim() || straatIn;
     const woonplaats = String(doc.woonplaatsnaam ?? "").trim() || plaatsIn;
-    const weergavenaam =
+    let weergavenaam =
       String(doc.weergavenaam ?? "").trim() ||
       [straatnaam, huisnummer].filter(Boolean).join(" ") +
         (postcode || woonplaats
           ? `, ${[postcode, woonplaats].filter(Boolean).join(" ")}`
           : "");
 
-    if (!isCompletePostcode(postcode) && !straatnaam) return null;
+    let finalPostcode = postcode;
+    if (!isCompletePostcode(finalPostcode) && weergavenaam) {
+      const m = weergavenaam.match(/\b(\d{4}\s*[A-Za-z]{2})\b/i);
+      if (m) finalPostcode = formatPostcodeNl(m[1]);
+    }
 
-    return { straatnaam, huisnummer, postcode, woonplaats, weergavenaam };
+    if (!isCompletePostcode(finalPostcode) && !straatnaam) return null;
+
+    return {
+      straatnaam,
+      huisnummer,
+      postcode: finalPostcode,
+      woonplaats,
+      weergavenaam,
+    };
   } catch {
     return null;
   }

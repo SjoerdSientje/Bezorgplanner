@@ -11,6 +11,7 @@ import {
   normalizeProductDefaultItemsRules,
   type ProductDefaultItemsRulesV2,
 } from "@/lib/product-default-items-rules";
+import { splitVolledigAdres } from "@/lib/adres-fields";
 import {
   parseMpProductenFromLineItemsJson,
   type MpJaNee,
@@ -85,46 +86,6 @@ function defaultProduct(): ProductRegel {
     shopify_product_id: null,
     shopify_variant_id: null,
   };
-}
-
-function splitAdres(volledig: string): {
-  straatnaam: string;
-  huisnummer: string;
-  postcode: string;
-  woonplaats: string;
-} {
-  const comma = volledig.split(",").map((s) => s.trim()).filter(Boolean);
-  if (comma.length >= 3) {
-    const [straatHuis, postcode, ...rest] = comma;
-    const sh = (straatHuis ?? "").split(/\s+/);
-    const huisnummer = sh[sh.length - 1] ?? "";
-    const straatnaam = sh.slice(0, -1).join(" ") || (straatHuis ?? "");
-    return {
-      straatnaam,
-      huisnummer,
-      postcode: postcode ?? "",
-      woonplaats: rest.join(" "),
-    };
-  }
-  const parts = volledig.trim().split(/\s+/).filter(Boolean);
-  const postcodeIdx = parts.findIndex(
-    (p) => /^\d{4}\s*[A-Za-z]{2}$/i.test(p) || /^\d{4}$/i.test(p)
-  );
-  if (postcodeIdx < 0) {
-    return { straatnaam: volledig.trim(), huisnummer: "", postcode: "", woonplaats: "" };
-  }
-  let postcode = parts[postcodeIdx] ?? "";
-  let woonplaats = "";
-  if (parts[postcodeIdx + 1] && /^[A-Za-z]{2}$/i.test(parts[postcodeIdx + 1]!)) {
-    postcode = `${parts[postcodeIdx]} ${parts[postcodeIdx + 1]}`;
-    woonplaats = parts.slice(postcodeIdx + 2).join(" ");
-  } else {
-    woonplaats = parts.slice(postcodeIdx + 1).join(" ");
-  }
-  const before = parts.slice(0, postcodeIdx);
-  const huisnummer = before[before.length - 1] ?? "";
-  const straatnaam = before.slice(0, -1).join(" ") || before.join(" ");
-  return { straatnaam, huisnummer, postcode, woonplaats };
 }
 
 function statusLabel(status: string) {
@@ -264,7 +225,7 @@ export default function MarktplaatsGeplandClient() {
   }, [load]);
 
   function startEdit(o: OrderRow) {
-    const adres = splitAdres(o.volledig_adres ?? "");
+    const adres = splitVolledigAdres(o.volledig_adres ?? "");
     const parsed = parseMpProductenFromLineItemsJson(o.line_items_json);
     const producten: ProductRegel[] =
       parsed.length > 0
@@ -537,13 +498,17 @@ export default function MarktplaatsGeplandClient() {
                     woonplaats: edit.woonplaats,
                   }}
                   onChange={(v) =>
-                    setEdit({
-                      ...edit,
-                      straatnaam: v.straatnaam,
-                      huisnummer: v.huisnummer,
-                      postcode: v.postcode,
-                      woonplaats: v.woonplaats,
-                    })
+                    setEdit((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            straatnaam: v.straatnaam,
+                            huisnummer: v.huisnummer,
+                            postcode: v.postcode,
+                            woonplaats: v.woonplaats,
+                          }
+                        : prev
+                    )
                   }
                 />
                 <div>
