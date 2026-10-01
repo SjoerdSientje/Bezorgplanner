@@ -101,7 +101,7 @@ export async function DELETE(
     const { data: order, error: fetchErr } = await supabase
       .from("orders")
       .select(
-        "id, source, type, status, reparatie_betaalwijze, moneybird_invoice_id, order_nummer"
+        "id, source, type, status, reparatie_betaalwijze, moneybird_invoice_id, order_nummer, order_id"
       )
       .eq("owner_email", ownerEmail)
       .eq("id", id)
@@ -119,18 +119,29 @@ export async function DELETE(
 
     const source = String(order.source ?? "").toLowerCase();
 
-    // MP: reserveringen terugdraaien (afhaal heeft geen reservering).
-    if (source === "mp") {
-      try {
-        const { clearReservationsForOrder } = await import(
-          "@/lib/inventory-reservations"
-        );
+    // Reserveringen vrijgeven (geen voorraadaftrek) — alsof de order is geannuleerd.
+    try {
+      const { clearReservationsForOrder } = await import(
+        "@/lib/inventory-reservations"
+      );
+      if (source === "mp") {
         await clearReservationsForOrder(supabase, ownerEmail, "marktplaats", id, {
           skipAlerts: true,
         });
-      } catch (resErr) {
-        console.error("[api/orders DELETE] mp reservations:", resErr);
+      } else if (source === "shopify") {
+        const shopifyOrderId = String(order.order_id ?? "").trim();
+        if (shopifyOrderId) {
+          await clearReservationsForOrder(
+            supabase,
+            ownerEmail,
+            "shopify",
+            shopifyOrderId,
+            { skipAlerts: true }
+          );
+        }
       }
+    } catch (resErr) {
+      console.error("[api/orders DELETE] reservations:", resErr);
     }
 
     // Reparatie: conceptfactuur verwijderen als die op factuur stond (alleen drafts).

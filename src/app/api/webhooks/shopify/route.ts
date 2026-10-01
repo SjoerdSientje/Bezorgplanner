@@ -509,6 +509,27 @@ export async function POST(request: NextRequest) {
 
         if (!passesRitjesFilter(order)) {
           // Voldoet niet meer → uit ritjes (planning_slots cascaden mee).
+          // Reservering vrijgeven (geen aftrek) zodat sellable weer klopt.
+          try {
+            const shopifyOrderId = String(order.id ?? "").trim();
+            if (shopifyOrderId) {
+              const { clearReservationsForOrder } = await import(
+                "@/lib/inventory-reservations"
+              );
+              await clearReservationsForOrder(
+                supabase,
+                ownerEmail,
+                "shopify",
+                shopifyOrderId,
+                { skipAlerts: true }
+              );
+            }
+          } catch (resErr) {
+            console.error(
+              "[webhooks/shopify] clear reservations on ritjes drop:",
+              resErr
+            );
+          }
           await supabase.from("orders").delete().eq("id", existing.id);
           continue;
         }

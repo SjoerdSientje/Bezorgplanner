@@ -747,35 +747,46 @@ export async function createInventoryAlertTemplate() {
 }
 
 /**
- * Appje bij voorraad 3 of 0 met de juiste Meta-template.
+ * Appje bij voorraad laag (drempel) of 0 met de juiste Meta-template.
  */
 export async function notifyInventoryStockAlert(params: {
   productTitle: string;
   stockAfter: number;
+  /** Drempel voor "laag"-tekst; default 3. */
+  threshold?: number;
 }): Promise<SendWhatsAppResult> {
   const to = env("WHATSAPP_VOORRAAD_ALERT_TO") || INVENTORY_ALERT_PHONE_DEFAULT;
   const title = String(params.productTitle ?? "").trim() || "Product";
   const stock = Math.max(0, Math.floor(params.stockAfter));
+  const threshold =
+    params.threshold != null && Number.isFinite(params.threshold)
+      ? Math.max(0, Math.floor(params.threshold))
+      : 3;
   const productnaam = title.slice(0, 200);
 
   const text =
     stock === 0
       ? `Waarschuwing! ${title} is uitverkocht, bestel bij!`
-      : `De voorraad van ${title} is laag (3).`;
+      : `De voorraad van ${title} is laag (${stock}, drempel ${threshold}).`;
 
-  const templateName =
-    stock === 0
-      ? env("WHATSAPP_VOORRAAD_OUT_TEMPLATE") || INVENTORY_ALERT_TEMPLATE_OUT
-      : env("WHATSAPP_VOORRAAD_LOW_TEMPLATE") || INVENTORY_ALERT_TEMPLATE_LOW;
+  // Template voorraad_laag_3 past alleen bij de standaarddrempel.
+  const useLowTemplate = stock > 0 && threshold === 3;
 
-  const tplRes = await sendWhatsAppTemplate({
-    to,
-    templateName,
-    languageCode: env("WHATSAPP_VOORRAAD_ALERT_LANGUAGE") || "nl",
-    bodyNamedVariables: { productnaam },
-  });
-  if (tplRes.ok) return tplRes;
-  console.warn("[whatsapp] voorraad template mislukt, probeer tekst:", tplRes.error);
+  if (stock === 0 || useLowTemplate) {
+    const templateName =
+      stock === 0
+        ? env("WHATSAPP_VOORRAAD_OUT_TEMPLATE") || INVENTORY_ALERT_TEMPLATE_OUT
+        : env("WHATSAPP_VOORRAAD_LOW_TEMPLATE") || INVENTORY_ALERT_TEMPLATE_LOW;
+
+    const tplRes = await sendWhatsAppTemplate({
+      to,
+      templateName,
+      languageCode: env("WHATSAPP_VOORRAAD_ALERT_LANGUAGE") || "nl",
+      bodyNamedVariables: { productnaam },
+    });
+    if (tplRes.ok) return tplRes;
+    console.warn("[whatsapp] voorraad template mislukt, probeer tekst:", tplRes.error);
+  }
 
   return sendWhatsAppText({ to, text });
 }

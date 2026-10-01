@@ -51,6 +51,16 @@ export type InventoryMutationType = "inkomend" | "uitgaand" | "correctie";
 export const LOW_STOCK_THRESHOLD = 3;
 export const INITIAL_STOCK = 10;
 
+/** Effectieve drempel: per-regel waarde, anders globale default (3). */
+export function effectiveLowStockThreshold(
+  threshold: number | null | undefined
+): number {
+  if (threshold == null || !Number.isFinite(Number(threshold))) {
+    return LOW_STOCK_THRESHOLD;
+  }
+  return Math.max(0, Math.floor(Number(threshold)));
+}
+
 export type InventoryProductRow = {
   id: string;
   owner_email: string;
@@ -74,6 +84,12 @@ export type InventoryProductRow = {
   /** YYYY-MM-DD; toekomstige restock → toont als levertijd in de lijst. */
   restock_datum: string | null;
   opmerking: string | null;
+  /**
+   * Drempel voor het "voorraad laag"-WhatsApp-appje (verkoopbaar ≤ deze waarde).
+   * NULL = standaard (LOW_STOCK_THRESHOLD). 0 = geen laag-appje.
+   * Uitverkocht-appje (verkoopbaar ≤ 0) gaat altijd, ongeacht deze waarde.
+   */
+  low_stock_threshold: number | null;
   /** Alleen in API-responses: som van openstaande reserveringen. */
   reserved_quantity?: number;
   /** Alleen in API-responses: stock − reserved (mag negatief). */
@@ -821,7 +837,7 @@ export async function getInventoryStats(
 
   const { data: products } = await supabase
     .from("inventory_products")
-    .select("id, stock_quantity")
+    .select("id, stock_quantity, low_stock_threshold")
     .eq("owner_email", ownerEmail);
 
   const rows = products ?? [];
@@ -843,8 +859,11 @@ export async function getInventoryStats(
       Number(p.stock_quantity ?? 0),
       reservedMap.get(String(p.id)) ?? 0
     );
+    const threshold = effectiveLowStockThreshold(
+      (p as { low_stock_threshold?: number | null }).low_stock_threshold
+    );
     if (sellable <= 0) outOfStock++;
-    else if (sellable <= LOW_STOCK_THRESHOLD) lowStock++;
+    else if (threshold > 0 && sellable <= threshold) lowStock++;
   }
 
   const { count } = await supabase
@@ -1517,25 +1536,47 @@ export async function applyInventoryMutation(
     : String(product.title ?? "").trim();
 
   // Appje op verkoopbare voorraad (stock − reserveringen).
-  if (!params.skipStockAlert) {
-    try {
-      const { sumReservedForProduct, sellableFrom, maybeNotifySellableStockAlert } =
-        await import("@/lib/inventory-reservations");
-      const reserved = await sumReservedForProduct(
-        supabase,
-        params.ownerEmail,
-        String(product.id)
-      );
-      const beforeSellable = sellableFrom(before, reserved);
-      const afterSellable = sellableFrom(after, reserved);
+  // Ook: restock_datum → vandaag als we van uitverkocht weer voorraad krijgen.
+  try {
+    const { sumReservedForProduct, sellableFrom, maybeNotifySellableStockAlert } =
+      await import("@/lib/inventory-reservations");
+    const reserved = await sumReservedForProduct(
+      supabase,
+      params.ownerEmail,
+      String(product.id)
+    );
+    const beforeSellable = sellableFrom(before, reserved);
+    const afterSellable = sellableFrom(after, reserved);
+
+    if (beforeSellable <= 0 && afterSellable > 0) {
+      try {
+        const { stampRestockDatumOnSellableRecovery } = await import(
+          "@/lib/inventory-levertijd"
+        );
+        await stampRestockDatumOnSellableRecovery(supabase, params.ownerEmail, {
+          productId: String(product.id),
+          beforeSellable,
+          afterSellable,
+          levertijd: (product as { levertijd?: string | null }).levertijd ?? null,
+          shopifyProductId: Number(product.shopify_product_id) || null,
+        });
+      } catch (e) {
+        console.warn("[inventory] restock_datum stamp bij aanvullen fout:", e);
+      }
+    }
+
+    if (!params.skipStockAlert) {
       await maybeNotifySellableStockAlert({
         productTitle: productTitle || "Product",
         beforeSellable,
         afterSellable,
+        threshold: effectiveLowStockThreshold(
+          (product as { low_stock_threshold?: number | null }).low_stock_threshold
+        ),
       });
-    } catch (e) {
-      console.warn("[inventory] voorraad-alert (sellable) fout:", e);
     }
+  } catch (e) {
+    console.warn("[inventory] voorraad-alert/restock (sellable) fout:", e);
   }
 
   let bikeRestock: { productTitle: string; quantityAdded: number } | undefined;

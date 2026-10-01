@@ -15,10 +15,10 @@ import {
   buildInventoryDeductionLineItems,
   clearOrderDeduction,
   desiredDeductionByProduct,
+  effectiveLowStockThreshold,
   hasOrderDeduction,
   markOrderDeducted,
   type LineItemForDeduction,
-  LOW_STOCK_THRESHOLD,
 } from "@/lib/inventory";
 import { AUTO_FINALIZE_INVOICE_BELOW_EUR, shopifyOrderBillableTotalIncl } from "@/lib/moneybird";
 import { loadProductDefaultItemsRules } from "@/lib/product-rules-server";
@@ -109,24 +109,35 @@ export function sellableFrom(stock: number, reserved: number): number {
   return Math.floor(Number(stock) || 0) - Math.max(0, Math.floor(Number(reserved) || 0));
 }
 
-/** WhatsApp-alert wanneer verkoopbare voorraad 3 of ≤0 raakt. */
+/** WhatsApp-alert: uitverkocht (≤0) altijd; "laag" alleen bij overschrijden van de per-regel drempel. */
 export async function maybeNotifySellableStockAlert(params: {
   productTitle: string;
   beforeSellable: number;
   afterSellable: number;
+  /** Drempel voor het "laag"-appje; default LOW_STOCK_THRESHOLD. Beïnvloedt niet het uitverkocht-appje. */
+  threshold?: number | null;
 }): Promise<void> {
   const before = params.beforeSellable;
   const after = params.afterSellable;
-  const hitThree =
-    after === LOW_STOCK_THRESHOLD && before !== LOW_STOCK_THRESHOLD && before > LOW_STOCK_THRESHOLD;
+  const threshold = effectiveLowStockThreshold(params.threshold);
+
+  // Uitverkocht: altijd melden, ongeacht low_stock_threshold.
   const hitZero = after <= 0 && before > 0;
-  if (!hitThree && !hitZero) return;
+  // Laag: alleen als drempel > 0 en we van boven de drempel naar ≤ drempel (nog > 0) gaan.
+  const hitLow =
+    !hitZero &&
+    threshold > 0 &&
+    after > 0 &&
+    after <= threshold &&
+    before > threshold;
+  if (!hitLow && !hitZero) return;
 
   try {
     const { notifyInventoryStockAlert } = await import("@/lib/whatsapp");
     const wa = await notifyInventoryStockAlert({
       productTitle: params.productTitle || "Product",
       stockAfter: after <= 0 ? 0 : after,
+      threshold,
     });
     if (!wa.ok) {
       console.warn("[inventory-reservations] voorraad-alert WhatsApp mislukt:", wa.error);
@@ -145,7 +156,7 @@ async function alertSellableForProduct(
 ): Promise<void> {
   const { data: product } = await supabase
     .from("inventory_products")
-    .select("title, variant_title, stock_quantity")
+    .select("title, variant_title, stock_quantity, low_stock_threshold")
     .eq("owner_email", ownerEmail)
     .eq("id", inventoryProductId)
     .maybeSingle();
@@ -157,7 +168,31 @@ async function alertSellableForProduct(
   const productTitle = variant
     ? `${String(product.title ?? "").trim()} (${variant})`
     : String(product.title ?? "").trim();
-  await maybeNotifySellableStockAlert({ productTitle, beforeSellable, afterSellable });
+  await maybeNotifySellableStockAlert({
+    productTitle,
+    beforeSellable,
+    afterSellable,
+    threshold: product.low_stock_threshold as number | null,
+  });
+
+  if (beforeSellable <= 0 && afterSellable > 0) {
+    try {
+      const { stampRestockDatumOnSellableRecovery } = await import(
+        "@/lib/inventory-levertijd"
+      );
+      await stampRestockDatumOnSellableRecovery(supabase, ownerEmail, {
+        productId: inventoryProductId,
+        beforeSellable,
+        afterSellable,
+        shopifyProductId: null,
+      });
+    } catch (e) {
+      console.warn(
+        "[inventory-reservations] restock_datum stamp bij sellable recovery:",
+        e
+      );
+    }
+  }
 }
 
 type ReservationMeta = {
@@ -461,7 +496,14 @@ export async function syncReservationsForShopifyOrderUpdate(
   const rawItems = order.line_items ?? [];
 
   for (const ownerEmail of allAccountEmails()) {
-    if (!shopifyWebhookOrderAppliesToOwner(ownerEmail, order.note)) continue;
+    const applies = shopifyWebhookOrderAppliesToOwner(ownerEmail, order.note);
+    if (!applies) {
+      // Note-eigenaar gewisseld: oude owner-reservering vrijgeven.
+      await clearReservationsForOrder(supabase, ownerEmail, "shopify", shopifyOrderId, {
+        skipAlerts: true,
+      });
+      continue;
+    }
 
     if (await hasOrderDeduction(supabase, ownerEmail, "shopify", shopifyOrderId)) {
       // Al afgeschreven — reserveringen zouden leeg moeten zijn.
@@ -518,11 +560,9 @@ export async function releaseReservationsForShopifyOrder(
   const shopifyOrderId = String(order.id ?? "").trim();
   if (!shopifyOrderId) return;
 
+  // Altijd alle owners clearen (niet alleen note-match) — voorkomt wees-reserveringen.
   for (const ownerEmail of allAccountEmails()) {
-    if (!shopifyWebhookOrderAppliesToOwner(ownerEmail, order.note)) continue;
-
     if (await hasOrderDeduction(supabase, ownerEmail, "shopify", shopifyOrderId)) {
-      // Voorraad al afgeschreven (factuur verzonden) — niet terugboeken, reservering hoort al leeg te zijn.
       await clearReservationsForOrder(supabase, ownerEmail, "shopify", shopifyOrderId, {
         skipAlerts: true,
       });
@@ -785,5 +825,179 @@ export async function listReservationsForInventoryProduct(
     reservedQuantity,
     sellableQuantity: sellableFrom(stockQuantity, reservedQuantity),
     reservations,
+  };
+}
+
+export type StaleReservationClear = {
+  ownerEmail: string;
+  source: InventoryReservationSource;
+  externalOrderId: string;
+  orderNummer: string | null;
+  reason:
+    | "order_missing"
+    | "order_completed"
+    | "already_deducted"
+    | "order_cancelled_status";
+  rowCount: number;
+};
+
+const COMPLETED_ORDER_STATUSES = new Set([
+  "bezorgd",
+  "mp_orders",
+  "afgerond",
+  "geannuleerd",
+  "cancelled",
+]);
+
+/**
+ * Vindt en wist verouderde reserveringen (geen voorraadaftrek).
+ * Criteria: order ontbreekt, order is afgerond/geannuleerd, of al afgeschreven.
+ */
+export async function cleanupStaleInventoryReservations(
+  supabase: SupabaseClient,
+  options?: {
+    ownerEmail?: string | null;
+    dryRun?: boolean;
+  }
+): Promise<{
+  dryRun: boolean;
+  scannedRows: number;
+  staleGroups: number;
+  clearedRows: number;
+  items: StaleReservationClear[];
+}> {
+  const dryRun = Boolean(options?.dryRun);
+  const ownerFilter = String(options?.ownerEmail ?? "").trim().toLowerCase() || null;
+
+  let query = supabase
+    .from("inventory_reservations")
+    .select(
+      "id, owner_email, source, external_order_id, order_nummer, order_db_id, quantity"
+    );
+  if (ownerFilter) query = query.eq("owner_email", ownerFilter);
+
+  const { data: rows, error } = await query;
+  if (error) throw new Error(error.message);
+
+  const scannedRows = rows?.length ?? 0;
+  type GroupKey = string;
+  const groups = new Map<
+    GroupKey,
+    {
+      ownerEmail: string;
+      source: InventoryReservationSource;
+      externalOrderId: string;
+      orderNummer: string | null;
+      orderDbId: string | null;
+      rowCount: number;
+    }
+  >();
+
+  for (const row of rows ?? []) {
+    const ownerEmail = String(row.owner_email ?? "").trim().toLowerCase();
+    const source = String(row.source ?? "") as InventoryReservationSource;
+    const externalOrderId = String(row.external_order_id ?? "").trim();
+    if (!ownerEmail || !externalOrderId) continue;
+    if (source !== "shopify" && source !== "marktplaats") continue;
+    const key = `${ownerEmail}|${source}|${externalOrderId}`;
+    const existing = groups.get(key);
+    if (existing) {
+      existing.rowCount += 1;
+      continue;
+    }
+    groups.set(key, {
+      ownerEmail,
+      source,
+      externalOrderId,
+      orderNummer: row.order_nummer ? String(row.order_nummer) : null,
+      orderDbId: row.order_db_id ? String(row.order_db_id) : null,
+      rowCount: 1,
+    });
+  }
+
+  const stale: StaleReservationClear[] = [];
+
+  for (const g of Array.from(groups.values())) {
+    let reason: StaleReservationClear["reason"] | null = null;
+
+    if (await hasOrderDeduction(supabase, g.ownerEmail, g.source, g.externalOrderId)) {
+      reason = "already_deducted";
+    } else if (g.source === "marktplaats") {
+      const { data: order } = await supabase
+        .from("orders")
+        .select("id, status, afgerond_at")
+        .eq("owner_email", g.ownerEmail)
+        .eq("id", g.externalOrderId)
+        .maybeSingle();
+      if (!order) {
+        reason = "order_missing";
+      } else if (
+        order.afgerond_at ||
+        COMPLETED_ORDER_STATUSES.has(String(order.status ?? "").toLowerCase())
+      ) {
+        reason =
+          String(order.status ?? "").toLowerCase() === "geannuleerd" ||
+          String(order.status ?? "").toLowerCase() === "cancelled"
+            ? "order_cancelled_status"
+            : "order_completed";
+      }
+    } else {
+      // shopify
+      let orderQuery = supabase
+        .from("orders")
+        .select("id, status, afgerond_at")
+        .eq("owner_email", g.ownerEmail)
+        .eq("source", "shopify")
+        .eq("order_id", g.externalOrderId)
+        .maybeSingle();
+      const { data: order } = await orderQuery;
+      if (!order) {
+        reason = "order_missing";
+      } else if (
+        order.afgerond_at ||
+        COMPLETED_ORDER_STATUSES.has(String(order.status ?? "").toLowerCase())
+      ) {
+        reason =
+          String(order.status ?? "").toLowerCase() === "geannuleerd" ||
+          String(order.status ?? "").toLowerCase() === "cancelled"
+            ? "order_cancelled_status"
+            : "order_completed";
+      }
+    }
+
+    if (!reason) continue;
+
+    stale.push({
+      ownerEmail: g.ownerEmail,
+      source: g.source,
+      externalOrderId: g.externalOrderId,
+      orderNummer: g.orderNummer,
+      reason,
+      rowCount: g.rowCount,
+    });
+  }
+
+  let clearedRows = 0;
+  if (!dryRun) {
+    for (const item of stale) {
+      const n = await clearReservationsForOrder(
+        supabase,
+        item.ownerEmail,
+        item.source,
+        item.externalOrderId,
+        { skipAlerts: true }
+      );
+      clearedRows += n;
+    }
+  } else {
+    clearedRows = stale.reduce((sum, i) => sum + i.rowCount, 0);
+  }
+
+  return {
+    dryRun,
+    scannedRows,
+    staleGroups: stale.length,
+    clearedRows,
+    items: stale,
   };
 }

@@ -7,6 +7,7 @@ import IncomingDeliveriesModal from "@/components/IncomingDeliveriesModal";
 import NewProductsModal from "@/components/NewProductsModal";
 import {
   LOW_STOCK_THRESHOLD,
+  effectiveLowStockThreshold,
   type InventoryMutationGroup,
   type InventoryProductRow,
   type InventorySource,
@@ -80,9 +81,9 @@ function mutationTypeLabel(t: MutationType): string {
   }
 }
 
-function stockClass(qty: number): string {
+function stockClass(qty: number, threshold: number = LOW_STOCK_THRESHOLD): string {
   if (qty <= 0) return "text-red-600 font-semibold";
-  if (qty <= LOW_STOCK_THRESHOLD) return "text-orange-600 font-semibold";
+  if (threshold > 0 && qty <= threshold) return "text-orange-600 font-semibold";
   return "text-green-700 font-semibold";
 }
 
@@ -165,6 +166,7 @@ export default function VoorraadbeheerPage() {
   const [editLevertijd, setEditLevertijd] = useState("");
   const [editRestockDatum, setEditRestockDatum] = useState("");
   const [editOpmerking, setEditOpmerking] = useState("");
+  const [editLowStockThreshold, setEditLowStockThreshold] = useState("");
   const [saving, setSaving] = useState(false);
   const [savingMeta, setSavingMeta] = useState(false);
   const [savingOpmerkingId, setSavingOpmerkingId] = useState<string | null>(null);
@@ -241,7 +243,8 @@ export default function VoorraadbeheerPage() {
     return products.filter((p) => {
       if (filter !== "alle" && p.category !== filter) return false;
       const sellable = sellableOf(p);
-      if (stockFilter === "laag" && !(sellable > 0 && sellable <= LOW_STOCK_THRESHOLD)) {
+      const threshold = effectiveLowStockThreshold(p.low_stock_threshold);
+      if (stockFilter === "laag" && !(sellable > 0 && threshold > 0 && sellable <= threshold)) {
         return false;
       }
       if (stockFilter === "uitverkocht" && sellable > 0) return false;
@@ -290,7 +293,7 @@ export default function VoorraadbeheerPage() {
         className="inline-flex items-center gap-1 rounded-md px-1 py-0.5 text-left hover:bg-stone-100 focus:outline-none focus:ring-1 focus:ring-koopje-orange/40"
         title="Voorraaddetail openen"
       >
-        <span className={`font-medium tabular-nums ${stockClass(sellable)}`}>
+        <span className={`font-medium tabular-nums ${stockClass(sellable, effectiveLowStockThreshold(product.low_stock_threshold))}`}>
           {product.stock_quantity}
         </span>
         {reserved > 0 && (
@@ -415,6 +418,11 @@ export default function VoorraadbeheerPage() {
       product.restock_datum ? String(product.restock_datum).slice(0, 10) : ""
     );
     setEditOpmerking(product.opmerking ?? "");
+    setEditLowStockThreshold(
+      product.low_stock_threshold != null
+        ? String(product.low_stock_threshold)
+        : String(LOW_STOCK_THRESHOLD)
+    );
     resetMutationForm();
     setError(null);
   };
@@ -543,21 +551,47 @@ export default function VoorraadbeheerPage() {
     setSavingMeta(true);
     setError(null);
     try {
+      const thresholdRaw = editLowStockThreshold.trim();
+      const thresholdPayload =
+        thresholdRaw === ""
+          ? null
+          : (() => {
+              const n = parseInt(thresholdRaw, 10);
+              if (!Number.isFinite(n) || n < 0) {
+                throw new Error("Drempel moet een geheel getal ≥ 0 zijn.");
+              }
+              return n;
+            })();
+
+      const payload: Record<string, unknown> = {
+        productId: product.id,
+        levertijd: editLevertijd,
+        opmerking: editOpmerking,
+        low_stock_threshold: thresholdPayload,
+      };
+      // Restock alleen meesturen als verkoopbaar ≤ 0 (anders server weigert).
+      if (sellableOf(product) <= 0) {
+        payload.restock_datum = editRestockDatum.trim() || null;
+      }
+
       const res = await fetch("/api/inventory", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          productId: product.id,
-          levertijd: editLevertijd,
-          restock_datum: editRestockDatum.trim() || null,
-          opmerking: editOpmerking,
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? "Opslaan mislukt");
       const updated = data.product as InventoryProductRow;
       setProducts((prev) => prev.map((p) => (p.id === updated.id ? { ...p, ...updated } : p)));
       if (editProduct?.id === updated.id) setEditProduct({ ...editProduct, ...updated });
+      setEditRestockDatum(
+        updated.restock_datum ? String(updated.restock_datum).slice(0, 10) : ""
+      );
+      setEditLowStockThreshold(
+        updated.low_stock_threshold != null
+          ? String(updated.low_stock_threshold)
+          : String(LOW_STOCK_THRESHOLD)
+      );
       if (data.shopifyPush && data.shopifyPush.ok === false) {
         setMessage(
           `Lokaal opgeslagen, maar Shopify-update mislukt: ${data.shopifyPush.detail ?? "onbekend"}`
@@ -567,7 +601,7 @@ export default function VoorraadbeheerPage() {
         setMessage(
           typeof n === "number"
             ? `Levertijd/restock opgeslagen op ${n} Shopify-product(en).`
-            : "Levertijd/restock opgeslagen (ook in Shopify)."
+            : "Productinfo opgeslagen."
         );
       }
     } catch (e) {
@@ -586,16 +620,31 @@ export default function VoorraadbeheerPage() {
     setSaving(true);
     setError(null);
     try {
-      // Bewaar levertijd/restock/opmerking mee als die gewijzigd zijn.
+      // Bewaar levertijd/restock/opmerking/drempel mee als die gewijzigd zijn.
+      const thresholdRaw = editLowStockThreshold.trim();
+      const thresholdPayload =
+        thresholdRaw === ""
+          ? null
+          : (() => {
+              const n = parseInt(thresholdRaw, 10);
+              if (!Number.isFinite(n) || n < 0) {
+                throw new Error("Drempel moet een geheel getal ≥ 0 zijn.");
+              }
+              return n;
+            })();
+      const metaPayload: Record<string, unknown> = {
+        productId: product.id,
+        levertijd: editLevertijd,
+        opmerking: editOpmerking,
+        low_stock_threshold: thresholdPayload,
+      };
+      if (sellableOf(product) <= 0) {
+        metaPayload.restock_datum = editRestockDatum.trim() || null;
+      }
       const metaRes = await fetch("/api/inventory", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          productId: product.id,
-          levertijd: editLevertijd,
-          restock_datum: editRestockDatum.trim() || null,
-          opmerking: editOpmerking,
-        }),
+        body: JSON.stringify(metaPayload),
       });
       const metaData = await metaRes.json().catch(() => ({}));
       if (!metaRes.ok) throw new Error(metaData?.error ?? "Opslaan mislukt");
@@ -736,7 +785,7 @@ export default function VoorraadbeheerPage() {
                 <p className="min-w-0 flex-1 text-sm font-medium leading-snug text-koopje-black">
                   {p.title}
                 </p>
-                <span className={`shrink-0 text-xs ${stockClass(p.stock_quantity)}`}>
+                <span className={`shrink-0 text-xs ${stockClass(p.stock_quantity, effectiveLowStockThreshold(p.low_stock_threshold))}`}>
                   nu: {p.stock_quantity}
                 </span>
               </div>
@@ -851,7 +900,7 @@ export default function VoorraadbeheerPage() {
                   <span className="min-w-0 flex-1 truncate font-medium text-koopje-black">
                     {p.title}
                   </span>
-                  <span className={`shrink-0 text-xs ${stockClass(p.stock_quantity)}`}>
+                  <span className={`shrink-0 text-xs ${stockClass(p.stock_quantity, effectiveLowStockThreshold(p.low_stock_threshold))}`}>
                     {p.stock_quantity}
                   </span>
                 </label>
@@ -880,7 +929,10 @@ export default function VoorraadbeheerPage() {
     );
   };
 
-  const metaFields = (product: InventoryProductRow) => (
+  const metaFields = (product: InventoryProductRow) => {
+    const sellable = sellableOf(product);
+    const restockEditable = sellable <= 0;
+    return (
     <div className="mt-3 space-y-3 rounded-xl border border-stone-100 bg-stone-50/80 p-3">
       <p className="text-xs font-medium uppercase tracking-wide text-stone-400">Productinfo</p>
       <div>
@@ -908,12 +960,37 @@ export default function VoorraadbeheerPage() {
         <input
           type="date"
           value={editRestockDatum}
-          onChange={(e) => setEditRestockDatum(e.target.value)}
+          onChange={(e) => {
+            if (!restockEditable) return;
+            setEditRestockDatum(e.target.value);
+          }}
+          disabled={!restockEditable}
+          className="mt-1 w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-stone-500"
+        />
+        <p className="mt-1 text-xs text-stone-400">
+          {restockEditable
+            ? "Alleen bewerkbaar bij verkoopbare voorraad ≤ 0. Toekomstige datum overschrijft de levertijd-weergave in de lijst."
+            : "Alleen bewerkbaar bij verkoopbare voorraad ≤ 0. Bij aanvullen wordt de restock-datum automatisch op vandaag gezet."}
+        </p>
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-stone-500">
+          Voorraad-laag appje bij ≤
+        </label>
+        <input
+          type="number"
+          min={0}
+          step={1}
+          inputMode="numeric"
+          value={editLowStockThreshold}
+          onChange={(e) => setEditLowStockThreshold(e.target.value)}
+          placeholder={String(LOW_STOCK_THRESHOLD)}
           className="mt-1 w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm"
         />
         <p className="mt-1 text-xs text-stone-400">
-          Leeg = metafield wissen. Toekomstige datum overschrijft de levertijd-weergave in de
-          lijst.
+          Alleen het “laag”-appje. Bij verkoopbare voorraad 0 gaat altijd een
+          uitverkocht-appje. Standaard {LOW_STOCK_THRESHOLD}; vul 0 in om het
+          laag-appje uit te zetten.
         </p>
       </div>
       <div>
@@ -935,14 +1012,15 @@ export default function VoorraadbeheerPage() {
         {savingMeta ? "Opslaan…" : "Alleen info opslaan"}
       </button>
     </div>
-  );
+    );
+  };
 
   const mutationForm = (product: InventoryProductRow, onSubmit: () => void) => (
     <>
       <p className="mt-1 text-sm text-stone-600">{product.title}</p>
       <p className="mt-1 text-sm">
         Huidige voorraad:{" "}
-        <span className={stockClass(product.stock_quantity)}>{product.stock_quantity}</span>
+        <span className={stockClass(product.stock_quantity, effectiveLowStockThreshold(product.low_stock_threshold))}>{product.stock_quantity}</span>
       </p>
 
       {metaFields(product)}
@@ -1504,7 +1582,12 @@ export default function VoorraadbeheerPage() {
                       Verkoopbaar
                     </dt>
                     <dd
-                      className={`mt-1 text-xl font-semibold tabular-nums ${stockClass(stockDetail.sellableQuantity)}`}
+                      className={`mt-1 text-xl font-semibold tabular-nums ${stockClass(
+                        stockDetail.sellableQuantity,
+                        effectiveLowStockThreshold(
+                          products.find((p) => p.id === stockDetailId)?.low_stock_threshold
+                        )
+                      )}`}
                     >
                       {stockDetail.sellableQuantity}
                     </dd>

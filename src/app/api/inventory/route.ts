@@ -96,6 +96,7 @@ export async function PATCH(request: NextRequest) {
       levertijd?: string | null;
       restock_datum?: string | null;
       opmerking?: string | null;
+      low_stock_threshold?: number | null;
     } = {};
 
     if ("levertijd" in body) {
@@ -121,11 +122,57 @@ export async function PATCH(request: NextRequest) {
       const v = body.opmerking == null ? "" : String(body.opmerking).trim();
       updates.opmerking = v || null;
     }
+    if ("low_stock_threshold" in body || "lowStockThreshold" in body) {
+      const raw = body.low_stock_threshold ?? body.lowStockThreshold;
+      if (raw == null || String(raw).trim() === "") {
+        updates.low_stock_threshold = null;
+      } else {
+        const n = typeof raw === "number" ? raw : parseInt(String(raw), 10);
+        if (!Number.isFinite(n) || n < 0) {
+          return NextResponse.json(
+            { error: "low_stock_threshold moet een geheel getal ≥ 0 zijn (leeg = standaard 3)." },
+            { status: 400 }
+          );
+        }
+        updates.low_stock_threshold = Math.floor(n);
+      }
+    }
     if (Object.keys(updates).length === 0) {
       return NextResponse.json({ error: "Geen velden om bij te werken." }, { status: 400 });
     }
 
     const supabase = createServerSupabaseClient();
+
+    // Restock-datum alleen handmatig zetten als verkoopbaar ≤ 0.
+    if ("restock_datum" in updates && updates.restock_datum != null) {
+      const { data: existing, error: existingErr } = await supabase
+        .from("inventory_products")
+        .select("id, stock_quantity")
+        .eq("id", productId)
+        .eq("owner_email", ownerEmail)
+        .maybeSingle();
+      if (existingErr) {
+        return NextResponse.json({ error: existingErr.message }, { status: 500 });
+      }
+      if (!existing) {
+        return NextResponse.json({ error: "Product niet gevonden." }, { status: 404 });
+      }
+      const { sumReservedForProduct, sellableFrom } = await import(
+        "@/lib/inventory-reservations"
+      );
+      const reserved = await sumReservedForProduct(supabase, ownerEmail, productId);
+      const sellable = sellableFrom(Number(existing.stock_quantity ?? 0), reserved);
+      if (sellable > 0) {
+        return NextResponse.json(
+          {
+            error:
+              "Restock-datum mag alleen worden gezet als de verkoopbare voorraad 0 of lager is.",
+          },
+          { status: 400 }
+        );
+      }
+    }
+
     const { data, error } = await supabase
       .from("inventory_products")
       .update(updates)

@@ -375,19 +375,74 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Order bijwerken mislukt." }, { status: 500 });
     }
 
-    // MP-bezorg: reservering → echte voorraadaftrek bij afronden.
-    if (toMpOrders) {
-      try {
-        const { commitInventoryForMpOrder } = await import("@/lib/inventory-reservations");
+    // Voorraad bij afronden:
+    // - Echte MP-orders: reservering committen (aftrekken).
+    // - Shopify-orders (ook met mp-tags): committen/clearen via Shopify-id,
+    //   nooit via marktplaats-key (die matcht de reservering niet).
+    const orderSource = String((order as { source?: string | null }).source ?? "")
+      .trim()
+      .toLowerCase();
+    try {
+      if (orderSource === "mp") {
+        const { commitInventoryForMpOrder } = await import(
+          "@/lib/inventory-reservations"
+        );
         await commitInventoryForMpOrder(
           supabase,
           ownerEmail,
           orderId,
           String((order as { order_nummer?: string | null }).order_nummer ?? orderId)
         );
-      } catch (invErr) {
-        console.error("[api/afronden] inventory commit:", invErr);
+      } else if (orderSource === "shopify") {
+        const shopifyOrderId = String(
+          (order as { order_id?: string | null }).order_id ?? ""
+        ).trim();
+        if (shopifyOrderId) {
+          const { commitReservationsForOrder } = await import(
+            "@/lib/inventory-reservations"
+          );
+          const { buildInventoryDeductionLineItems } = await import(
+            "@/lib/inventory"
+          );
+          const { loadProductDefaultItemsRules } = await import(
+            "@/lib/product-rules-server"
+          );
+          let lineItemsFallback: Array<{
+            name?: string | null;
+            quantity?: number | null;
+            product_id?: string | number | null;
+            variant_id?: string | number | null;
+          }> = [];
+          try {
+            const raw = (order as { line_items_json?: unknown }).line_items_json;
+            const parsed =
+              typeof raw === "string"
+                ? (JSON.parse(raw) as unknown)
+                : raw;
+            if (Array.isArray(parsed)) {
+              const rules = await loadProductDefaultItemsRules(supabase, ownerEmail);
+              lineItemsFallback = buildInventoryDeductionLineItems(
+                parsed as Parameters<typeof buildInventoryDeductionLineItems>[0],
+                rules
+              );
+            }
+          } catch {
+            // fallback leeg → alleen bestaande reserveringsrijen
+          }
+          await commitReservationsForOrder(supabase, {
+            ownerEmail,
+            source: "shopify",
+            externalOrderId: shopifyOrderId,
+            orderReference: String(
+              (order as { order_nummer?: string | null }).order_nummer ??
+                shopifyOrderId
+            ),
+            lineItemsFallback,
+          });
+        }
       }
+    } catch (invErr) {
+      console.error("[api/afronden] inventory commit:", invErr);
     }
 
     // Controleer hoeveel slots er zijn vóór delete (voor debuggen).
