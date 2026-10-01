@@ -137,10 +137,22 @@ function stripTrailingColorSuffix(title: string): string {
 
 type ModelColor = { modelName: string; colorName: string | null };
 
+/** Family-Deal "Groen" = fysiek Sea Green (zelfde voorraadregel). */
+function aliasEngweL20BoostColor(
+  title: string,
+  color: string | null
+): string | null {
+  if (!color) return color;
+  if (/^groen$/i.test(color) && /family[- ]?deal/i.test(title)) {
+    return "Sea Green";
+  }
+  return color;
+}
+
 function normalizeEngweL20Boost(title: string): ModelColor | null {
   if (!/ENGWE L20 Boost/i.test(title)) return null;
   const cleaned = cleanTitleForGrouping(title);
-  const color = extractColorFromTitle(cleaned);
+  const color = aliasEngweL20BoostColor(title, extractColorFromTitle(cleaned));
   return { modelName: "ENGWE L20 Boost - Fatbike", colorName: color };
 }
 
@@ -159,7 +171,22 @@ function normalizeOuxiV8C80(title: string): ModelColor | null {
 
   if (/Ultra\s+Mini/i.test(cleaned)) return null;
   if (/Ultra\s+Fatbike/i.test(cleaned) && !/6\.0|C80/i.test(cleaned)) return null;
-  if (/Skinny/i.test(cleaned)) return null;
+
+  // Skinny: PRO MAX Dubbele accu (combi-deal) deelt voorraad met PRO Skinnybike.
+  if (/Skinny/i.test(cleaned)) {
+    if (/PRO\s*MAX/i.test(cleaned) && /Dubbele/i.test(cleaned)) {
+      return { modelName: "OUXI V8 / C80 PRO Skinnybike", colorName: null };
+    }
+    if (
+      /PRO/i.test(cleaned) &&
+      !/MAX/i.test(cleaned) &&
+      !/Ultra|GT-?\s*20/i.test(cleaned)
+    ) {
+      return { modelName: "OUXI V8 / C80 PRO Skinnybike", colorName: null };
+    }
+    return null;
+  }
+
   if (/MAX/i.test(cleaned) && /Dubbele/i.test(cleaned)) return null;
 
   if (/24\s*inch/i.test(cleaned)) {
@@ -273,15 +300,20 @@ export function buildInventoryStockKeyInfo(
     if (!value) continue;
     if (optionName === "Kleur") {
       colorName = normalizeColorLabel(value);
-      dimensions.push(`kleur:${colorKey(colorName)}`);
     } else {
       trimLabel = shortTrimLabel(optionName, value);
       dimensions.push(`${slugPart(optionName)}:${slugPart(value)}`);
     }
   }
 
-  if (colorName && !dimensions.some((d) => d.startsWith("kleur:"))) {
-    dimensions.unshift(`kleur:${colorKey(colorName)}`);
+  // Titel-aliases (bijv. Family-Deal Groen → Sea Green) winnen van Shopify-kleuroptie.
+  colorName = aliasEngweL20BoostColor(product.title, colorName);
+
+  if (colorName) {
+    const kleurDim = `kleur:${colorKey(colorName)}`;
+    const kleurIdx = dimensions.findIndex((d) => d.startsWith("kleur:"));
+    if (kleurIdx >= 0) dimensions[kleurIdx] = kleurDim;
+    else dimensions.unshift(kleurDim);
   }
 
   const modelName = resolved.modelName;
