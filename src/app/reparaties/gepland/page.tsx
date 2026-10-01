@@ -84,12 +84,33 @@ function splitAdres(volledig: string): {
   postcode: string;
   woonplaats: string;
 } {
-  const parts = volledig.trim().split(/\s+/).filter(Boolean);
+  const trimmed = volledig.trim();
+  if (!trimmed) {
+    return { straatnaam: "", huisnummer: "", postcode: "", woonplaats: "" };
+  }
+
+  // Nieuw formaat: "Straat 12, 1234 AB, Amsterdam"
+  const comma = trimmed.split(",").map((s) => s.trim()).filter(Boolean);
+  if (comma.length >= 2) {
+    const straatHuis = comma[0] ?? "";
+    const postcode = comma[1] ?? "";
+    const woonplaats = comma.slice(2).join(", ");
+    const sh = straatHuis.split(/\s+/).filter(Boolean);
+    const huisnummer = sh.length > 1 ? (sh[sh.length - 1] ?? "") : "";
+    const straatnaam =
+      sh.length > 1 ? sh.slice(0, -1).join(" ") : straatHuis;
+    // Als 2e deel geen postcode is (oud/afwijkend), val terug op space-parse.
+    if (/^\d{4}\s*[A-Za-z]{2}$/i.test(postcode)) {
+      return { straatnaam, huisnummer, postcode, woonplaats };
+    }
+  }
+
+  const parts = trimmed.split(/\s+/).filter(Boolean);
   const postcodeIdx = parts.findIndex(
-    (p) => /^\d{4}\s*[A-Za-z]{2}$/i.test(p) || /^\d{4}$/.test(p)
+    (p) => /^\d{4}[A-Za-z]{2}$/i.test(p) || /^\d{4}$/.test(p)
   );
   if (postcodeIdx < 0) {
-    return { straatnaam: volledig.trim(), huisnummer: "", postcode: "", woonplaats: "" };
+    return { straatnaam: trimmed, huisnummer: "", postcode: "", woonplaats: "" };
   }
   let postcode = parts[postcodeIdx] ?? "";
   let woonplaats = "";

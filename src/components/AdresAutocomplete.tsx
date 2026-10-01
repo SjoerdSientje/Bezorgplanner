@@ -40,19 +40,42 @@ function formatPostcode(raw: string | undefined | null): string {
 
 /**
  * Parst weergavenaam als fallback wanneer losse velden ontbreken.
- * Formaten: "Straat 12B, 1234 AB Amsterdam" / "Straat 1-G1, 1012NX Amsterdam"
+ * Formaten: "Straat 12B, 1234 AB Amsterdam" / "Straat 1-G1, 1012NX Amsterdam" /
+ * "Prinsengracht 263 HS, 1016GV Amsterdam"
  */
 function parseWeergavenaam(s: string): Partial<AdresVelden> {
   const m = s.match(
-    /^(.+?)\s+(\d[\w./-]*)\s*,\s*(\d{4}\s*[A-Z]{2})\s+(.+)$/i
+    /^(.+?)\s+(\d[\w./-]*(?:\s+[A-Za-z]{1,4})?)\s*,\s*(\d{4}\s*[A-Z]{2})\s+(.+)$/i
   );
-  if (!m) return {};
-  return {
-    straatnaam: m[1].trim(),
-    huisnummer: m[2].trim(),
-    postcode: formatPostcode(m[3]),
-    woonplaats: m[4].trim(),
-  };
+  if (m) {
+    return {
+      straatnaam: m[1].trim(),
+      huisnummer: m[2].trim().replace(/\s+/g, ""),
+      postcode: formatPostcode(m[3]),
+      woonplaats: m[4].trim(),
+    };
+  }
+  // Losse postcode uit weergavenaam halen als volledige parse faalt.
+  const pc = s.match(/\b(\d{4}\s*[A-Z]{2})\b/i);
+  if (!pc) return {};
+  return { postcode: formatPostcode(pc[1]) };
+}
+
+function docToVelden(doc: PdokDoc): AdresVelden {
+  let straatnaam = String(doc.straatnaam ?? "").trim();
+  let huisnummer = formatHuisnummer(doc);
+  let postcode = formatPostcode(doc.postcode);
+  let woonplaats = String(doc.woonplaatsnaam ?? "").trim();
+
+  if ((!postcode || !straatnaam || !woonplaats || !huisnummer) && doc.weergavenaam) {
+    const parsed = parseWeergavenaam(doc.weergavenaam);
+    straatnaam = straatnaam || parsed.straatnaam || "";
+    huisnummer = huisnummer || parsed.huisnummer || "";
+    postcode = postcode || parsed.postcode || "";
+    woonplaats = woonplaats || parsed.woonplaats || "";
+  }
+
+  return { straatnaam, huisnummer, postcode, woonplaats };
 }
 
 function suggestionLabel(doc: PdokDoc): string {
@@ -243,26 +266,13 @@ export default function AdresAutocomplete({ velden, onChange }: Props) {
     setSuggestions([]);
     setActiveIndex(-1);
 
-    let full = doc;
-    if (doc.id) {
-      const looked = await lookupById(doc.id);
-      full = mergeDoc(doc, looked);
-    }
+    // Direct toepassen (postcode zit al in /free) — niet wachten op lookup.
+    onChange(docToVelden(doc));
 
-    let straatnaam = String(full.straatnaam ?? "").trim();
-    let huisnummer = formatHuisnummer(full);
-    let postcode = formatPostcode(full.postcode);
-    let woonplaats = String(full.woonplaatsnaam ?? "").trim();
-
-    if ((!postcode || !straatnaam || !woonplaats) && full.weergavenaam) {
-      const parsed = parseWeergavenaam(full.weergavenaam);
-      straatnaam = straatnaam || parsed.straatnaam || "";
-      huisnummer = huisnummer || parsed.huisnummer || "";
-      postcode = postcode || parsed.postcode || "";
-      woonplaats = woonplaats || parsed.woonplaats || "";
-    }
-
-    onChange({ straatnaam, huisnummer, postcode, woonplaats });
+    if (!doc.id) return;
+    const looked = await lookupById(doc.id);
+    if (!looked) return;
+    onChange(docToVelden(mergeDoc(doc, looked)));
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {

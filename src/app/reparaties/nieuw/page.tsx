@@ -45,10 +45,12 @@ export default function ReparatieNieuwPage() {
   const [naam, setNaam] = useState("");
   const [email, setEmail] = useState("");
   const [telefoon, setTelefoon] = useState("");
-  const [straat, setStraat] = useState("");
-  const [huisnr, setHuisnr] = useState("");
-  const [postcode, setPostcode] = useState("");
-  const [woonplaats, setWoonplaats] = useState("");
+  const [adres, setAdres] = useState({
+    straatnaam: "",
+    huisnummer: "",
+    postcode: "",
+    woonplaats: "",
+  });
   const [bezorgtijd, setBezorgtijd] = useState("");
   const [datumVoorkeur, setDatumVoorkeur] = useState("");
   const [opmerking, setOpmerking] = useState("");
@@ -105,8 +107,12 @@ export default function ReparatieNieuwPage() {
   }, [loadStandaard]);
 
   const volledigAdres = useMemo(
-    () => [straat, huisnr, postcode, woonplaats].filter(Boolean).join(" ").trim(),
-    [straat, huisnr, postcode, woonplaats]
+    () =>
+      [adres.straatnaam, adres.huisnummer, adres.postcode, adres.woonplaats]
+        .filter(Boolean)
+        .join(" ")
+        .trim(),
+    [adres]
   );
 
   const refreshVoorrij = useCallback(async () => {
@@ -133,7 +139,7 @@ export default function ReparatieNieuwPage() {
 
   useEffect(() => {
     setVoorrijManual(false);
-  }, [straat, huisnr, postcode, woonplaats]);
+  }, [adres.straatnaam, adres.huisnummer, adres.postcode, adres.woonplaats]);
 
   useEffect(() => {
     const t = setTimeout(() => void refreshVoorrij(), 600);
@@ -266,10 +272,10 @@ export default function ReparatieNieuwPage() {
           naam,
           email,
           telefoonnummer: telefoon,
-          straatnaam: straat,
-          huisnummer: huisnr,
-          postcode,
-          woonplaats,
+          straatnaam: adres.straatnaam,
+          huisnummer: adres.huisnummer,
+          postcode: adres.postcode,
+          woonplaats: adres.woonplaats,
           bezorgtijd_voorkeur: bezorgtijd,
           datum_voorkeur: datumVoorkeur,
           opmerking,
@@ -398,18 +404,8 @@ export default function ReparatieNieuwPage() {
             </label>
 
             <AdresAutocomplete
-              velden={{
-                straatnaam: straat,
-                huisnummer: huisnr,
-                postcode,
-                woonplaats,
-              }}
-              onChange={(v) => {
-                setStraat(v.straatnaam);
-                setHuisnr(v.huisnummer);
-                setPostcode(v.postcode);
-                setWoonplaats(v.woonplaats);
-              }}
+              velden={adres}
+              onChange={setAdres}
             />
 
             <div className="rounded-lg bg-stone-50 px-3 py-2 text-sm text-koopje-black/70">

@@ -11,6 +11,14 @@ export type GeocodedAddress = {
   lng: number;
 };
 
+export type DutchAddressParts = {
+  straatnaam: string;
+  huisnummer: string;
+  postcode: string;
+  woonplaats: string;
+  weergavenaam: string;
+};
+
 export function normalizeAddressForRoutific(address: string): string {
   const s = address.trim();
   if (!s) return s;
@@ -18,6 +26,114 @@ export function normalizeAddressForRoutific(address: string): string {
     return `${s}, Netherlands`;
   }
   return s;
+}
+
+/** Normaliseer NL-postcode naar `1234 AB`. */
+export function formatPostcodeNl(raw: string | null | undefined): string {
+  const p = String(raw ?? "")
+    .replace(/\s/g, "")
+    .toUpperCase();
+  if (/^\d{4}[A-Z]{2}$/.test(p)) return `${p.slice(0, 4)} ${p.slice(4)}`;
+  return String(raw ?? "").trim();
+}
+
+function isCompletePostcode(raw: string | null | undefined): boolean {
+  return /^\d{4}[A-Z]{2}$/.test(String(raw ?? "").replace(/\s/g, "").toUpperCase());
+}
+
+/**
+ * Vul ontbrekende adresdelen (vooral postcode) aan via PDOK.
+ * Bestaande velden blijven staan; alleen lege/incomplete postcode wordt overschreven.
+ */
+export async function resolveDutchAddressParts(input: {
+  straatnaam?: string;
+  huisnummer?: string;
+  postcode?: string;
+  woonplaats?: string;
+}): Promise<DutchAddressParts | null> {
+  const straatIn = String(input.straatnaam ?? "").trim();
+  const huisIn = String(input.huisnummer ?? "").trim();
+  const postIn = formatPostcodeNl(input.postcode);
+  const plaatsIn = String(input.woonplaats ?? "").trim();
+
+  if (isCompletePostcode(postIn) && straatIn && huisIn && plaatsIn) {
+    return {
+      straatnaam: straatIn,
+      huisnummer: huisIn,
+      postcode: postIn,
+      woonplaats: plaatsIn,
+      weergavenaam: `${straatIn} ${huisIn}, ${postIn} ${plaatsIn}`,
+    };
+  }
+
+  const q = [straatIn, huisIn, postIn, plaatsIn].filter(Boolean).join(" ").trim();
+  if (q.length < 3) return null;
+
+  try {
+    const searchUrl = new URL(
+      "https://api.pdok.nl/bzk/locatieserver/search/v3_1/free"
+    );
+    searchUrl.searchParams.set("q", q);
+    searchUrl.searchParams.set("fq", "type:adres");
+    searchUrl.searchParams.set("rows", "1");
+    searchUrl.searchParams.set(
+      "fl",
+      "id,weergavenaam,straatnaam,huisnummer,huisletter,huisnummertoevoeging,postcode,woonplaatsnaam"
+    );
+
+    const searchRes = await fetch(searchUrl.toString(), { cache: "no-store" });
+    if (!searchRes.ok) return null;
+    const searchData = (await searchRes.json()) as {
+      response?: {
+        docs?: Array<{
+          id?: string;
+          weergavenaam?: string;
+          straatnaam?: string;
+          huisnummer?: number | string;
+          huisletter?: string;
+          huisnummertoevoeging?: string;
+          postcode?: string;
+          woonplaatsnaam?: string;
+        }>;
+      };
+    };
+    let doc = searchData.response?.docs?.[0];
+    if (!doc) return null;
+
+    if (doc.id && !isCompletePostcode(doc.postcode)) {
+      const lookupRes = await fetch(
+        `https://api.pdok.nl/bzk/locatieserver/search/v3_1/lookup?id=${encodeURIComponent(doc.id)}`,
+        { cache: "no-store" }
+      );
+      if (lookupRes.ok) {
+        const lookupData = (await lookupRes.json()) as {
+          response?: { docs?: Array<Record<string, unknown>> };
+        };
+        const full = lookupData.response?.docs?.[0];
+        if (full) doc = { ...doc, ...full };
+      }
+    }
+
+    const num = String(doc.huisnummer ?? "").trim();
+    const letter = String(doc.huisletter ?? "").trim();
+    const toev = String(doc.huisnummertoevoeging ?? "").trim();
+    const huisnummer = [num, letter, toev].filter(Boolean).join("") || huisIn;
+    const postcode = formatPostcodeNl(doc.postcode) || postIn;
+    const straatnaam = String(doc.straatnaam ?? "").trim() || straatIn;
+    const woonplaats = String(doc.woonplaatsnaam ?? "").trim() || plaatsIn;
+    const weergavenaam =
+      String(doc.weergavenaam ?? "").trim() ||
+      [straatnaam, huisnummer].filter(Boolean).join(" ") +
+        (postcode || woonplaats
+          ? `, ${[postcode, woonplaats].filter(Boolean).join(" ")}`
+          : "");
+
+    if (!isCompletePostcode(postcode) && !straatnaam) return null;
+
+    return { straatnaam, huisnummer, postcode, woonplaats, weergavenaam };
+  } catch {
+    return null;
+  }
 }
 
 function parseCentroideLl(centroide: string): { lat: number; lng: number } | null {

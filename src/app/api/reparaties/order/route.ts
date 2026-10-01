@@ -25,6 +25,7 @@ import {
   type ReparatieInvoiceLineInput,
 } from "@/lib/moneybird";
 import type { ShopifyLineItem } from "@/lib/shopify-order";
+import { resolveDutchAddressParts } from "@/lib/pdok-geocode";
 import {
   deductInventoryForReparatieOrder,
   reparatieLineItemsForInventoryDeduction,
@@ -38,6 +39,52 @@ function parsePhoneE164(raw: string): string {
   if (telefoonRaw.startsWith("+")) return telefoonRaw;
   if (telefoonRaw.startsWith("0")) return "+31" + telefoonRaw.slice(1);
   return telefoonRaw;
+}
+
+/** Zorg dat postcode (en ontbrekende delen) via PDOK worden aangevuld vóór opslaan. */
+async function enrichAdresFields(input: {
+  straatnaam: string;
+  huisnummer: string;
+  postcode: string;
+  woonplaats: string;
+}): Promise<{
+  straatnaam: string;
+  huisnummer: string;
+  postcode: string;
+  woonplaats: string;
+  volledigAdres: string;
+}> {
+  let straatnaam = input.straatnaam.trim();
+  let huisnummer = input.huisnummer.trim();
+  let postcode = input.postcode.trim();
+  let woonplaats = input.woonplaats.trim();
+
+  const needsResolve =
+    !/^\d{4}\s*[A-Za-z]{2}$/.test(postcode) || !straatnaam || !huisnummer || !woonplaats;
+
+  if (needsResolve && (straatnaam || postcode || woonplaats)) {
+    const resolved = await resolveDutchAddressParts({
+      straatnaam,
+      huisnummer,
+      postcode,
+      woonplaats,
+    });
+    if (resolved) {
+      straatnaam = straatnaam || resolved.straatnaam;
+      huisnummer = huisnummer || resolved.huisnummer;
+      if (!/^\d{4}\s*[A-Za-z]{2}$/.test(postcode) && resolved.postcode) {
+        postcode = resolved.postcode;
+      }
+      woonplaats = woonplaats || resolved.woonplaats;
+    }
+  }
+
+  const volledigAdres = [straatnaam, huisnummer, postcode, woonplaats]
+    .filter(Boolean)
+    .join(", ")
+    .trim();
+
+  return { straatnaam, huisnummer, postcode, woonplaats, volledigAdres };
 }
 
 /** Optionele override van het totaal voorrijbedrag (incl. ×2-scenario). */
@@ -193,14 +240,17 @@ export async function POST(request: NextRequest) {
     const naam = String(body.naam ?? "").trim();
     const email = String(body.email ?? "").trim().toLowerCase();
     const telefoon = String(body.telefoonnummer ?? "").trim();
-    const straat = String(body.straatnaam ?? "").trim();
-    const huisnr = String(body.huisnummer ?? "").trim();
-    const postcode = String(body.postcode ?? "").trim();
-    const woonplaats = String(body.woonplaats ?? "").trim();
-    const volledigAdres = [straat, huisnr, postcode, woonplaats]
-      .filter(Boolean)
-      .join(" ")
-      .trim();
+    const enriched = await enrichAdresFields({
+      straatnaam: String(body.straatnaam ?? ""),
+      huisnummer: String(body.huisnummer ?? ""),
+      postcode: String(body.postcode ?? ""),
+      woonplaats: String(body.woonplaats ?? ""),
+    });
+    const straat = enriched.straatnaam;
+    const huisnr = enriched.huisnummer;
+    const postcode = enriched.postcode;
+    const woonplaats = enriched.woonplaats;
+    const volledigAdres = enriched.volledigAdres;
 
     if (!naam || !volledigAdres) {
       return NextResponse.json(
@@ -501,14 +551,17 @@ export async function PATCH(request: NextRequest) {
     const telefoon = String(
       body.telefoonnummer ?? existing.telefoon_nummer ?? ""
     ).trim();
-    const straat = String(body.straatnaam ?? "").trim();
-    const huisnr = String(body.huisnummer ?? "").trim();
-    const postcode = String(body.postcode ?? "").trim();
-    const woonplaats = String(body.woonplaats ?? "").trim();
-    let volledigAdres = [straat, huisnr, postcode, woonplaats]
-      .filter(Boolean)
-      .join(" ")
-      .trim();
+    const enriched = await enrichAdresFields({
+      straatnaam: String(body.straatnaam ?? ""),
+      huisnummer: String(body.huisnummer ?? ""),
+      postcode: String(body.postcode ?? ""),
+      woonplaats: String(body.woonplaats ?? ""),
+    });
+    const straat = enriched.straatnaam;
+    const huisnr = enriched.huisnummer;
+    const postcode = enriched.postcode;
+    const woonplaats = enriched.woonplaats;
+    let volledigAdres = enriched.volledigAdres;
     if (!volledigAdres) {
       volledigAdres = String(existing.volledig_adres ?? "").trim();
     }
