@@ -9,7 +9,7 @@ export interface AdresVelden {
   woonplaats: string;
 }
 
-interface PdokSuggestDoc {
+interface PdokDoc {
   id: string;
   weergavenaam?: string;
   straatnaam?: string;
@@ -25,14 +25,14 @@ interface Props {
   onChange: (velden: AdresVelden) => void;
 }
 
-function formatHuisnummer(doc: PdokSuggestDoc): string {
+function formatHuisnummer(doc: PdokDoc): string {
   const num = String(doc.huisnummer ?? "").trim();
   const letter = String(doc.huisletter ?? "").trim();
   const toev = String(doc.huisnummertoevoeging ?? "").trim();
   return [num, letter, toev].filter(Boolean).join("");
 }
 
-function formatPostcode(raw: string | undefined): string {
+function formatPostcode(raw: string | undefined | null): string {
   const p = String(raw ?? "").replace(/\s/g, "").toUpperCase();
   if (p.length === 6) return `${p.slice(0, 4)} ${p.slice(4)}`;
   return p;
@@ -40,10 +40,12 @@ function formatPostcode(raw: string | undefined): string {
 
 /**
  * Parst weergavenaam als fallback wanneer losse velden ontbreken.
- * Formaat: "Straatnaam 12B, 1234 AB Amsterdam"
+ * Formaten: "Straat 12B, 1234 AB Amsterdam" / "Straat 1-G1, 1012NX Amsterdam"
  */
 function parseWeergavenaam(s: string): Partial<AdresVelden> {
-  const m = s.match(/^(.+?)\s+(\d+\w*),\s*(\d{4}\s*[A-Z]{2})\s+(.+)$/i);
+  const m = s.match(
+    /^(.+?)\s+(\d[\w./-]*)\s*,\s*(\d{4}\s*[A-Z]{2})\s+(.+)$/i
+  );
   if (!m) return {};
   return {
     straatnaam: m[1].trim(),
@@ -53,30 +55,89 @@ function parseWeergavenaam(s: string): Partial<AdresVelden> {
   };
 }
 
+function suggestionLabel(doc: PdokDoc): string {
+  const pc = formatPostcode(doc.postcode);
+  const straat = String(doc.straatnaam ?? "").trim();
+  const huis = formatHuisnummer(doc);
+  const plaats = String(doc.woonplaatsnaam ?? "").trim();
+  if (straat && pc) {
+    const head = [straat, huis].filter(Boolean).join(" ");
+    return `${head}, ${pc}${plaats ? ` ${plaats}` : ""}`;
+  }
+  const weergave = String(doc.weergavenaam ?? "").trim();
+  if (weergave) {
+    // Zorg dat compacte postcode (1012JS) leesbaar wordt als die in de string zit.
+    return weergave.replace(
+      /\b(\d{4})([A-Z]{2})\b/gi,
+      (_, n, l) => `${n} ${String(l).toUpperCase()}`
+    );
+  }
+  return [straat, huis, plaats].filter(Boolean).join(" ");
+}
+
 const DEBOUNCE_MS = 280;
 const MIN_QUERY_LEN = 3;
-// /suggest = snel typeahead met CORS; geeft id + weergavenaam + losse velden
-const PDOK_SUGGEST = "https://api.pdok.nl/bzk/locatieserver/search/v3_1/suggest";
-// /lookup = volledige adresdata op basis van id (voor postcode)
+/** /free geeft losse velden (incl. postcode) betrouwbaarder terug dan /suggest. */
+const PDOK_FREE = "https://api.pdok.nl/bzk/locatieserver/search/v3_1/free";
 const PDOK_LOOKUP = "https://api.pdok.nl/bzk/locatieserver/search/v3_1/lookup";
 
-async function lookupById(id: string): Promise<PdokSuggestDoc | null> {
+async function lookupById(id: string): Promise<PdokDoc | null> {
   try {
     const res = await fetch(`${PDOK_LOOKUP}?id=${encodeURIComponent(id)}`);
-    const data = await res.json() as { response?: { docs?: PdokSuggestDoc[] } };
+    const data = (await res.json()) as { response?: { docs?: PdokDoc[] } };
     return data?.response?.docs?.[0] ?? null;
   } catch {
     return null;
   }
 }
 
+function mergeDoc(base: PdokDoc, full: PdokDoc | null): PdokDoc {
+  if (!full) return base;
+  return {
+    ...base,
+    ...full,
+    postcode: full.postcode || base.postcode,
+    straatnaam: full.straatnaam || base.straatnaam,
+    woonplaatsnaam: full.woonplaatsnaam || base.woonplaatsnaam,
+    weergavenaam: full.weergavenaam || base.weergavenaam,
+  };
+}
+
+async function enrichMissingPostcodes(docs: PdokDoc[]): Promise<PdokDoc[]> {
+  return Promise.all(
+    docs.map(async (doc) => {
+      if (formatPostcode(doc.postcode) || !doc.id) {
+        // Ook uit weergavenaam halen als los veld ontbreekt.
+        if (!formatPostcode(doc.postcode) && doc.weergavenaam) {
+          const parsed = parseWeergavenaam(doc.weergavenaam);
+          if (parsed.postcode) return { ...doc, postcode: parsed.postcode };
+        }
+        return doc;
+      }
+      const full = await lookupById(doc.id);
+      const merged = mergeDoc(doc, full);
+      if (!formatPostcode(merged.postcode) && merged.weergavenaam) {
+        const parsed = parseWeergavenaam(merged.weergavenaam);
+        if (parsed.postcode) return { ...merged, postcode: parsed.postcode };
+      }
+      return merged;
+    })
+  );
+}
+
 export default function AdresAutocomplete({ velden, onChange }: Props) {
-  const [suggestions, setSuggestions] = useState<PdokSuggestDoc[]>([]);
+  const [suggestions, setSuggestions] = useState<PdokDoc[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
   const [loading, setLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const veldenRef = useRef(velden);
+  const fetchGenRef = useRef(0);
+
+  useEffect(() => {
+    veldenRef.current = velden;
+  }, [velden]);
 
   // Sluit dropdown bij klik buiten component
   useEffect(() => {
@@ -90,85 +151,111 @@ export default function AdresAutocomplete({ velden, onChange }: Props) {
   }, []);
 
   function fetchSuggestions(query: string) {
-    if (query.length < MIN_QUERY_LEN) {
+    const q = query.trim();
+    if (q.length < MIN_QUERY_LEN) {
       setSuggestions([]);
       setShowSuggestions(false);
       return;
     }
 
+    const gen = ++fetchGenRef.current;
     setLoading(true);
     const params = new URLSearchParams({
-      q: query,
+      q,
       fq: "type:adres",
       rows: "8",
       fl: "id,weergavenaam,straatnaam,huisnummer,huisletter,huisnummertoevoeging,postcode,woonplaatsnaam",
     });
 
-    fetch(`${PDOK_SUGGEST}?${params.toString()}`)
+    fetch(`${PDOK_FREE}?${params.toString()}`)
       .then((res) => res.json())
-      .then((data: { response?: { docs?: PdokSuggestDoc[] } }) => {
+      .then(async (data: { response?: { docs?: PdokDoc[] } }) => {
+        if (gen !== fetchGenRef.current) return;
         const docs = data?.response?.docs ?? [];
-        setSuggestions(docs);
-        setShowSuggestions(docs.length > 0);
+        const enriched = await enrichMissingPostcodes(docs);
+        if (gen !== fetchGenRef.current) return;
+        setSuggestions(enriched);
+        setShowSuggestions(enriched.length > 0);
         setActiveIndex(-1);
       })
       .catch(() => {
+        if (gen !== fetchGenRef.current) return;
         setSuggestions([]);
         setShowSuggestions(false);
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (gen === fetchGenRef.current) setLoading(false);
+      });
+  }
+
+  function scheduleFetch(query: string) {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => fetchSuggestions(query), DEBOUNCE_MS);
+  }
+
+  function buildQuery(patch: Partial<AdresVelden>): string {
+    const v = { ...veldenRef.current, ...patch };
+    const streetPart = [v.straatnaam.trim(), v.huisnummer.trim()]
+      .filter(Boolean)
+      .join(" ");
+    const pc = v.postcode.trim();
+    const place = v.woonplaats.trim();
+    // Postcode/woonplaats meegeven zodat PDOK resultaten mét postcode teruggeeft.
+    return [streetPart, pc, place].filter(Boolean).join(" ").trim();
   }
 
   function handleStraatnaamChange(e: React.ChangeEvent<HTMLInputElement>) {
     const val = e.target.value;
-    onChange({ ...velden, straatnaam: val });
-
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      const query = velden.huisnummer.trim()
-        ? `${val} ${velden.huisnummer.trim()}`
-        : val;
-      fetchSuggestions(query);
-    }, DEBOUNCE_MS);
+    onChange({ ...veldenRef.current, straatnaam: val });
+    scheduleFetch(buildQuery({ straatnaam: val }));
   }
 
   function handleHuisnummerChange(e: React.ChangeEvent<HTMLInputElement>) {
     const val = e.target.value;
-    onChange({ ...velden, huisnummer: val });
-
-    if (velden.straatnaam.length >= MIN_QUERY_LEN) {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-      debounceRef.current = setTimeout(() => {
-        fetchSuggestions(`${velden.straatnaam} ${val}`);
-      }, DEBOUNCE_MS);
+    onChange({ ...veldenRef.current, huisnummer: val });
+    if (veldenRef.current.straatnaam.trim().length >= MIN_QUERY_LEN || val.trim().length >= 1) {
+      scheduleFetch(buildQuery({ huisnummer: val }));
     }
   }
 
-  async function selectSuggestion(doc: PdokSuggestDoc) {
+  function handlePostcodeChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const val = e.target.value;
+    onChange({ ...veldenRef.current, postcode: val });
+    const compact = val.replace(/\s/g, "");
+    if (compact.length >= 4) {
+      scheduleFetch(buildQuery({ postcode: val }));
+    }
+  }
+
+  function handleWoonplaatsChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const val = e.target.value;
+    onChange({ ...veldenRef.current, woonplaats: val });
+    if (
+      veldenRef.current.straatnaam.trim().length >= MIN_QUERY_LEN ||
+      val.trim().length >= MIN_QUERY_LEN
+    ) {
+      scheduleFetch(buildQuery({ woonplaats: val }));
+    }
+  }
+
+  async function selectSuggestion(doc: PdokDoc) {
     setShowSuggestions(false);
     setSuggestions([]);
     setActiveIndex(-1);
 
-    // Probeer direct de losse velden uit suggest-resultaat te gebruiken
-    let straatnaam = String(doc.straatnaam ?? "").trim();
-    let huisnummer = formatHuisnummer(doc);
-    let postcode = formatPostcode(doc.postcode);
-    let woonplaats = String(doc.woonplaatsnaam ?? "").trim();
-
-    // Als postcode ontbreekt: lookup op id voor volledige gegevens
-    if (!postcode && doc.id) {
-      const full = await lookupById(doc.id);
-      if (full) {
-        straatnaam = straatnaam || String(full.straatnaam ?? "").trim();
-        huisnummer = huisnummer || formatHuisnummer(full);
-        postcode = formatPostcode(full.postcode);
-        woonplaats = woonplaats || String(full.woonplaatsnaam ?? "").trim();
-      }
+    let full = doc;
+    if (doc.id) {
+      const looked = await lookupById(doc.id);
+      full = mergeDoc(doc, looked);
     }
 
-    // Laatste vangnet: parse weergavenaam
-    if (!postcode && doc.weergavenaam) {
-      const parsed = parseWeergavenaam(doc.weergavenaam);
+    let straatnaam = String(full.straatnaam ?? "").trim();
+    let huisnummer = formatHuisnummer(full);
+    let postcode = formatPostcode(full.postcode);
+    let woonplaats = String(full.woonplaatsnaam ?? "").trim();
+
+    if ((!postcode || !straatnaam || !woonplaats) && full.weergavenaam) {
+      const parsed = parseWeergavenaam(full.weergavenaam);
       straatnaam = straatnaam || parsed.straatnaam || "";
       huisnummer = huisnummer || parsed.huisnummer || "";
       postcode = postcode || parsed.postcode || "";
@@ -198,9 +285,9 @@ export default function AdresAutocomplete({ velden, onChange }: Props) {
     "w-full rounded-xl border border-koopje-black/20 px-3 py-2.5 text-sm text-koopje-black placeholder:text-koopje-black/30 focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange";
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" ref={containerRef}>
       {/* Straatnaam + Huisnummer met dropdown */}
-      <div className="grid grid-cols-[1fr_6rem] gap-3" ref={containerRef}>
+      <div className="grid grid-cols-[1fr_6rem] gap-3">
         <div>
           <label htmlFor="straatnaam" className="mb-1 block text-sm font-medium text-koopje-black">
             Straatnaam
@@ -244,7 +331,7 @@ export default function AdresAutocomplete({ velden, onChange }: Props) {
                           : "text-stone-700 hover:bg-stone-50"
                       }`}
                     >
-                      {doc.weergavenaam ?? ""}
+                      {suggestionLabel(doc)}
                     </button>
                   </li>
                 ))}
@@ -263,6 +350,10 @@ export default function AdresAutocomplete({ velden, onChange }: Props) {
             autoComplete="off"
             value={velden.huisnummer}
             onChange={handleHuisnummerChange}
+            onKeyDown={handleKeyDown}
+            onFocus={() => {
+              if (suggestions.length > 0) setShowSuggestions(true);
+            }}
             placeholder="12B"
             className={inputCls}
           />
@@ -278,8 +369,13 @@ export default function AdresAutocomplete({ velden, onChange }: Props) {
           <input
             id="postcode"
             type="text"
+            autoComplete="off"
             value={velden.postcode}
-            onChange={(e) => onChange({ ...velden, postcode: e.target.value })}
+            onChange={handlePostcodeChange}
+            onKeyDown={handleKeyDown}
+            onFocus={() => {
+              if (suggestions.length > 0) setShowSuggestions(true);
+            }}
             placeholder="1234 AB"
             className={inputCls}
           />
@@ -291,8 +387,13 @@ export default function AdresAutocomplete({ velden, onChange }: Props) {
           <input
             id="woonplaats"
             type="text"
+            autoComplete="off"
             value={velden.woonplaats}
-            onChange={(e) => onChange({ ...velden, woonplaats: e.target.value })}
+            onChange={handleWoonplaatsChange}
+            onKeyDown={handleKeyDown}
+            onFocus={() => {
+              if (suggestions.length > 0) setShowSuggestions(true);
+            }}
             placeholder="Amsterdam"
             className={inputCls}
           />

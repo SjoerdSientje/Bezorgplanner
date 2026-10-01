@@ -11,6 +11,7 @@ import {
   arbeidPrijsIncl,
   normalizeStandaardOnderdelen,
   reparatieSoortHeeftProducten,
+  standaardReparatieTotaalIncl,
   type ReparatieBetaalwijze,
   type ReparatieSoort,
   type ReparatieStandaardItem,
@@ -58,6 +59,8 @@ export default function ReparatieNieuwPage() {
   const [regels, setRegels] = useState<DraftRegel[]>([]);
   const [voorrij, setVoorrij] = useState<{ km: number; bedrag: number } | null>(null);
   const [voorrijLoading, setVoorrijLoading] = useState(false);
+  const [voorrijBedragStr, setVoorrijBedragStr] = useState("");
+  const [voorrijManual, setVoorrijManual] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -129,20 +132,47 @@ export default function ReparatieNieuwPage() {
   }, [volledigAdres]);
 
   useEffect(() => {
+    setVoorrijManual(false);
+  }, [straat, huisnr, postcode, woonplaats]);
+
+  useEffect(() => {
     const t = setTimeout(() => void refreshVoorrij(), 600);
     return () => clearTimeout(t);
   }, [refreshVoorrij]);
 
-  const voorrijWeergave =
+  const autoVoorrijTotaal =
     voorrij == null
       ? null
       : soort === "reparatie_terugbrengen" && fietsOokOpgehaald
-        ? {
-            km: voorrij.km,
-            bedrag: Math.round(voorrij.bedrag * 2 * 100) / 100,
-            basis: voorrij.bedrag,
-          }
-        : { km: voorrij.km, bedrag: voorrij.bedrag, basis: voorrij.bedrag };
+        ? Math.round(voorrij.bedrag * 2 * 100) / 100
+        : voorrij.bedrag;
+
+  useEffect(() => {
+    if (voorrijManual) return;
+    if (autoVoorrijTotaal == null) {
+      setVoorrijBedragStr("");
+      return;
+    }
+    setVoorrijBedragStr(autoVoorrijTotaal.toFixed(2));
+  }, [autoVoorrijTotaal, voorrijManual]);
+
+  const voorrijTotaalParsed = (() => {
+    const n = parseFloat(voorrijBedragStr.replace(",", "."));
+    return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null;
+  })();
+
+  const voorrijWeergave =
+    voorrij == null && voorrijTotaalParsed == null
+      ? null
+      : {
+          km: voorrij?.km ?? null,
+          bedrag: voorrijTotaalParsed ?? autoVoorrijTotaal ?? 0,
+          basis:
+            soort === "reparatie_terugbrengen" && fietsOokOpgehaald
+              ? Math.round(((voorrijTotaalParsed ?? autoVoorrijTotaal ?? 0) / 2) * 100) /
+                100
+              : (voorrijTotaalParsed ?? autoVoorrijTotaal ?? 0),
+        };
 
   const subtotaalRegels = useMemo(() => {
     if (!needsProducts) return 0;
@@ -244,6 +274,7 @@ export default function ReparatieNieuwPage() {
           datum_voorkeur: datumVoorkeur,
           opmerking,
           regels: payloadRegels,
+          voorrij_bedrag: voorrijTotaalParsed ?? 0,
         }),
       });
       const data = await res.json();
@@ -382,13 +413,37 @@ export default function ReparatieNieuwPage() {
             />
 
             <div className="rounded-lg bg-stone-50 px-3 py-2 text-sm text-koopje-black/70">
-              {voorrijLoading
-                ? "Voorrijkosten berekenen…"
-                : voorrijWeergave
-                  ? soort === "reparatie_terugbrengen" && fietsOokOpgehaald
-                    ? `Afstand ≈ ${voorrijWeergave.km} km · Voorrijkosten ophalen + terugbrengen €${voorrijWeergave.bedrag.toFixed(2)} (2 × €${voorrijWeergave.basis.toFixed(2)})`
-                    : `Afstand ≈ ${voorrijWeergave.km} km · Voorrijkosten €${voorrijWeergave.bedrag.toFixed(2)}`
-                  : "Vul een adres in voor automatische voorrijkosten."}
+              {voorrijLoading ? (
+                "Voorrijkosten berekenen…"
+              ) : voorrijWeergave ? (
+                <div className="flex flex-wrap items-end gap-3">
+                  <p className="min-w-0 flex-1">
+                    {voorrijWeergave.km != null
+                      ? `Afstand ≈ ${voorrijWeergave.km} km`
+                      : "Afstand onbekend"}
+                    {soort === "reparatie_terugbrengen" && fietsOokOpgehaald
+                      ? " · ophalen + terugbrengen"
+                      : ""}
+                    {voorrijManual ? " · handmatig aangepast" : ""}
+                  </p>
+                  <label className="flex items-center gap-1.5 text-sm text-koopje-black">
+                    <span className="whitespace-nowrap">Voorrijkosten €</span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={voorrijBedragStr}
+                      onChange={(e) => {
+                        setVoorrijManual(true);
+                        setVoorrijBedragStr(e.target.value);
+                      }}
+                      className="w-24 rounded-lg border border-koopje-black/20 bg-white px-2 py-1.5 text-sm font-medium"
+                      aria-label="Voorrijkosten bedrag"
+                    />
+                  </label>
+                </div>
+              ) : (
+                "Vul een adres in voor automatische voorrijkosten."
+              )}
             </div>
 
             {soort === "reparatie_terugbrengen" && (
@@ -474,7 +529,7 @@ export default function ReparatieNieuwPage() {
                         </option>
                         {standaard.map((s) => (
                           <option key={s.id} value={s.id}>
-                            {s.naam}
+                            {s.naam} — €{standaardReparatieTotaalIncl(s).toFixed(2)}
                           </option>
                         ))}
                       </select>

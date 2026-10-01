@@ -40,6 +40,65 @@ function parsePhoneE164(raw: string): string {
   return telefoonRaw;
 }
 
+/** Optionele override van het totaal voorrijbedrag (incl. ×2-scenario). */
+function parseVoorrijOverride(body: Record<string, unknown>): number | null {
+  if (!("voorrij_bedrag" in body)) return null;
+  const raw = body.voorrij_bedrag;
+  if (raw == null || raw === "") return null;
+  const n = typeof raw === "number" ? raw : parseFloat(String(raw).replace(",", "."));
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.round(n * 100) / 100;
+}
+
+/**
+ * Voeg voorrij-regels toe. Override = totaalbedrag op de factuur (bij ook-opgehaald
+ * wordt dat 50/50 over twee regels verdeeld). Zonder override: berekende basis, ×2 indien nodig.
+ */
+function pushVoorrijRegels(
+  expanded: ReparatieRegelInput[],
+  params: {
+    calculatedBasis: number;
+    overrideTotal: number | null;
+    fietsOokOpgehaald: boolean;
+  }
+): number {
+  let lineBedrag: number;
+  let totalBedrag: number;
+  if (params.overrideTotal != null) {
+    totalBedrag = params.overrideTotal;
+    lineBedrag = params.fietsOokOpgehaald
+      ? Math.round((totalBedrag / 2) * 100) / 100
+      : totalBedrag;
+  } else {
+    lineBedrag = Math.round(params.calculatedBasis * 100) / 100;
+    totalBedrag = params.fietsOokOpgehaald
+      ? Math.round(lineBedrag * 2 * 100) / 100
+      : lineBedrag;
+  }
+
+  if (totalBedrag < 0.01) return 0;
+
+  if (params.fietsOokOpgehaald) {
+    expanded.push({
+      kind: "voorrijkosten",
+      naam: "Voorrijkosten ophalen",
+      voorrij_bedrag: lineBedrag,
+    });
+    expanded.push({
+      kind: "voorrijkosten",
+      naam: "Voorrijkosten terugbrengen",
+      voorrij_bedrag: lineBedrag,
+    });
+  } else {
+    expanded.push({
+      kind: "voorrijkosten",
+      naam: "Voorrijkosten",
+      voorrij_bedrag: lineBedrag,
+    });
+  }
+  return totalBedrag;
+}
+
 function splitName(naam: string): { first: string; last: string } {
   const parts = naam.trim().split(/\s+/);
   if (parts.length <= 1) return { first: "", last: parts[0] || "Klant" };
@@ -198,6 +257,7 @@ export async function POST(request: NextRequest) {
 
     let voorrijKm: number | null = null;
     let voorrijBedrag: number | null = null;
+    const voorrijOverride = parseVoorrijOverride(body as Record<string, unknown>);
     try {
       const vr = await calcVoorrijkostenForAddress(
         supabase,
@@ -205,32 +265,20 @@ export async function POST(request: NextRequest) {
         volledigAdres
       );
       voorrijKm = vr.km;
-      const basisBedrag = vr.bedrag;
-      if (basisBedrag >= 0.01) {
-        if (fietsOokOpgehaald) {
-          // Ophalen + terugbrengen: tarief ×2 als twee factuurregels.
-          expanded.push({
-            kind: "voorrijkosten",
-            naam: "Voorrijkosten ophalen",
-            voorrij_bedrag: basisBedrag,
-          });
-          expanded.push({
-            kind: "voorrijkosten",
-            naam: "Voorrijkosten terugbrengen",
-            voorrij_bedrag: basisBedrag,
-          });
-          voorrijBedrag = Math.round(basisBedrag * 2 * 100) / 100;
-        } else {
-          expanded.push({
-            kind: "voorrijkosten",
-            naam: "Voorrijkosten",
-            voorrij_bedrag: basisBedrag,
-          });
-          voorrijBedrag = basisBedrag;
-        }
-      }
+      voorrijBedrag = pushVoorrijRegels(expanded, {
+        calculatedBasis: vr.bedrag,
+        overrideTotal: voorrijOverride,
+        fietsOokOpgehaald: fietsOokOpgehaald,
+      });
     } catch (err) {
       console.warn("[reparaties] voorrijkosten berekening:", err);
+      if (voorrijOverride != null) {
+        voorrijBedrag = pushVoorrijRegels(expanded, {
+          calculatedBasis: 0,
+          overrideTotal: voorrijOverride,
+          fietsOokOpgehaald: fietsOokOpgehaald,
+        });
+      }
     }
 
     if (
@@ -519,6 +567,7 @@ export async function PATCH(request: NextRequest) {
     let voorrijKm = existing.voorrij_km != null ? Number(existing.voorrij_km) : null;
     let voorrijBedrag =
       existing.voorrij_bedrag != null ? Number(existing.voorrij_bedrag) : null;
+    const voorrijOverride = parseVoorrijOverride(body as Record<string, unknown>);
     if (volledigAdres) {
       try {
         const vr = await calcVoorrijkostenForAddress(
@@ -527,75 +576,29 @@ export async function PATCH(request: NextRequest) {
           volledigAdres
         );
         voorrijKm = vr.km;
-        const basisBedrag = vr.bedrag;
-        if (basisBedrag >= 0.01) {
-          if (fietsOokOpgehaald) {
-            expanded.push({
-              kind: "voorrijkosten",
-              naam: "Voorrijkosten ophalen",
-              voorrij_bedrag: basisBedrag,
-            });
-            expanded.push({
-              kind: "voorrijkosten",
-              naam: "Voorrijkosten terugbrengen",
-              voorrij_bedrag: basisBedrag,
-            });
-            voorrijBedrag = Math.round(basisBedrag * 2 * 100) / 100;
-          } else {
-            expanded.push({
-              kind: "voorrijkosten",
-              naam: "Voorrijkosten",
-              voorrij_bedrag: basisBedrag,
-            });
-            voorrijBedrag = basisBedrag;
-          }
-        } else {
-          voorrijBedrag = basisBedrag;
-        }
+        voorrijBedrag = pushVoorrijRegels(expanded, {
+          calculatedBasis: vr.bedrag,
+          overrideTotal: voorrijOverride,
+          fietsOokOpgehaald,
+        });
       } catch {
-        /* keep existing — alsnog voorrij-regel toevoegen indien bekend */
-        if (voorrijBedrag != null && voorrijBedrag >= 0.01) {
-          if (fietsOokOpgehaald) {
-            const half = Math.round((voorrijBedrag / 2) * 100) / 100;
-            expanded.push({
-              kind: "voorrijkosten",
-              naam: "Voorrijkosten ophalen",
-              voorrij_bedrag: half,
-            });
-            expanded.push({
-              kind: "voorrijkosten",
-              naam: "Voorrijkosten terugbrengen",
-              voorrij_bedrag: half,
-            });
-          } else {
-            expanded.push({
-              kind: "voorrijkosten",
-              naam: "Voorrijkosten",
-              voorrij_bedrag: voorrijBedrag,
-            });
-          }
+        const fallbackTotal =
+          voorrijOverride ??
+          (voorrijBedrag != null && Number.isFinite(voorrijBedrag) ? voorrijBedrag : null);
+        if (fallbackTotal != null) {
+          voorrijBedrag = pushVoorrijRegels(expanded, {
+            calculatedBasis: 0,
+            overrideTotal: fallbackTotal,
+            fietsOokOpgehaald,
+          });
         }
       }
-    } else if (voorrijBedrag != null && voorrijBedrag >= 0.01) {
-      if (fietsOokOpgehaald) {
-        const half = Math.round((voorrijBedrag / 2) * 100) / 100;
-        expanded.push({
-          kind: "voorrijkosten",
-          naam: "Voorrijkosten ophalen",
-          voorrij_bedrag: half,
-        });
-        expanded.push({
-          kind: "voorrijkosten",
-          naam: "Voorrijkosten terugbrengen",
-          voorrij_bedrag: half,
-        });
-      } else {
-        expanded.push({
-          kind: "voorrijkosten",
-          naam: "Voorrijkosten",
-          voorrij_bedrag: voorrijBedrag,
-        });
-      }
+    } else if (voorrijOverride != null || (voorrijBedrag != null && voorrijBedrag >= 0)) {
+      voorrijBedrag = pushVoorrijRegels(expanded, {
+        calculatedBasis: 0,
+        overrideTotal: voorrijOverride ?? voorrijBedrag,
+        fietsOokOpgehaald,
+      });
     }
 
     const lineItems = productenNogNietBekend

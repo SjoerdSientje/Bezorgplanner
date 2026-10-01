@@ -22,6 +22,7 @@ export type IncomingDeliveryRow = {
   owner_email: string;
   track_trace_url: string;
   expected_delivery: string | null;
+  leverancier: string | null;
   attachment_url: string | null;
   attachment_name: string | null;
   status: IncomingDeliveryStatus;
@@ -62,7 +63,8 @@ export function isValidTrackUrl(raw: string): boolean {
 export function buildIncomingOpmerkingBlock(
   deliveryId: string,
   trackUrl: string,
-  expectedDelivery: string | null
+  expectedDelivery: string | null,
+  leverancier?: string | null
 ): string {
   const lines = [
     `Inkomend ${deliveryId.slice(0, 8)}`,
@@ -71,6 +73,10 @@ export function buildIncomingOpmerkingBlock(
   const expected = expectedDelivery?.trim();
   if (expected) {
     lines.push(`Verwachte levertijd: ${expected}`);
+  }
+  const supplier = String(leverancier ?? "").trim();
+  if (supplier) {
+    lines.push(`Leverancier: ${supplier}`);
   }
   return lines.join("\n");
 }
@@ -87,14 +93,20 @@ export function stripIncomingOpmerkingBlock(
   opmerking: string | null | undefined,
   deliveryId: string,
   trackUrl?: string | null,
-  expectedDelivery?: string | null
+  expectedDelivery?: string | null,
+  leverancier?: string | null
 ): string | null {
   let next = String(opmerking ?? "");
   if (!next.trim()) return null;
 
   // Nieuw multilijn-blok (exacte match)
   if (trackUrl != null && String(trackUrl).trim()) {
-    const block = buildIncomingOpmerkingBlock(deliveryId, trackUrl, expectedDelivery ?? null);
+    const block = buildIncomingOpmerkingBlock(
+      deliveryId,
+      trackUrl,
+      expectedDelivery ?? null,
+      leverancier ?? null
+    );
     if (block && next.includes(block)) {
       next = next.split(block).join("");
       next = next.replace(/\n{3,}/g, "\n\n").trim();
@@ -110,9 +122,17 @@ export function stripIncomingOpmerkingBlock(
     const afterHeader = next.slice(headerIdx);
     const lines = afterHeader.split("\n");
     let consume = 1;
-    if (lines[1]?.toLowerCase().startsWith("track en trace:")) consume = 2;
-    if (consume >= 2 && lines[2]?.toLowerCase().startsWith("verwachte levertijd:")) {
-      consume = 3;
+    while (consume < lines.length) {
+      const line = (lines[consume] ?? "").toLowerCase();
+      if (
+        line.startsWith("track en trace:") ||
+        line.startsWith("verwachte levertijd:") ||
+        line.startsWith("leverancier:")
+      ) {
+        consume += 1;
+        continue;
+      }
+      break;
     }
     const removed = lines.slice(0, consume).join("\n");
     next = next.slice(0, headerIdx) + next.slice(headerIdx + removed.length);
@@ -171,7 +191,7 @@ async function patchProductOpmerking(
   }
 }
 
-/** Voeg T&T / verwachte levertijd toe aan opmerking van gekoppelde voorraadregels. */
+/** Voeg T&T / verwachte levertijd / leverancier toe aan opmerking van gekoppelde voorraadregels. */
 export async function applyIncomingNotesToProducts(
   supabase: SupabaseClient,
   params: {
@@ -179,6 +199,7 @@ export async function applyIncomingNotesToProducts(
     deliveryId: string;
     trackUrl: string;
     expectedDelivery: string | null;
+    leverancier?: string | null;
     productIds: string[];
   }
 ): Promise<void> {
@@ -188,7 +209,8 @@ export async function applyIncomingNotesToProducts(
   const block = buildIncomingOpmerkingBlock(
     params.deliveryId,
     params.trackUrl,
-    params.expectedDelivery
+    params.expectedDelivery,
+    params.leverancier ?? null
   );
 
   const { data, error } = await supabase
@@ -206,7 +228,7 @@ export async function applyIncomingNotesToProducts(
   }
 }
 
-/** Verwijder T&T / verwachte levertijd-blok uit opmerkingen. */
+/** Verwijder T&T / verwachte levertijd / leverancier-blok uit opmerkingen. */
 export async function clearIncomingNotesFromProducts(
   supabase: SupabaseClient,
   params: {
@@ -214,6 +236,7 @@ export async function clearIncomingNotesFromProducts(
     deliveryId: string;
     trackUrl?: string | null;
     expectedDelivery?: string | null;
+    leverancier?: string | null;
     productIds: string[];
   }
 ): Promise<void> {
@@ -234,7 +257,8 @@ export async function clearIncomingNotesFromProducts(
       row.opmerking as string | null,
       params.deliveryId,
       params.trackUrl,
-      params.expectedDelivery
+      params.expectedDelivery,
+      params.leverancier
     );
     await patchProductOpmerking(supabase, params.ownerEmail, id, next);
   }
@@ -289,6 +313,7 @@ export async function receiveIncomingDelivery(
       deliveryId: params.delivery.id,
       trackUrl: params.delivery.track_trace_url,
       expectedDelivery: params.delivery.expected_delivery,
+      leverancier: params.delivery.leverancier,
       productIds,
     });
   } catch (e) {
@@ -328,6 +353,7 @@ export async function cancelIncomingDelivery(
       deliveryId: params.delivery.id,
       trackUrl: params.delivery.track_trace_url,
       expectedDelivery: params.delivery.expected_delivery,
+      leverancier: params.delivery.leverancier,
       productIds,
     });
   } catch (e) {

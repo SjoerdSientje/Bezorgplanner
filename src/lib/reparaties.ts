@@ -145,6 +145,25 @@ export function normalizeStandaardOnderdelen(
   ];
 }
 
+/** Totaal incl. BTW voor een standaardreparatie (onderdelen + arbeid). */
+export function standaardReparatieTotaalIncl(
+  item: Pick<
+    ReparatieStandaardItem,
+    | "naam"
+    | "onderdeel_naam"
+    | "onderdeel_prijs_incl"
+    | "shopify_product_id"
+    | "shopify_variant_id"
+    | "onderdelen_json"
+    | "arbeid_uren"
+  >
+): number {
+  const onderdelen = normalizeStandaardOnderdelen(item);
+  const onderdelenPrijs = onderdelen.reduce((sum, o) => sum + (o.prijs_incl || 0), 0);
+  const totaal = onderdelenPrijs + arbeidPrijsIncl(item.arbeid_uren);
+  return Math.round(totaal * 100) / 100;
+}
+
 export function parseOnderdelenInput(raw: unknown): ReparatieOnderdeel[] {
   if (!Array.isArray(raw)) return [];
   const out: ReparatieOnderdeel[] = [];

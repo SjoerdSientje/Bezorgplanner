@@ -80,6 +80,7 @@ export default function IncomingDeliveriesModal({ open, onClose, onStockChanged 
 
   const [trackUrl, setTrackUrl] = useState("");
   const [expectedDelivery, setExpectedDelivery] = useState("");
+  const [leverancier, setLeverancier] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [productLines, setProductLines] = useState<DraftProductLine[]>([]);
   const [freeLines, setFreeLines] = useState<DraftFreeLine[]>([]);
@@ -88,6 +89,7 @@ export default function IncomingDeliveriesModal({ open, onClose, onStockChanged 
 
   const [inventory, setInventory] = useState<InventoryPick[]>([]);
   const [search, setSearch] = useState("");
+  const [listFilter, setListFilter] = useState("");
   const [saving, setSaving] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -135,12 +137,14 @@ export default function IncomingDeliveriesModal({ open, onClose, onStockChanged 
     if (!open) return;
     setTrackUrl("");
     setExpectedDelivery("");
+    setLeverancier("");
     setFile(null);
     setProductLines([]);
     setFreeLines([]);
     setFreeDraft("");
     setFreeQty(1);
     setSearch("");
+    setListFilter("");
     setMessage(null);
     setError(null);
     load();
@@ -170,6 +174,7 @@ export default function IncomingDeliveriesModal({ open, onClose, onStockChanged 
   const resetForm = () => {
     setTrackUrl("");
     setExpectedDelivery("");
+    setLeverancier("");
     setFile(null);
     setProductLines([]);
     setFreeLines([]);
@@ -177,6 +182,36 @@ export default function IncomingDeliveriesModal({ open, onClose, onStockChanged 
     setFreeQty(1);
     setSearch("");
   };
+
+  const matchesListFilter = useCallback((row: IncomingDeliveryRow, qRaw: string) => {
+    const q = qRaw.trim().toLowerCase();
+    if (!q) return true;
+    const tokens = q.split(/\s+/).filter(Boolean);
+    const hay = [
+      row.leverancier,
+      row.expected_delivery,
+      row.track_trace_url,
+      row.attachment_name,
+      ...(row.items ?? []).flatMap((item) => [
+        item.product_title,
+        item.free_text,
+        itemLabel(item),
+      ]),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return tokens.every((t) => hay.includes(t));
+  }, []);
+
+  const filteredPending = useMemo(
+    () => pending.filter((row) => matchesListFilter(row, listFilter)),
+    [pending, listFilter, matchesListFilter]
+  );
+  const filteredReceived = useMemo(
+    () => received.filter((row) => matchesListFilter(row, listFilter)),
+    [received, listFilter, matchesListFilter]
+  );
 
   const addProduct = (p: InventoryPick) => {
     setProductLines((prev) => [
@@ -222,6 +257,7 @@ export default function IncomingDeliveriesModal({ open, onClose, onStockChanged 
       const form = new FormData();
       form.set("track_trace_url", trackUrl);
       form.set("expected_delivery", expectedDelivery);
+      form.set("leverancier", leverancier);
       form.set("items", JSON.stringify(items));
       if (file) form.set("file", file);
 
@@ -311,6 +347,17 @@ export default function IncomingDeliveriesModal({ open, onClose, onStockChanged 
               value={trackUrl}
               onChange={(e) => setTrackUrl(e.target.value)}
               placeholder="https://…"
+              className="mt-1 w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange/40"
+            />
+
+            <label className="mt-3 block text-xs font-medium text-stone-600">
+              Leverancier
+            </label>
+            <input
+              type="text"
+              value={leverancier}
+              onChange={(e) => setLeverancier(e.target.value)}
+              placeholder="Bijv. Shimano, AliExpress, …"
               className="mt-1 w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange/40"
             />
 
@@ -472,21 +519,48 @@ export default function IncomingDeliveriesModal({ open, onClose, onStockChanged 
           {message && <p className="mt-3 text-sm text-green-700">{message}</p>}
           {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
 
-          <section className="mt-6">
+          <div className="mt-6">
+            <label className="block text-xs font-medium text-stone-600">
+              Zoeken in leveringen
+            </label>
+            <input
+              type="search"
+              value={listFilter}
+              onChange={(e) => setListFilter(e.target.value)}
+              placeholder="Leverancier of product, bijv. v8 of Shimano…"
+              className="mt-1 w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange/40"
+            />
+            {listFilter.trim() && (
+              <p className="mt-1 text-xs text-stone-500">
+                {filteredPending.length} onderweg · {filteredReceived.length} ontvangen
+              </p>
+            )}
+          </div>
+
+          <section className="mt-4">
             <h3 className="text-sm font-semibold text-koopje-black">
-              Onderweg ({pending.length})
+              Onderweg ({listFilter.trim() ? `${filteredPending.length}/${pending.length}` : pending.length})
             </h3>
             {loading ? (
               <p className="mt-2 text-sm text-stone-500">Laden…</p>
-            ) : pending.length === 0 ? (
-              <p className="mt-2 text-sm text-stone-500">Geen openstaande leveringen.</p>
+            ) : filteredPending.length === 0 ? (
+              <p className="mt-2 text-sm text-stone-500">
+                {pending.length === 0
+                  ? "Geen openstaande leveringen."
+                  : "Geen onderweg-leveringen voor dit trefwoord."}
+              </p>
             ) : (
               <ul className="mt-3 space-y-3">
-                {pending.map((row) => (
+                {filteredPending.map((row) => (
                   <li
                     key={row.id}
                     className="rounded-xl border border-stone-200 bg-white p-3"
                   >
+                    {row.leverancier && (
+                      <p className="text-sm font-medium text-koopje-black">
+                        {row.leverancier}
+                      </p>
+                    )}
                     <a
                       href={trackHref(row.track_trace_url)}
                       target="_blank"
@@ -562,14 +636,24 @@ export default function IncomingDeliveriesModal({ open, onClose, onStockChanged 
           {received.length > 0 && (
             <section className="mt-6">
               <h3 className="text-sm font-semibold text-koopje-black">
-                Ontvangen ({received.length})
+                Ontvangen ({listFilter.trim() ? `${filteredReceived.length}/${received.length}` : received.length})
               </h3>
+              {filteredReceived.length === 0 ? (
+                <p className="mt-2 text-sm text-stone-500">
+                  Geen ontvangen leveringen voor dit trefwoord.
+                </p>
+              ) : (
               <ul className="mt-3 space-y-2">
-                {received.slice(0, 30).map((row) => (
+                {filteredReceived.slice(0, 30).map((row) => (
                   <li
                     key={row.id}
                     className="rounded-xl border border-stone-100 bg-stone-50/80 p-3"
                   >
+                    {row.leverancier && (
+                      <p className="text-sm font-medium text-stone-800">
+                        {row.leverancier}
+                      </p>
+                    )}
                     <a
                       href={trackHref(row.track_trace_url)}
                       target="_blank"
@@ -598,6 +682,7 @@ export default function IncomingDeliveriesModal({ open, onClose, onStockChanged 
                   </li>
                 ))}
               </ul>
+              )}
             </section>
           )}
         </div>

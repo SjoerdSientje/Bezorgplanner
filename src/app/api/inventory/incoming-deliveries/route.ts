@@ -98,6 +98,7 @@ export async function GET(request: NextRequest) {
 async function resolveCreatePayload(request: NextRequest): Promise<{
   trackTraceUrl: string;
   expectedDelivery: string | null;
+  leverancier: string | null;
   items: IncomingDeliveryItemInput[];
   file: File | null;
 }> {
@@ -106,6 +107,7 @@ async function resolveCreatePayload(request: NextRequest): Promise<{
     const form = await request.formData();
     const trackTraceUrl = String(form.get("track_trace_url") ?? "").trim();
     const expectedRaw = String(form.get("expected_delivery") ?? "").trim();
+    const leverancierRaw = String(form.get("leverancier") ?? "").trim();
     const itemsRaw = form.get("items");
     let itemsParsed: unknown = [];
     if (typeof itemsRaw === "string" && itemsRaw.trim()) {
@@ -120,6 +122,7 @@ async function resolveCreatePayload(request: NextRequest): Promise<{
     return {
       trackTraceUrl,
       expectedDelivery: expectedRaw || null,
+      leverancier: leverancierRaw || null,
       items: parseIncomingItemInputs(itemsParsed),
       file,
     };
@@ -129,6 +132,7 @@ async function resolveCreatePayload(request: NextRequest): Promise<{
   return {
     trackTraceUrl: String(body.track_trace_url ?? "").trim(),
     expectedDelivery: String(body.expected_delivery ?? body.note ?? "").trim() || null,
+    leverancier: String(body.leverancier ?? "").trim() || null,
     items: parseIncomingItemInputs(body.items),
     file: null,
   };
@@ -138,7 +142,8 @@ export async function POST(request: NextRequest) {
   try {
     requireAccountEmail(request);
     const ownerEmail = getInventoryOwnerEmail(request);
-    const { trackTraceUrl, expectedDelivery, items, file } = await resolveCreatePayload(request);
+    const { trackTraceUrl, expectedDelivery, leverancier, items, file } =
+      await resolveCreatePayload(request);
 
     if (!isValidTrackUrl(trackTraceUrl)) {
       return NextResponse.json(
@@ -194,6 +199,7 @@ export async function POST(request: NextRequest) {
         owner_email: ownerEmail,
         track_trace_url: trackTraceUrl,
         expected_delivery: expectedDelivery,
+        leverancier,
         status: "pending",
       })
       .select("*")
@@ -284,6 +290,7 @@ export async function POST(request: NextRequest) {
           deliveryId: deliveryRow.id,
           trackUrl: trackTraceUrl,
           expectedDelivery,
+          leverancier,
           productIds,
         });
       } catch (e) {

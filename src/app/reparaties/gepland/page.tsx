@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Header from "@/components/Header";
 import AdresAutocomplete from "@/components/AdresAutocomplete";
@@ -12,6 +12,7 @@ import {
   parseStoredReparatieRegels,
   reparatieSoortHeeftProducten,
   reparatieSoortLabel,
+  standaardReparatieTotaalIncl,
   type ReparatieBetaalwijze,
   type ReparatieSoort,
   type ReparatieStandaardItem,
@@ -130,6 +131,8 @@ export default function ReparatiesGeplandPage() {
   const [saving, setSaving] = useState(false);
   const [voorrij, setVoorrij] = useState<{ km: number; bedrag: number } | null>(null);
   const [voorrijLoading, setVoorrijLoading] = useState(false);
+  const [voorrijBedragStr, setVoorrijBedragStr] = useState("");
+  const [voorrijManual, setVoorrijManual] = useState(false);
 
   const loadStandaard = useCallback(async () => {
     setStandaardLoading(true);
@@ -213,6 +216,53 @@ export default function ReparatiesGeplandPage() {
     return () => clearTimeout(t);
   }, [edit, volledigAdres]);
 
+  // Adreswijziging tijdens bewerken → opnieuw auto-berekenen (niet bij openen edit).
+  const adresKey = edit
+    ? `${edit.straatnaam}|${edit.huisnummer}|${edit.postcode}|${edit.woonplaats}`
+    : "";
+  const prevAdresKeyRef = useRef("");
+  useEffect(() => {
+    if (!edit) {
+      prevAdresKeyRef.current = "";
+      return;
+    }
+    if (prevAdresKeyRef.current && prevAdresKeyRef.current !== adresKey) {
+      setVoorrijManual(false);
+    }
+    prevAdresKeyRef.current = adresKey;
+  }, [adresKey, edit]);
+
+  const autoVoorrijTotaal =
+    !edit || !voorrij
+      ? null
+      : edit.soort === "reparatie_terugbrengen" && edit.fiets_ook_opgehaald
+        ? Math.round(voorrij.bedrag * 2 * 100) / 100
+        : voorrij.bedrag;
+
+  useEffect(() => {
+    if (!edit || voorrijManual) return;
+    if (autoVoorrijTotaal == null) return;
+    setVoorrijBedragStr(autoVoorrijTotaal.toFixed(2));
+  }, [edit, autoVoorrijTotaal, voorrijManual]);
+
+  const voorrijTotaalParsed = (() => {
+    const n = parseFloat(voorrijBedragStr.replace(",", "."));
+    return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null;
+  })();
+
+  const voorrijWeergave =
+    !edit || (voorrij == null && voorrijTotaalParsed == null)
+      ? null
+      : {
+          km: voorrij?.km ?? null,
+          bedrag: voorrijTotaalParsed ?? autoVoorrijTotaal ?? 0,
+          basis:
+            edit.soort === "reparatie_terugbrengen" && edit.fiets_ook_opgehaald
+              ? Math.round(((voorrijTotaalParsed ?? autoVoorrijTotaal ?? 0) / 2) * 100) /
+                100
+              : (voorrijTotaalParsed ?? autoVoorrijTotaal ?? 0),
+        };
+
   async function deleteOrder(o: OrderRow) {
     const label = o.order_nummer || o.naam || "deze order";
     const factuurHint =
@@ -278,8 +328,12 @@ export default function ReparatiesGeplandPage() {
           ? Math.round((total / 2) * 100) / 100
           : total;
       setVoorrij({ km: Number(o.voorrij_km), bedrag: basis });
+      setVoorrijBedragStr(total.toFixed(2));
+      setVoorrijManual(true); // bewaar opgeslagen bedrag tot adres wijzigt
     } else {
       setVoorrij(null);
+      setVoorrijBedragStr("");
+      setVoorrijManual(false);
     }
     setConfirmOpen(false);
   }
@@ -331,17 +385,6 @@ export default function ReparatiesGeplandPage() {
     edit != null &&
     (edit.soort === "reparatie_terugbrengen" ||
       (edit.soort === "reparatie_deur" && !edit.producten_nog_niet_bekend));
-
-  const voorrijWeergave =
-    !edit || !voorrij
-      ? null
-      : edit.soort === "reparatie_terugbrengen" && edit.fiets_ook_opgehaald
-        ? {
-            km: voorrij.km,
-            bedrag: Math.round(voorrij.bedrag * 2 * 100) / 100,
-            basis: voorrij.bedrag,
-          }
-        : { km: voorrij.km, bedrag: voorrij.bedrag, basis: voorrij.bedrag };
 
   const subtotaal = useMemo(() => {
     if (!edit || !needsProducts) return 0;
@@ -411,6 +454,7 @@ export default function ReparatiesGeplandPage() {
           fiets_ook_opgehaald:
             edit.soort === "reparatie_terugbrengen" && edit.fiets_ook_opgehaald,
           regels: payloadRegels,
+          voorrij_bedrag: voorrijTotaalParsed ?? 0,
         }),
       });
       const data = await res.json();
@@ -613,19 +657,45 @@ export default function ReparatiesGeplandPage() {
                   />
 
                   <div className="rounded-lg bg-stone-50 px-3 py-2 text-xs text-koopje-black/70">
-                    {voorrijLoading
-                      ? "Voorrijkosten berekenen…"
-                      : voorrijWeergave
-                        ? edit.soort === "reparatie_terugbrengen" &&
+                    {voorrijLoading ? (
+                      "Voorrijkosten berekenen…"
+                    ) : voorrijWeergave ? (
+                      <div className="flex flex-wrap items-end gap-3">
+                        <p className="min-w-0 flex-1">
+                          {voorrijWeergave.km != null
+                            ? `Afstand ≈ ${voorrijWeergave.km} km`
+                            : "Afstand onbekend"}
+                          {edit.soort === "reparatie_terugbrengen" &&
                           edit.fiets_ook_opgehaald
-                          ? `Afstand ≈ ${voorrijWeergave.km} km · Voorrijkosten ophalen + terugbrengen €${voorrijWeergave.bedrag.toFixed(2)} (2 × €${voorrijWeergave.basis.toFixed(2)})`
-                          : `Afstand ≈ ${voorrijWeergave.km} km · Voorrijkosten €${voorrijWeergave.bedrag.toFixed(2)}`
-                        : "Vul een adres in voor automatische voorrijkosten."}
-                    {(needsProducts || voorrijWeergave) && (
-                      <span className="ml-2 font-medium">
-                        · Totaal ≈ €
-                        {(subtotaal + (voorrijWeergave?.bedrag ?? 0)).toFixed(2)}
-                      </span>
+                            ? " · ophalen + terugbrengen"
+                            : ""}
+                          {voorrijManual ? " · handmatig aangepast" : ""}
+                          {(needsProducts || voorrijWeergave) && (
+                            <span className="ml-1 font-medium">
+                              · Totaal ≈ €
+                              {(
+                                subtotaal + (voorrijWeergave?.bedrag ?? 0)
+                              ).toFixed(2)}
+                            </span>
+                          )}
+                        </p>
+                        <label className="flex items-center gap-1.5 text-xs text-koopje-black sm:text-sm">
+                          <span className="whitespace-nowrap">Voorrijkosten €</span>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={voorrijBedragStr}
+                            onChange={(e) => {
+                              setVoorrijManual(true);
+                              setVoorrijBedragStr(e.target.value);
+                            }}
+                            className="w-24 rounded-lg border border-koopje-black/20 bg-white px-2 py-1.5 text-sm font-medium"
+                            aria-label="Voorrijkosten bedrag"
+                          />
+                        </label>
+                      </div>
+                    ) : (
+                      "Vul een adres in voor automatische voorrijkosten."
                     )}
                   </div>
 
@@ -728,7 +798,7 @@ export default function ReparatiesGeplandPage() {
                               </option>
                               {standaard.map((s) => (
                                 <option key={s.id} value={s.id}>
-                                  {s.naam}
+                                  {s.naam} — €{standaardReparatieTotaalIncl(s).toFixed(2)}
                                 </option>
                               ))}
                             </select>
