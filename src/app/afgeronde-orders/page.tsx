@@ -44,7 +44,9 @@ export default async function AfgerdondeOrdersPage() {
                   </svg>
                 </span>
                 <span className="mt-4 font-medium text-koopje-black">Bezorgde orders</span>
-                <span className="mt-1 text-sm text-koopje-black/60">Afgeronde bezorgingen (Shopify)</span>
+                <span className="mt-1 text-sm text-koopje-black/60">
+                  Afgeronde bezorgingen (Shopify + reparatie factuur/ophalen)
+                </span>
               </Link>
             </li>
 
@@ -61,7 +63,9 @@ export default async function AfgerdondeOrdersPage() {
                     </svg>
                   </span>
                   <span className="mt-4 font-medium text-koopje-black">MP orders</span>
-                  <span className="mt-1 text-sm text-koopje-black/60">Marktplaats-orders (bezorgd en winkel)</span>
+                  <span className="mt-1 text-sm text-koopje-black/60">
+                    Marktplaats-orders + contante reparaties
+                  </span>
                 </Link>
               </li>
             )}

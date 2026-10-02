@@ -4,6 +4,7 @@ import { sendWhatsAppByEvent } from "@/lib/whatsapp";
 import { requireAccountEmail } from "@/lib/account";
 import { verwerkGarantiebewijs } from "@/lib/garantiebewijs";
 import { promoteRitjesVoorMorgen } from "@/lib/planning-promote";
+import { inferCompletedStatus } from "@/lib/order-completion";
 
 export const dynamic = "force-dynamic";
 
@@ -322,15 +323,34 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const toMpOrders =
+    const orderSource = String((order as { source?: string }).source ?? "")
+      .trim()
+      .toLowerCase();
+    const isRealMpOrder =
       isMpTagged(order.mp_tags) ||
-      String((order as any).source ?? "").toLowerCase() === "mp" ||
-      isMpOrderNummer((order as any).order_nummer);
-    const nextStatus = toMpOrders ? "mp_orders" : "bezorgd";
+      orderSource === "mp" ||
+      isMpOrderNummer((order as { order_nummer?: string }).order_nummer);
+
+    const nextStatus = inferCompletedStatus({
+      source: (order as { source?: string }).source,
+      type: (order as { type?: string }).type,
+      reparatie_betaalwijze:
+        orderSource === "reparatie"
+          ? String((order as { type?: string }).type ?? "") === "reparatie_ophalen"
+            ? "contant"
+            : reparatieWilFactuur
+              ? "factuur"
+              : "contant"
+          : (order as { reparatie_betaalwijze?: string | null }).reparatie_betaalwijze,
+      moneybird_invoice_id: reparatieInvoiceId,
+      mp_tags: (order as { mp_tags?: string | null }).mp_tags,
+      order_nummer: (order as { order_nummer?: string | null }).order_nummer,
+    });
 
     // MP-orders: verstuur aankoopbewijs na afronden met het opgegeven serienummer.
+    // (Niet voor reparatie-contant die toevallig ook in mp_orders belandt.)
     let aankoopbewijsError: string | null = null;
-    if (toMpOrders && serienummerInput) {
+    if (isRealMpOrder && serienummerInput) {
       const inDoos = /^in\s*doos$/i.test(serienummerInput);
       const serienummerVoorOrder = inDoos ? serienummerInput : serienummerInput;
       try {
@@ -397,9 +417,6 @@ export async function POST(request: NextRequest) {
     // - Echte MP-orders: reservering committen (aftrekken).
     // - Shopify-orders (ook met mp-tags): committen/clearen via Shopify-id,
     //   nooit via marktplaats-key (die matcht de reservering niet).
-    const orderSource = String((order as { source?: string | null }).source ?? "")
-      .trim()
-      .toLowerCase();
     try {
       if (orderSource === "mp") {
         const { commitInventoryForMpOrder } = await import(
@@ -527,7 +544,8 @@ export async function POST(request: NextRequest) {
       ownerEmail.toLowerCase() === MAKE_AFRONDEN_OWNER_EMAIL &&
       hadPlanningSlot &&
       orderNummer &&
-      !isMpOrderNummer(orderNummer)
+      !isMpOrderNummer(orderNummer) &&
+      orderSource !== "reparatie"
     ) {
       try {
         await fetch(MAKE_AFRONDEN_WEBHOOK_URL, {

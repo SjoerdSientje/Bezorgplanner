@@ -10,13 +10,13 @@ export async function GET(request: NextRequest) {
     const ownerEmail = requireAccountEmail(request);
     const supabase = createServerSupabaseClient();
     await repairCompletedOrdersWithWrongStatus(supabase, ownerEmail);
-    // Zonder order + default max 1000 rijen kunnen nieuwste afrondingen
-    // ontbreken in de UI (PostgREST limiet). Sorteer nieuwste eerst en haal genoeg op.
+    // Shopify + afgeronde reparaties (factuur/ophalen → status bezorgd).
+    // Contante reparaties gaan naar mp_orders en horen hier niet.
     const { data: orders, error } = await supabase
       .from("orders")
       .select("*")
       .eq("owner_email", ownerEmail)
-      .eq("source", "shopify")
+      .in("source", ["shopify", "reparatie"])
       .eq("status", "bezorgd")
       .order("afgerond_at", { ascending: false, nullsFirst: false })
       .range(0, 9999);

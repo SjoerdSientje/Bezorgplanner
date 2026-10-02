@@ -3,6 +3,7 @@ import { createServerSupabaseClient } from "@/lib/supabase";
 import { requireAccountEmail } from "@/lib/account";
 import { verwerkGarantiebewijs } from "@/lib/garantiebewijs";
 import { isMpPausedForOwner } from "@/lib/mp-pause";
+import { repairCompletedOrdersWithWrongStatus } from "@/lib/order-completion";
 
 export const dynamic = "force-dynamic";
 
@@ -20,12 +21,16 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    await repairCompletedOrdersWithWrongStatus(supabase, ownerEmail);
+
+    // Echte MP-orders + contante reparaties (deur/terugbrengen) met status mp_orders.
     const { data: orders, error } = await supabase
       .from("orders")
       .select("*")
       .eq("owner_email", ownerEmail)
-      .eq("source", "mp")
-      .neq("status", "ritjes_vandaag")
+      .or(
+        "and(source.eq.mp,status.neq.ritjes_vandaag),and(source.eq.reparatie,status.eq.mp_orders)"
+      )
       .order("datum", { ascending: false, nullsFirst: false })
       .range(0, 9999);
     if (error) {
@@ -35,8 +40,9 @@ export async function GET(request: NextRequest) {
 
     const list = (orders ?? []) as Array<Record<string, unknown>>;
 
-    // Safety net: zorg dat elke MP-order in deze lijst een aankoopbewijs-link heeft.
+    // Safety net: zorg dat elke echte MP-order in deze lijst een aankoopbewijs-link heeft.
     for (const o of list) {
+      if (String(o.source ?? "").toLowerCase() === "reparatie") continue;
       const hasLink = String(o.link_aankoopbewijs ?? "").trim() !== "";
       if (hasLink) continue;
       try {
