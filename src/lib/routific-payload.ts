@@ -49,17 +49,9 @@ function addMinutesToTime(hhmm: string, minutes: number): string {
 
 /**
  * Aantal ritten (legs) dat een route met "meerdere ritten" nodig heeft.
- * - Handmatig gekozen adressen (orderIds) → eigen, afgezonderde pool: alleen die orders
- *   tellen mee, gedeeld door de capaciteit van déze route. Andere routes raken deze orders
- *   niet, dus dit blijft onafhankelijk van de rest.
- * - Geen handmatige keuze (auto) → deze route deelt de "vrije" pool (alle orders die aan
- *   geen enkele route gepind zijn) met alle andere routes zonder handmatige keuze. Routific
- *   balanceert die pool zelf over die routes op basis van reisafstand, precies zoals bij één
- *   rit per route. Extra ritten (legs) zijn daarom alleen nodig als de gezamenlijke
- *   capaciteit van al die routes in één rit niet genoeg is voor de hele vrije pool — anders
- *   zou elke auto-route z'n eigen legs baseren op de hele pool en de capaciteit van de
- *   andere routes daarbij vermenigvuldigen (bug: gaf bv. bij route 1 max 11 én route 2 max 4
- *   allebei veel te veel ritten, waardoor route 2 alsnog 8 stuks kreeg i.p.v. max 4).
+ * - Zonder meerdereRitten → altijd 1 (wat niet past → Overig).
+ * - Handmatig gekozen adressen → eigen pool / capaciteit van deze route.
+ * - Geen handmatige keuze → deelt de vrije pool met andere unpinned routes.
  */
 export function estimateLegsForRoute(
   routeIndex: number,
@@ -75,7 +67,7 @@ export function estimateLegsForRoute(
     const totalLoad = orders
       .filter((o) => pinnedIds.has(o.id))
       .reduce((sum, o) => sum + orderRouteLoad(o), 0);
-    return Math.max(1, Math.min(MAX_LEGS_PER_ROUTE, Math.ceil(totalLoad / cap)));
+    return Math.max(1, Math.min(MAX_LEGS_PER_ROUTE, Math.ceil(totalLoad / cap) || 1));
   }
 
   const anyPinnedIds = new Set(routes.flatMap((r) => r.orderIds ?? []));
@@ -88,7 +80,7 @@ export function estimateLegsForRoute(
     0
   );
   if (totalUnpinnedCapacity <= 0) return 1;
-  const rounds = Math.ceil(sharedPoolLoad / totalUnpinnedCapacity);
+  const rounds = Math.ceil(sharedPoolLoad / totalUnpinnedCapacity) || 1;
   return Math.max(1, Math.min(MAX_LEGS_PER_ROUTE, rounds));
 }
 
@@ -113,31 +105,19 @@ export interface OrderForRoute {
   lng?: number | null;
 }
 
-/** GT2000, Engwe E26 en Qibbel/family/kinderzitje zijn breder/groter; bij max. load ≤ 4 tellen alle fietsen dubbel qua load. */
-const GROTE_FIETS_PATTERNS = [
-  /gt\s*2000/i,
-  /engwe\s*e26/i,
-  /qibbel/i,
-  /family/i,
-  /kinderzitje/i,
-];
-
-function isGroteFiets(producten: string | null | undefined): boolean {
-  const text = String(producten ?? "");
-  return GROTE_FIETS_PATTERNS.some((p) => p.test(text));
-}
-
 /**
- * Load-eenheden per order (zelfde berekening als Routific visits).
- * aantal_fietsen = 0 is bewust (bv. "Reparatie aan huis": geen fiets mee in de bus) en
- * telt dus als 0 load — alleen ontbrekende waarde (null/undefined) valt terug op 1.
+ * Load-eenheden per order (= aantal fietsen). Elke fiets telt als 1.
+ * aantal_fietsen = 0 is bewust (bv. reparatie zonder fiets in de bus).
+ * Ontbrekende waarde (null/undefined) valt terug op 1.
  */
 export function orderRouteLoad(o: OrderForRoute): number {
   const raw = o.aantal_fietsen;
-  const baseFietsen = raw == null || !Number.isFinite(Number(raw)) ? 1 : Math.max(0, Number(raw));
-  const unitSize = isGroteFiets(o.producten) ? 2 : 1;
-  return baseFietsen * unitSize;
+  if (raw == null || !Number.isFinite(Number(raw))) return 1;
+  return Math.max(0, Number(raw));
 }
+
+/** Routific type voor de “vrije” pool (orders zonder handmatige pin). */
+export const UNPINNED_ROUTE_TYPE = "unpinned";
 
 type RoutificLocation = { address: string; lat?: number; lng?: number };
 
@@ -230,7 +210,9 @@ function buildVisitForOrder(
 function buildVisits(
   orders: OrderForRoute[],
   routes: ParallelRouteSpec[],
-  pinToRouteType: Map<string, string>
+  pinToRouteType: Map<string, string>,
+  /** Bij partial pins: vrije orders krijgen dit type i.p.v. geen type. */
+  unpinnedVisitType: string | undefined
 ): RoutificPayload["visits"] {
   const defaultStart = earliestParallelShiftStart(routes);
   // Gepinde orders: venster t.o.v. de vertrektijd van hú́n route (niet de vroegste van alle).
@@ -241,9 +223,10 @@ function buildVisits(
   const visits: RoutificPayload["visits"] = {};
   for (const o of orders) {
     const visitId = sanitizeVisitId(o.id);
-    const vehicleType = pinToRouteType.get(o.id);
+    const pinnedType = pinToRouteType.get(o.id);
+    const vehicleType = pinnedType ?? unpinnedVisitType;
     const shiftStart =
-      (vehicleType ? shiftByRouteType.get(vehicleType) : undefined) ?? defaultStart;
+      (pinnedType ? shiftByRouteType.get(pinnedType) : undefined) ?? defaultStart;
     visits[visitId] = buildVisitForOrder(o, shiftStart, vehicleType);
   }
   return visits;
@@ -295,24 +278,35 @@ export function buildRoutificPayloadFromRoutes(
     throw new Error("Minimaal één route nodig.");
   }
 
-  // Handmatig gekozen orders (Kies adressen) worden via Routific's `type`-koppeling
-  // hard vastgezet op hún route: alléén die route's voertuig mag de visit serveren.
-  // Niet-gekozen orders krijgen geen type, dus die blijven vrij verdeelbaar over alle
-  // voertuigen (incl. voertuigen met pins) — Routific vult de resterende capaciteit
-  // dan zelf optimaal, zónder dat een pin de capaciteitslimiet van zijn route omzeilt.
+  const mode = getRouteAssignmentMode(routes, orders.length);
+
+  // Handmatig gekozen orders → hard op hún route via Routific `type`.
+  // Bij gedeeltelijke pins: vrije orders krijgen type "unpinned" en alleen unpinned
+  // voertuigen krijgen dat type. Zo vullen vrije orders bij voorkeur géén gepinde bus
+  // (voorkomt forceren op een volle avondrit terwijl de ochtendbus nog ruimte heeft).
+  // Overflow op restcapaciteit van gepinde routes gebeurt ná Routific in
+  // fillUnservedIntoRemainingCapacity — alleen als unpinned routes echt vol zijn.
   const pinToRouteType = new Map<string, string>();
   routes.forEach((r, i) => {
     for (const orderId of r.orderIds ?? []) {
       pinToRouteType.set(orderId, `route_${i + 1}`);
     }
   });
+  const useUnpinnedType = mode === "partialManual";
+  const unpinnedVisitType = useUnpinnedType ? UNPINNED_ROUTE_TYPE : undefined;
 
-  const visits = buildVisits(orders, routes, pinToRouteType);
+  const visits = buildVisits(orders, routes, pinToRouteType, unpinnedVisitType);
 
   const fleet: Record<string, VehicleConfig> = {};
   routes.forEach((r, i) => {
     const cap = Math.max(1, Math.min(99, Math.floor(Number(r.capacity) || 0)));
-    const vehicleType = (r.orderIds?.length ?? 0) > 0 ? `route_${i + 1}` : undefined;
+    const hasPins = (r.orderIds?.length ?? 0) > 0;
+    const vehicleType = hasPins
+      ? `route_${i + 1}`
+      : useUnpinnedType
+        ? UNPINNED_ROUTE_TYPE
+        : undefined;
+    // Zonder "meerdere ritten": 1 rit. Wat niet past → Overig.
     const legs = r.meerdereRitten ? estimateLegsForRoute(i, routes, orders) : 1;
     const legDuration = estimateLegDurationMinutes(cap);
     const keys = getRouteLegVehicleKeys(i, legs);

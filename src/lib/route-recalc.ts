@@ -35,7 +35,7 @@ export type RouteStop = {
   id: string;
   volledig_adres: string;
   bezorgtijd_voorkeur: string | null;
-  /** Load-eenheden (fietsen; grote fietsen kunnen 2 zijn). */
+  /** Load-eenheden (= aantal fietsen; elke fiets telt als 1). */
   load?: number;
 };
 

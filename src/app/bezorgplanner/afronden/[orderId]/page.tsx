@@ -45,6 +45,8 @@ type OrderDetail = {
   producten_nog_niet_bekend?: boolean | null;
   reparatie_betaalwijze?: string | null;
   reparatie_regels_json?: unknown;
+  voorrij_bedrag?: number | null;
+  bestelling_totaal_prijs?: number | null;
   naam?: string | null;
   email?: string | null;
   telefoon_nummer?: string | null;
@@ -374,6 +376,24 @@ export default function AfrondenVragenlijstPage({
   const paymentOk =
     Boolean(betaalOptie) && (betaalOptie !== "Anders" || betaalAnders.trim().length > 0) && bedragOk;
   const serienummerOk = !isMpOrder || serienummer.trim().length > 0;
+
+  const reparatieSubtotaal = useMemo(() => {
+    if (!isReparatieDeur || convertToOphalen) return 0;
+    return reparatieRegels.reduce((sum, r) => {
+      const prijs = parseFloat(r.onderdeel_prijs_incl.replace(",", ".")) || 0;
+      const uren = parseFloat(r.arbeid_uren.replace(",", ".")) || 0;
+      return sum + prijs + arbeidPrijsIncl(uren);
+    }, 0);
+  }, [isReparatieDeur, convertToOphalen, reparatieRegels]);
+
+  const voorrijBedrag =
+    isReparatieDeur && !convertToOphalen && order?.voorrij_bedrag != null
+      ? Number(order.voorrij_bedrag)
+      : 0;
+  const reparatieTotaalInclVoorrij =
+    Math.round((reparatieSubtotaal + (Number.isFinite(voorrijBedrag) ? voorrijBedrag : 0)) * 100) /
+    100;
+
   const reparatieProductsOk =
     !isReparatieDeur ||
     convertToOphalen ||
@@ -711,6 +731,28 @@ export default function AfrondenVragenlijstPage({
                             </button>
                           </div>
                         ))}
+                      </div>
+
+                      <div className="mt-4 rounded-xl border border-koopje-orange/25 bg-koopje-orange-light/40 px-3 py-3 text-sm text-koopje-black">
+                        <div className="flex justify-between gap-3">
+                          <span>Producten / arbeid</span>
+                          <span className="font-medium">
+                            €{reparatieSubtotaal.toFixed(2)}
+                          </span>
+                        </div>
+                        <div className="mt-1 flex justify-between gap-3 text-koopje-black/70">
+                          <span>Voorrijkosten</span>
+                          <span>
+                            €
+                            {(Number.isFinite(voorrijBedrag) ? voorrijBedrag : 0).toFixed(
+                              2
+                            )}
+                          </span>
+                        </div>
+                        <div className="mt-2 flex justify-between gap-3 border-t border-koopje-orange/20 pt-2 font-semibold">
+                          <span>Totaal incl. voorrij</span>
+                          <span>€{reparatieTotaalInclVoorrij.toFixed(2)}</span>
+                        </div>
                       </div>
                     </>
                   )}

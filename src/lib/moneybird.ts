@@ -1745,23 +1745,40 @@ export async function upsertReparatieSalesInvoice(params: {
   }
 
   if (existing?.id) {
-    if (!isDraftMoneybirdInvoice(existing)) {
+    const full = (await fetchSalesInvoiceById(existing.id)) ?? existing;
+    if (!isDraftMoneybirdInvoice(full)) {
       console.info(
         "[moneybird] reparatie-factuur niet meer concept — skip update",
-        existing.id,
-        existing.state
+        full.id,
+        full.state
       );
-      return existing;
+      return full;
     }
+
+    // Vergelijk regels: bij gelijke inhoud geen PATCH (voorkomt dubbele regels).
+    if (invoiceDetailsUnchanged(full.details, details)) {
+      console.info(
+        "[moneybird] reparatie conceptfactuur al in sync, skip",
+        full.id,
+        reference
+      );
+      return full;
+    }
+
+    // Oude regels vernietigen + nieuwe zetten (PATCH zonder _destroy voegt toe).
+    const destroyOld = (full.details ?? [])
+      .filter((d) => d.id)
+      .map((d) => ({ id: d.id, _destroy: "1" as const }));
+
     const updated = await moneybirdFetch<MoneybirdSalesInvoice>(
-      `/sales_invoices/${existing.id}.json`,
+      `/sales_invoices/${full.id}.json`,
       {
         method: "PATCH",
         body: JSON.stringify({
           sales_invoice: {
             contact_id: contact.id,
             reference,
-            details_attributes: details,
+            details_attributes: [...destroyOld, ...details],
           },
         }),
       }

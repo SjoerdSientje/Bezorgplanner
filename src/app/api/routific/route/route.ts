@@ -15,6 +15,8 @@ import { geocodeOrdersForRouting } from "@/lib/pdok-geocode";
 import {
   buildRouteOrderListsFromSolution,
   buildRouteSlotsFromMultiLegSolution,
+  enforcePinnedOrdersOnLists,
+  fillUnservedIntoRemainingCapacity,
   getRouteCapacityWarnings,
 } from "@/lib/routific-slots";
 import { DEPOT_RELOAD_MINUTES, SERVICE_TIME_MINUTES } from "@/lib/routific-payload";
@@ -337,6 +339,8 @@ export async function POST(request: NextRequest) {
       orderByVisitId,
       routeVehicleKeys
     );
+    // Pins hard afdwingen (Routific type is niet 100% waterdicht bij gedeelde capacity).
+    enforcePinnedOrdersOnLists(routeOrderLists, parallelRoutes);
 
     const allBezorgtijdViolations: {
       orderId: string;
@@ -344,6 +348,7 @@ export async function POST(request: NextRequest) {
       restrictie: string;
       detail: string;
     }[] = [];
+    const capacityFillNotes: string[] = [];
 
     for (let vi = 0; vi < parallelRoutes.length; vi++) {
       const routeNum = vi + 1;
@@ -388,6 +393,62 @@ export async function POST(request: NextRequest) {
       }
       for (const v of built.violations) {
         allBezorgtijdViolations.push(v);
+      }
+    }
+
+    // Routific laat soms stops unserved terwijl er wél restcapaciteit is (tijdvenster,
+    // suboptimaliteit, type-isolatie). Vul die gaten zelf als de load past — zonder
+    // automatisch een 2e rit te openen.
+    {
+      const slottedIds = new Set(slotsToInsert.map((s) => s.order_id));
+      const leftover = rowsForRouting.filter((o) => !slottedIds.has(o.id));
+      if (leftover.length > 0) {
+        const filled = fillUnservedIntoRemainingCapacity({
+          unserved: leftover,
+          parallelRoutes,
+          slots: slotsToInsert.map((s) => ({
+            order_id: s.order_id,
+            aankomsttijd: s.aankomsttijd,
+            arrivalTime: s.tijd_opmerking,
+            rit_nummer: s.rit_nummer ?? 0,
+            route_nummer: s.route_nummer,
+            leg_nummer: s.leg_nummer,
+            route_naam: s.route_naam,
+          })),
+          ordersById,
+          legsPerRoute,
+        });
+        if (filled.filledIds.length > 0) {
+          const filledSet = new Set(filled.filledIds);
+          const maxLegAfter = Math.max(
+            1,
+            ...filled.slots.map((s) => Number(s.leg_nummer ?? 1))
+          );
+          slotsToInsert.length = 0;
+          let v = 0;
+          for (const s of filled.slots) {
+            v += 1;
+            slotsToInsert.push({
+              order_id: s.order_id,
+              volgorde: v,
+              aankomsttijd: s.aankomsttijd,
+              tijd_opmerking: s.arrivalTime,
+              rit_nummer: s.rit_nummer,
+              route_nummer: s.route_nummer,
+              route_naam: s.route_naam,
+              leg_nummer: maxLegAfter > 1 ? s.leg_nummer : null,
+            });
+            if (filledSet.has(s.order_id) && s.route_nummer != null) {
+              const list = routeOrderLists.get(s.route_nummer) ?? [];
+              if (!list.includes(s.order_id)) {
+                list.push(s.order_id);
+                routeOrderLists.set(s.route_nummer, list);
+              }
+            }
+          }
+          volgorde = v;
+          capacityFillNotes.push(...filled.notes);
+        }
       }
     }
 
@@ -480,34 +541,54 @@ export async function POST(request: NextRequest) {
     const unserved = output?.unserved as Record<string, string | unknown> | null | undefined;
     const warningParts: string[] = [];
 
+    if (capacityFillNotes.length > 0) {
+      warningParts.push(
+        `${capacityFillNotes.length} order(s) alsnog ingepland op restcapaciteit (Routific had ze overgeslagen):\n${capacityFillNotes.join("\n")}`
+      );
+    }
+
     const notPlanned = rowsForRouting.filter((o) => !servedIds.has(o.id));
     if (notPlanned.length > 0) {
-      // Restcapaciteit per route (inclusief extra ritten bij "meerdere ritten"), zodat we
-      // per niet-ingeplande order eerlijk kunnen zeggen of capaciteit écht de beperkende
-      // factor was — voorheen claimde deze melding altijd "geen capaciteit meer over", ook
-      // als er nog volop ruimte was en Routific de order om een andere reden (bv. tijdvenster
-      // of afstand) niet kon inplannen.
+      // Restcapaciteit op basis van écht ingeplande slots (niet Routific-lijsten),
+      // zodat "nog ruimte" klopt met wat de planner ziet.
+      const slottedLoadByRoute = new Map<number, number>();
+      for (const s of slotsToInsert) {
+        const rn = s.route_nummer;
+        if (rn == null) continue;
+        const o = ordersById.get(s.order_id);
+        slottedLoadByRoute.set(
+          rn,
+          (slottedLoadByRoute.get(rn) ?? 0) + (o ? orderRouteLoad(o) : 0)
+        );
+      }
       const routeStats = parallelRoutes.map((r, i) => {
         const legs = legsPerRoute.get(i + 1) ?? 1;
         const totalCap = r.capacity * legs;
-        const load = (routeOrderLists.get(i + 1) ?? []).reduce(
-          (sum, id) => sum + (ordersById.has(id) ? orderRouteLoad(ordersById.get(id)!) : 0),
-          0
-        );
+        const load = slottedLoadByRoute.get(i + 1) ?? 0;
         return { totalCap, load, remaining: Math.max(0, totalCap - load), legs };
       });
       const unpinnedRouteIdx = parallelRoutes
         .map((r, i) => ((r.orderIds?.length ?? 0) === 0 ? i : -1))
         .filter((i) => i >= 0);
+      const pinnedRouteIdxAll = parallelRoutes
+        .map((r, i) => ((r.orderIds?.length ?? 0) > 0 ? i : -1))
+        .filter((i) => i >= 0);
       const remainingForUnpinned = unpinnedRouteIdx.reduce(
         (sum, i) => sum + routeStats[i]!.remaining,
         0
       );
+      // Overflow: vrije orders mogen ook restcapaciteit van gepinde routes gebruiken
+      // als de unpinned routes vol zijn.
+      const remainingPinnedOverflow = pinnedRouteIdxAll.reduce(
+        (sum, i) => sum + routeStats[i]!.remaining,
+        0
+      );
+      const remainingForFree = remainingForUnpinned + remainingPinnedOverflow;
 
       const lines = notPlanned.map((o) => {
         const pinnedRouteIdx = parallelRoutes.findIndex((r) => (r.orderIds ?? []).includes(o.id));
         const eligibleRemaining =
-          pinnedRouteIdx >= 0 ? routeStats[pinnedRouteIdx]!.remaining : remainingForUnpinned;
+          pinnedRouteIdx >= 0 ? routeStats[pinnedRouteIdx]!.remaining : remainingForFree;
         const load = orderRouteLoad(o);
         const visitId = sanitizeId(o.id);
         const routificReden =
@@ -532,7 +613,7 @@ export async function POST(request: NextRequest) {
         .join(", ");
 
       warningParts.push(
-        `${notPlanned.length} order(s) niet ingepland (${loadPerRoute}, grote fietsen tellen dubbel):\n${lines.join("\n")}`
+        `${notPlanned.length} order(s) niet ingepland (${loadPerRoute}):\n${lines.join("\n")}`
       );
     }
 

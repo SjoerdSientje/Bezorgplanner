@@ -525,7 +525,7 @@ export function getRouteCapacityWarnings(
     const load = routeListLoad(ids, ordersById);
     if (load > totalCap) {
       warnings.push(
-        `Route ${i + 1}: ${load} load-eenheden ingepland (max ${totalCap}${legs > 1 ? ` = ${legs} ritten × ${cap}` : ""}). Grote fietsen tellen dubbel.`
+        `Route ${i + 1}: ${load} load-eenheden ingepland (max ${totalCap}${legs > 1 ? ` = ${legs} ritten × ${cap}` : ""}).`
       );
     }
   }
@@ -551,6 +551,157 @@ export function buildRouteOrderListsFromSolution(
     rawLists.set(i + 1, [...ids]);
   }
   return { lists, rawLists };
+}
+
+/** Geschatte minuten tussen einde vorige stop en aankomst bij nabewerking. */
+const POST_FILL_TRAVEL_MINUTES = 15;
+
+function hhmmToMinutes(hhmm: string): number {
+  const [h, m] = String(hhmm).split(":").map((x) => parseInt(x, 10));
+  return (h ?? 0) * 60 + (m ?? 0);
+}
+
+function minutesToHhmm(total: number): string {
+  const normalized = ((total % (24 * 60)) + 24 * 60) % (24 * 60);
+  const h = Math.floor(normalized / 60);
+  const m = normalized % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+export type FillableRouteSlot = {
+  order_id: string;
+  aankomsttijd: string;
+  arrivalTime: string;
+  rit_nummer: number;
+  route_nummer: number | null;
+  leg_nummer: number | null;
+  route_naam: string | null;
+};
+
+/**
+ * Zet orders die Routific als unserved liet alsnog achteraan op een geschikte route,
+ * zolang de load past. Geen extra ritten aanmaken (alleen capaciteit × bestaande legs).
+ *
+ * Voorkeur voor vrije orders:
+ * 1. Routes zonder vaste adressen (zelfde isolatie als Routific-payload)
+ * 2. Anders overflow op routes mét pins, als daar nog capaciteit over is
+ *    (bv. max 5, 2 pins → tot 3 vrije stops als andere routes vol zijn)
+ *
+ * Gepinde orders → alleen hun eigen route.
+ */
+export function fillUnservedIntoRemainingCapacity(args: {
+  unserved: OrderForRoute[];
+  parallelRoutes: ParallelRouteSpec[];
+  slots: FillableRouteSlot[];
+  ordersById: Map<string, OrderForRoute>;
+  legsPerRoute: Map<number, number>;
+}): { slots: FillableRouteSlot[]; filledIds: string[]; notes: string[] } {
+  const { unserved, parallelRoutes, ordersById, legsPerRoute } = args;
+  if (unserved.length === 0 || parallelRoutes.length === 0) {
+    return { slots: args.slots, filledIds: [], notes: [] };
+  }
+
+  const slots = [...args.slots];
+  const loadByRoute = new Map<number, number>();
+  const lastByRoute = new Map<number, FillableRouteSlot>();
+  const countByRoute = new Map<number, number>();
+
+  for (const s of slots) {
+    const rn = s.route_nummer;
+    if (rn == null || rn < 1) continue;
+    const o = ordersById.get(s.order_id);
+    loadByRoute.set(rn, (loadByRoute.get(rn) ?? 0) + (o ? orderRouteLoad(o) : 0));
+    lastByRoute.set(rn, s);
+    countByRoute.set(rn, (countByRoute.get(rn) ?? 0) + 1);
+  }
+
+  const unpinnedRouteNums = parallelRoutes
+    .map((r, i) => ((r.orderIds?.length ?? 0) === 0 ? i + 1 : -1))
+    .filter((n) => n > 0);
+  const pinnedRouteNums = parallelRoutes
+    .map((r, i) => ((r.orderIds?.length ?? 0) > 0 ? i + 1 : -1))
+    .filter((n) => n > 0);
+
+  const pinToRoute = new Map<string, number>();
+  parallelRoutes.forEach((r, i) => {
+    for (const id of r.orderIds ?? []) pinToRoute.set(id, i + 1);
+  });
+
+  const remaining = (routeNum: number): number => {
+    const cap = Math.max(1, parallelRoutes[routeNum - 1]?.capacity ?? 0);
+    const legs = legsPerRoute.get(routeNum) ?? 1;
+    return Math.max(0, cap * legs - (loadByRoute.get(routeNum) ?? 0));
+  };
+
+  const sortByShiftThenRoom = (a: number, b: number) => {
+    const sa = parallelRoutes[a - 1]?.shift_start ?? "99:99";
+    const sb = parallelRoutes[b - 1]?.shift_start ?? "99:99";
+    if (sa !== sb) return sa.localeCompare(sb);
+    return remaining(b) - remaining(a);
+  };
+
+  /** Vrije order: eerst unpinned met ruimte; anders pinned met restcapaciteit. */
+  const candidatesForFree = (load: number): { routes: number[]; overflow: boolean } => {
+    const preferred = unpinnedRouteNums.filter((rn) => remaining(rn) >= load).sort(sortByShiftThenRoom);
+    if (preferred.length > 0) return { routes: preferred, overflow: false };
+    const overflow = pinnedRouteNums.filter((rn) => remaining(rn) >= load).sort(sortByShiftThenRoom);
+    return { routes: overflow, overflow: overflow.length > 0 };
+  };
+
+  const sorted = [...unserved].sort((a, b) => orderRouteLoad(b) - orderRouteLoad(a));
+  const filledIds: string[] = [];
+  const notes: string[] = [];
+
+  for (const order of sorted) {
+    const load = orderRouteLoad(order);
+    const pinnedRoute = pinToRoute.get(order.id);
+    let candidates: number[];
+    let asOverflow = false;
+    if (pinnedRoute != null) {
+      candidates = remaining(pinnedRoute) >= load ? [pinnedRoute] : [];
+    } else {
+      const free = candidatesForFree(load);
+      candidates = free.routes;
+      asOverflow = free.overflow;
+    }
+
+    const routeNum = candidates[0];
+    if (routeNum == null) continue;
+
+    const route = parallelRoutes[routeNum - 1]!;
+    const last = lastByRoute.get(routeNum);
+    const restBefore = remaining(routeNum);
+    const arrivalMin = last
+      ? hhmmToMinutes(last.arrivalTime) + SERVICE_TIME_MINUTES + POST_FILL_TRAVEL_MINUTES
+      : hhmmToMinutes(route.shift_start) + 30;
+    const arrivalTime = minutesToHhmm(arrivalMin);
+    const customNaam = String(route.naam ?? "").trim();
+    const routeNaam = customNaam || `Route ${routeNum}`;
+    const leg =
+      last?.leg_nummer != null && Number(last.leg_nummer) >= 1 ? Number(last.leg_nummer) : 1;
+
+    const slot: FillableRouteSlot = {
+      order_id: order.id,
+      arrivalTime,
+      aankomsttijd: maakTijdslot(arrivalTime, order.bezorgtijd_voorkeur),
+      rit_nummer: (countByRoute.get(routeNum) ?? 0) + 1,
+      route_nummer: routeNum,
+      leg_nummer: leg,
+      route_naam: routeNaam,
+    };
+
+    slots.push(slot);
+    lastByRoute.set(routeNum, slot);
+    loadByRoute.set(routeNum, (loadByRoute.get(routeNum) ?? 0) + load);
+    countByRoute.set(routeNum, (countByRoute.get(routeNum) ?? 0) + 1);
+    filledIds.push(order.id);
+    const overflowNote = asOverflow ? ", overflow op route met vaste adressen" : "";
+    notes.push(
+      `• ${order.naam ?? order.id} — alsnog op ${routeNaam} gezet (restcapaciteit ${restBefore} → ${remaining(routeNum)}${overflowNote})`
+    );
+  }
+
+  return { slots, filledIds, notes };
 }
 
 /** Verplaats handmatig gekozen orders naar hun route (behoud Routific-volgorde verder). */

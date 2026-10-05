@@ -405,10 +405,12 @@ export default function RitjesRouteControls({
             <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
               <h2 className="mb-2 text-base font-semibold text-koopje-black">Routes</h2>
               <p className="mb-4 text-sm text-koopje-black/70">
-                Stel per route vertrektijd en max. fietsen in. Via <strong>Kies adressen</strong> kun
-                je optioneel zelf bepalen welke orders op welke bezorger rijden (uit Lijst Sjoerd).
-                Laat je dat leeg, dan verdeelt Routific de stops automatisch. Elke route heeft een
-                eigen kleur.
+                Stel per route vertrektijd en <strong>max. fietsen</strong> (capaciteit per rit) in.
+                Via <strong>Kies adressen</strong> zet je orders vast op die route — die gaan bij
+                voorkeur alleen daarheen. Vrije stops vullen eerst routes zonder vaste adressen;
+                pas als die vol zijn, mag restcapaciteit van een route mét pins nog worden gevuld.
+                Past iets niet en staat “terug naar depot” uit, dan komt het in Overig. Elke route
+                heeft een eigen kleur.
               </p>
               <div className="mb-4 max-h-[40vh] space-y-3 overflow-y-auto pr-1">
                 {routes.map((row, i) => {
