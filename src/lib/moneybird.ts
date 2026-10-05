@@ -1667,7 +1667,8 @@ export function buildInvoiceDetailsFromReparatieLines(
     if (!description) continue;
     const qty = Math.max(1, Math.floor(Number(line.quantity ?? 1)));
     const unitIncl = Number(line.priceIncl);
-    if (!Number.isFinite(unitIncl) || unitIncl < 0.01) continue;
+    // €0 toegestaan (garantie / lege reparatie-factuur).
+    if (!Number.isFinite(unitIncl) || unitIncl < 0) continue;
     const { taxRateId, vatMultiplier } = resolveInvoiceTaxForTitle(description);
     details.push({
       description: `${description} (${label})`,
@@ -1703,7 +1704,18 @@ export async function upsertReparatieSalesInvoice(params: {
     params.lines,
     params.orderNummer || orderId
   );
-  if (details.length === 0) return null;
+  // Ook €0-factuur: lege details → één €0-regel zodat concept wel bestaat.
+  if (details.length === 0) {
+    const ledgerAccountId = process.env.MONEYBIRD_LEDGER_ACCOUNT_ID!.trim();
+    const { taxRateId } = resolveInvoiceTaxForTitle("Reparatie");
+    details.push({
+      description: `Reparatie (${params.orderNummer || orderId})`,
+      price: "0.00",
+      amount: "1",
+      tax_rate_id: taxRateId,
+      ledger_account_id: ledgerAccountId,
+    });
+  }
 
   const email =
     String(params.contact.email ?? "").trim().toLowerCase() ||

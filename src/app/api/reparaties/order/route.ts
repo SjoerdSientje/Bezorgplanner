@@ -5,12 +5,11 @@ import { createServerSupabaseClient } from "@/lib/supabase";
 import { defaultMeenemenInPlanning } from "@/lib/planning-date";
 import {
   buildReparatieLineItemsJson,
+  buildReparatieProductenKolom,
   buildReparatieShopifyLineItems,
   calcVoorrijkostenForAddress,
-  legacyFieldsFromOnderdelen,
+  expandReparatieRegelsFromInput,
   listReparatieStandaardItems,
-  normalizeStandaardOnderdelen,
-  productenTekstFromLineItems,
   reparatieSoortHeeftProducten,
   stripVoorrijFromRegels,
   sumLineItemsIncl,
@@ -281,36 +280,12 @@ export async function POST(request: NextRequest) {
       ? body.regels
       : [];
 
-    const expanded: ReparatieRegelInput[] = [];
-    for (const r of rawRegels) {
-      if (r.kind === "standaard" && r.standaard_id) {
-        const s = standaardById.get(String(r.standaard_id));
-        if (!s) continue;
-        const onderdelen = normalizeStandaardOnderdelen(s);
-        const legacy = legacyFieldsFromOnderdelen(onderdelen);
-        expanded.push({
-          kind: "standaard",
-          standaard_id: s.id,
-          naam: s.naam,
-          onderdeel_naam: legacy.onderdeel_naam || s.naam,
-          onderdeel_prijs_incl: legacy.onderdeel_prijs_incl,
-          shopify_product_id: legacy.shopify_product_id,
-          shopify_variant_id: legacy.shopify_variant_id,
-          onderdelen,
-          arbeid_uren: Number(s.arbeid_uren) || 0,
-        });
-      } else if (r.kind === "custom") {
-        expanded.push({
-          kind: "custom",
-          naam: String(r.naam ?? "").trim() || "Reparatie",
-          onderdeel_naam: String(r.onderdeel_naam ?? r.naam ?? "").trim(),
-          onderdeel_prijs_incl: Number(r.onderdeel_prijs_incl) || 0,
-          shopify_product_id: r.shopify_product_id ?? null,
-          shopify_variant_id: r.shopify_variant_id ?? null,
-          arbeid_uren: Number(r.arbeid_uren) || 0,
-        });
-      }
-    }
+    const expanded: ReparatieRegelInput[] = expandReparatieRegelsFromInput(
+      rawRegels,
+      standaardById
+    );
+
+    const vrijeTekst = String(body.producten_vrije_tekst ?? "").trim();
 
     let voorrijKm: number | null = null;
     let voorrijBedrag: number | null = null;
@@ -347,9 +322,16 @@ export async function POST(request: NextRequest) {
         {
           error:
             soort === "reparatie_deur"
-              ? "Voeg minstens één reparatieregel toe, of kies ‘producten nog niet bekend’."
+              ? "Voeg minstens één reparatieregel toe, of kies ‘vul vrije tekst’."
               : "Voeg minstens één reparatieregel toe.",
         },
+        { status: 400 }
+      );
+    }
+
+    if (productenNogNietBekend && !vrijeTekst) {
+      return NextResponse.json(
+        { error: "Vul vrije tekst in voor de productenkolom." },
         { status: 400 }
       );
     }
@@ -360,18 +342,24 @@ export async function POST(request: NextRequest) {
         )
       : buildReparatieShopifyLineItems(expanded);
 
-    // Placeholder-regel zodat order zichtbaar is als producten onbekend
+    // Placeholder zodat afronden-logica de order nog als “open producten” ziet.
     if (productenNogNietBekend) {
       lineItems.unshift({
-        name: "Producten nog niet bekend",
+        name: "Vrije tekst (producten later)",
         price: 0,
         quantity: 1,
-        properties: [{ name: "Status", value: "onbekend" }],
+        properties: [{ name: "Status", value: "vrije_tekst" }],
       });
     }
 
     const totaal = sumLineItemsIncl(lineItems);
-    const producten = productenTekstFromLineItems(lineItems);
+    const producten = buildReparatieProductenKolom({
+      soort,
+      vrijeTekst: productenNogNietBekend ? vrijeTekst : null,
+      regels: productenNogNietBekend
+        ? []
+        : stripVoorrijFromRegels(expanded),
+    });
     const lineItemsJson = buildReparatieLineItemsJson(lineItems);
 
     const e164 = parsePhoneE164(telefoon);
@@ -457,10 +445,14 @@ export async function POST(request: NextRequest) {
             zipcode: postcode,
             city: woonplaats,
           },
-          lines: lineItemsToInvoiceLines(
-            lineItems.filter(
-              (li) => String(li.name).toLowerCase() !== "producten nog niet bekend"
-            )
+            lines: lineItemsToInvoiceLines(
+            lineItems.filter((li) => {
+              const n = String(li.name).toLowerCase();
+              return (
+                n !== "producten nog niet bekend" &&
+                !n.startsWith("vrije tekst")
+              );
+            })
           ),
         });
         moneybirdInvoiceId = inv?.id ?? null;
@@ -614,36 +606,15 @@ export async function PATCH(request: NextRequest) {
       ? body.regels
       : [];
 
-    const expanded: ReparatieRegelInput[] = [];
-    for (const r of rawRegels) {
-      if (r.kind === "standaard" && r.standaard_id) {
-        const s = standaardById.get(String(r.standaard_id));
-        if (!s) continue;
-        const onderdelen = normalizeStandaardOnderdelen(s);
-        const legacy = legacyFieldsFromOnderdelen(onderdelen);
-        expanded.push({
-          kind: "standaard",
-          standaard_id: s.id,
-          naam: s.naam,
-          onderdeel_naam: legacy.onderdeel_naam || s.naam,
-          onderdeel_prijs_incl: legacy.onderdeel_prijs_incl,
-          shopify_product_id: legacy.shopify_product_id,
-          shopify_variant_id: legacy.shopify_variant_id,
-          onderdelen,
-          arbeid_uren: Number(s.arbeid_uren) || 0,
-        });
-      } else if (r.kind === "custom") {
-        expanded.push({
-          kind: "custom",
-          naam: String(r.naam ?? "").trim() || "Reparatie",
-          onderdeel_naam: String(r.onderdeel_naam ?? r.naam ?? "").trim(),
-          onderdeel_prijs_incl: Number(r.onderdeel_prijs_incl) || 0,
-          shopify_product_id: r.shopify_product_id ?? null,
-          shopify_variant_id: r.shopify_variant_id ?? null,
-          arbeid_uren: Number(r.arbeid_uren) || 0,
-        });
-      }
-    }
+    const expanded: ReparatieRegelInput[] = expandReparatieRegelsFromInput(
+      rawRegels,
+      standaardById
+    );
+
+    const vrijeTekst =
+      body.producten_vrije_tekst != null
+        ? String(body.producten_vrije_tekst).trim()
+        : "";
 
     let voorrijKm = existing.voorrij_km != null ? Number(existing.voorrij_km) : null;
     let voorrijBedrag =
@@ -682,6 +653,29 @@ export async function PATCH(request: NextRequest) {
       });
     }
 
+    if (
+      reparatieSoortHeeftProducten(soort) &&
+      !productenNogNietBekend &&
+      expanded.filter((r) => r.kind !== "voorrijkosten").length === 0
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            soort === "reparatie_deur"
+              ? "Voeg minstens één reparatieregel toe, of kies ‘vul vrije tekst’."
+              : "Voeg minstens één reparatieregel toe.",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (productenNogNietBekend && !vrijeTekst) {
+      return NextResponse.json(
+        { error: "Vul vrije tekst in voor de productenkolom." },
+        { status: 400 }
+      );
+    }
+
     const lineItems = productenNogNietBekend
       ? buildReparatieShopifyLineItems(
           expanded.filter((r) => r.kind === "voorrijkosten")
@@ -690,14 +684,21 @@ export async function PATCH(request: NextRequest) {
 
     if (productenNogNietBekend) {
       lineItems.unshift({
-        name: "Producten nog niet bekend",
+        name: "Vrije tekst (producten later)",
         price: 0,
         quantity: 1,
-        properties: [{ name: "Status", value: "onbekend" }],
+        properties: [{ name: "Status", value: "vrije_tekst" }],
       });
     }
 
     const totaal = sumLineItemsIncl(lineItems);
+    const producten = buildReparatieProductenKolom({
+      soort,
+      vrijeTekst: productenNogNietBekend ? vrijeTekst : null,
+      regels: productenNogNietBekend
+        ? []
+        : stripVoorrijFromRegels(expanded),
+    });
     const e164 = parsePhoneE164(telefoon);
     const mapsUrl = volledigAdres
       ? `https://maps.google.com/maps?q=${encodeURIComponent(volledigAdres)}`
@@ -727,7 +728,7 @@ export async function PATCH(request: NextRequest) {
         body.opmerking != null
           ? String(body.opmerking).trim() || null
           : existing.opmerkingen_klant,
-      producten: productenTekstFromLineItems(lineItems),
+      producten,
       line_items_json: buildReparatieLineItemsJson(lineItems),
       bestelling_totaal_prijs: Math.round(totaal * 100) / 100,
       te_betalen: Math.round(totaal * 100) / 100,
@@ -787,10 +788,13 @@ export async function PATCH(request: NextRequest) {
             city: woonplaats,
           },
           lines: lineItemsToInvoiceLines(
-            lineItems.filter(
-              (li) =>
-                String(li.name).toLowerCase() !== "producten nog niet bekend"
-            )
+            lineItems.filter((li) => {
+              const n = String(li.name).toLowerCase();
+              return (
+                n !== "producten nog niet bekend" &&
+                !n.startsWith("vrije tekst")
+              );
+            })
           ),
         });
         moneybirdInvoiceId = inv?.id ?? moneybirdInvoiceId;

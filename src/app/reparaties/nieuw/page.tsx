@@ -29,17 +29,28 @@ type DraftRegel = {
   shopify_product_id?: number | null;
   shopify_variant_id?: number | null;
   arbeid_uren: string;
+  /** Alleen voor productenkolom (niet op factuur). */
+  kolom_tekst: string;
 };
 
 function mkKey() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function patchRegel(
+  prev: DraftRegel[],
+  key: string,
+  patch: Partial<DraftRegel>
+): DraftRegel[] {
+  return prev.map((x) => (x.key === key ? { ...x, ...patch } : x));
+}
+
 export default function ReparatieNieuwPage() {
   const router = useRouter();
   const [soort, setSoort] = useState<ReparatieSoort>("reparatie_deur");
   const [betaalwijze, setBetaalwijze] = useState<ReparatieBetaalwijze>("factuur");
-  const [productenOnbekend, setProductenOnbekend] = useState(false);
+  const [vrijeTekstModus, setVrijeTekstModus] = useState(false);
+  const [vrijeTekst, setVrijeTekst] = useState("");
   const [fietsOokOpgehaald, setFietsOokOpgehaald] = useState(false);
 
   const [naam, setNaam] = useState("");
@@ -68,7 +79,7 @@ export default function ReparatieNieuwPage() {
 
   const needsProducts =
     soort === "reparatie_terugbrengen" ||
-    (soort === "reparatie_deur" && !productenOnbekend);
+    (soort === "reparatie_deur" && !vrijeTekstModus);
   const showBetaling = soort !== "reparatie_ophalen";
 
   const loadStandaard = useCallback(async () => {
@@ -208,6 +219,7 @@ export default function ReparatieNieuwPage() {
         shopify_product_id: onderdelen[0]?.shopify_product_id ?? null,
         shopify_variant_id: onderdelen[0]?.shopify_variant_id ?? null,
         arbeid_uren: String(s.arbeid_uren),
+        kolom_tekst: "",
       },
     ]);
   }
@@ -222,8 +234,22 @@ export default function ReparatieNieuwPage() {
         onderdeel_naam: "",
         onderdeel_prijs_incl: "",
         arbeid_uren: "1",
+        kolom_tekst: "",
       },
     ]);
+  }
+
+  function toggleFietsOokOpgehaald(checked: boolean) {
+    if (voorrijManual) {
+      const current = parseFloat(voorrijBedragStr.replace(",", "."));
+      if (Number.isFinite(current) && current >= 0) {
+        const next = checked
+          ? Math.round(current * 2 * 100) / 100
+          : Math.round((current / 2) * 100) / 100;
+        setVoorrijBedragStr(next.toFixed(2));
+      }
+    }
+    setFietsOokOpgehaald(checked);
   }
 
   async function submit() {
@@ -235,9 +261,13 @@ export default function ReparatieNieuwPage() {
     if (needsProducts && regels.length === 0) {
       setError(
         soort === "reparatie_deur"
-          ? "Voeg minstens één reparatieregel toe, of kies producten nog niet bekend."
+          ? "Voeg minstens één reparatieregel toe, of kies vul vrije tekst."
           : "Voeg minstens één reparatieregel toe."
       );
+      return;
+    }
+    if (soort === "reparatie_deur" && vrijeTekstModus && !vrijeTekst.trim()) {
+      setError("Vul vrije tekst in voor de productenkolom.");
       return;
     }
     setSaving(true);
@@ -245,7 +275,15 @@ export default function ReparatieNieuwPage() {
       const payloadRegels = needsProducts
         ? regels.map((r) =>
             r.mode === "standaard"
-              ? { kind: "standaard" as const, standaard_id: r.standaard_id, naam: r.naam }
+              ? {
+                  kind: "standaard" as const,
+                  standaard_id: r.standaard_id,
+                  naam: r.naam,
+                  onderdeel_prijs_incl:
+                    parseFloat(r.onderdeel_prijs_incl.replace(",", ".")) || 0,
+                  arbeid_uren: parseFloat(r.arbeid_uren.replace(",", ".")) || 0,
+                  kolom_tekst: r.kolom_tekst.trim() || null,
+                }
               : {
                   kind: "custom" as const,
                   naam: r.naam,
@@ -255,6 +293,7 @@ export default function ReparatieNieuwPage() {
                   shopify_product_id: r.shopify_product_id ?? null,
                   shopify_variant_id: r.shopify_variant_id ?? null,
                   arbeid_uren: parseFloat(r.arbeid_uren.replace(",", ".")) || 0,
+                  kolom_tekst: r.kolom_tekst.trim() || null,
                 }
           )
         : [];
@@ -266,7 +305,11 @@ export default function ReparatieNieuwPage() {
           soort,
           betaalwijze: soort === "reparatie_ophalen" ? "contant" : betaalwijze,
           producten_nog_niet_bekend:
-            productenOnbekend && soort === "reparatie_deur",
+            vrijeTekstModus && soort === "reparatie_deur",
+          producten_vrije_tekst:
+            vrijeTekstModus && soort === "reparatie_deur"
+              ? vrijeTekst.trim()
+              : undefined,
           fiets_ook_opgehaald:
             soort === "reparatie_terugbrengen" && fietsOokOpgehaald,
           naam,
@@ -326,7 +369,8 @@ export default function ReparatieNieuwPage() {
                     onClick={() => {
                       setSoort(value);
                       if (value !== "reparatie_deur") {
-                        setProductenOnbekend(false);
+                        setVrijeTekstModus(false);
+                        setVrijeTekst("");
                       }
                       if (value !== "reparatie_terugbrengen") {
                         setFietsOokOpgehaald(false);
@@ -455,7 +499,7 @@ export default function ReparatieNieuwPage() {
                   type="checkbox"
                   className="mt-0.5"
                   checked={fietsOokOpgehaald}
-                  onChange={(e) => setFietsOokOpgehaald(e.target.checked)}
+                  onChange={(e) => toggleFietsOokOpgehaald(e.target.checked)}
                 />
                 <span>
                   <span className="font-medium text-koopje-black">Fiets is ook opgehaald</span>
@@ -498,17 +542,31 @@ export default function ReparatieNieuwPage() {
               <section className="space-y-3 rounded-xl border border-koopje-black/10 p-4">
                 <h2 className="text-sm font-medium text-koopje-black">Producten / arbeid</h2>
                 {soort === "reparatie_deur" && (
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={productenOnbekend}
-                      onChange={(e) => setProductenOnbekend(e.target.checked)}
-                    />
-                    Producten nog niet bekend
-                  </label>
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={vrijeTekstModus}
+                        onChange={(e) => setVrijeTekstModus(e.target.checked)}
+                      />
+                      Vul vrije tekst
+                    </label>
+                    {vrijeTekstModus && (
+                      <label className="block text-xs text-koopje-black/70">
+                        Tekst in productenkolom (later aanpasbaar bij afronden)
+                        <textarea
+                          className="mt-1 w-full rounded-lg border border-koopje-black/20 px-2 py-1.5 text-sm"
+                          rows={2}
+                          value={vrijeTekst}
+                          onChange={(e) => setVrijeTekst(e.target.value)}
+                          placeholder="bijv. band plakken / diagnose"
+                        />
+                      </label>
+                    )}
+                  </div>
                 )}
 
-                {(soort === "reparatie_terugbrengen" || !productenOnbekend) && (
+                {(soort === "reparatie_terugbrengen" || !vrijeTekstModus) && (
                   <>
                     <div className="flex flex-wrap items-center gap-2">
                       <select
@@ -558,17 +616,40 @@ export default function ReparatieNieuwPage() {
                     )}
 
                     {regels.map((r) => (
-                      <div key={r.key} className="rounded-lg border border-stone-200 p-3 text-sm">
+                      <div key={r.key} className="space-y-2 rounded-lg border border-stone-200 p-3 text-sm">
                         {r.mode === "standaard" ? (
-                          <p>
-                            <strong>{r.naam}</strong>
-                            <span className="text-koopje-black/50">
-                              {" "}
-                              · {r.onderdeel_naam || "onderdelen"} (€{r.onderdeel_prijs_incl}) ·{" "}
-                              {r.arbeid_uren} u arbeid (€
-                              {arbeidPrijsIncl(parseFloat(r.arbeid_uren) || 0).toFixed(2)})
-                            </span>
-                          </p>
+                          <>
+                            <p>
+                              <strong>{r.naam}</strong>
+                              <span className="text-koopje-black/50">
+                                {" "}
+                                · {r.onderdeel_naam || "onderdelen"}
+                              </span>
+                            </p>
+                            <label className="block text-xs">
+                              Prijs onderdelen incl. (€0 = garantie)
+                              <input
+                                className="mt-0.5 w-full rounded border px-2 py-1.5"
+                                value={r.onderdeel_prijs_incl}
+                                onChange={(e) =>
+                                  setRegels((prev) =>
+                                    patchRegel(prev, r.key, {
+                                      onderdeel_prijs_incl: e.target.value,
+                                    })
+                                  )
+                                }
+                              />
+                            </label>
+                            <ArbeidUrenInput
+                              compact
+                              uren={r.arbeid_uren}
+                              onUrenChange={(u) =>
+                                setRegels((prev) =>
+                                  patchRegel(prev, r.key, { arbeid_uren: u })
+                                )
+                              }
+                            />
+                          </>
                         ) : (
                           <div className="space-y-2">
                             <ProductAutocomplete
@@ -584,9 +665,17 @@ export default function ReparatieNieuwPage() {
                                           ...x,
                                           onderdeel_naam: title,
                                           naam: title || x.naam,
-                                          onderdeel_prijs_incl: prijs ?? x.onderdeel_prijs_incl,
-                                          shopify_product_id: meta?.shopify_product_id ?? null,
-                                          shopify_variant_id: meta?.shopify_variant_id ?? null,
+                                          ...(prijs != null
+                                            ? { onderdeel_prijs_incl: prijs }
+                                            : {}),
+                                          ...(meta !== undefined
+                                            ? {
+                                                shopify_product_id:
+                                                  meta.shopify_product_id ?? null,
+                                                shopify_variant_id:
+                                                  meta.shopify_variant_id ?? null,
+                                              }
+                                            : {}),
                                         }
                                       : x
                                   )
@@ -594,17 +683,15 @@ export default function ReparatieNieuwPage() {
                               }}
                             />
                             <label className="block text-xs">
-                              Prijs onderdeel incl. 21%
+                              Prijs onderdeel incl. 21% (€0 = garantie)
                               <input
                                 className="mt-0.5 w-full rounded border px-2 py-1.5"
                                 value={r.onderdeel_prijs_incl}
                                 onChange={(e) =>
                                   setRegels((prev) =>
-                                    prev.map((x) =>
-                                      x.key === r.key
-                                        ? { ...x, onderdeel_prijs_incl: e.target.value }
-                                        : x
-                                    )
+                                    patchRegel(prev, r.key, {
+                                      onderdeel_prijs_incl: e.target.value,
+                                    })
                                   )
                                 }
                               />
@@ -614,17 +701,30 @@ export default function ReparatieNieuwPage() {
                               uren={r.arbeid_uren}
                               onUrenChange={(u) =>
                                 setRegels((prev) =>
-                                  prev.map((x) =>
-                                    x.key === r.key ? { ...x, arbeid_uren: u } : x
-                                  )
+                                  patchRegel(prev, r.key, { arbeid_uren: u })
                                 )
                               }
                             />
                           </div>
                         )}
+                        <label className="block text-xs text-koopje-black/70">
+                          Tekst in productenkolom (optioneel)
+                          <input
+                            className="mt-0.5 w-full rounded border px-2 py-1.5"
+                            value={r.kolom_tekst}
+                            onChange={(e) =>
+                              setRegels((prev) =>
+                                patchRegel(prev, r.key, {
+                                  kolom_tekst: e.target.value,
+                                })
+                              )
+                            }
+                            placeholder={r.naam || r.onderdeel_naam || "leeg = standaardnaam"}
+                          />
+                        </label>
                         <button
                           type="button"
-                          className="mt-2 text-xs text-red-600"
+                          className="text-xs text-red-600"
                           onClick={() =>
                             setRegels((prev) => prev.filter((x) => x.key !== r.key))
                           }

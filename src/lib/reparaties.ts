@@ -100,7 +100,147 @@ export type ReparatieRegelInput = {
   arbeid_uren?: number | null;
   /** Voorrijkosten bedrag incl. (meestal 21%). */
   voorrij_bedrag?: number | null;
+  /**
+   * Vrije tekst voor de productenkolom (niet op de factuur).
+   * Leeg → fallback op standaardnaam / onderdeelnaam.
+   */
+  kolom_tekst?: string | null;
 };
+
+/** Prefix bovenaan de productenkolom per ordertype. */
+export function reparatieSoortProductenPrefix(soort: ReparatieSoort): string {
+  switch (soort) {
+    case "reparatie_ophalen":
+      return "Ophalen:";
+    case "reparatie_deur":
+      return "Reparatie aan huis:";
+    case "reparatie_terugbrengen":
+      return "Terugbrengen:";
+    default:
+      return "Reparatie:";
+  }
+}
+
+/** Bouw productenkolom: altijd prefix, daarna vrije tekst of per-regel kolomtekst. */
+export function buildReparatieProductenKolom(params: {
+  soort: ReparatieSoort;
+  vrijeTekst?: string | null;
+  regels?: Array<{
+    kolom_tekst?: string | null;
+    naam?: string | null;
+    onderdeel_naam?: string | null;
+  }>;
+}): string {
+  const prefix = reparatieSoortProductenPrefix(params.soort);
+  const lines: string[] = [prefix];
+  const vrij = String(params.vrijeTekst ?? "").trim();
+  if (vrij) {
+    lines.push(vrij);
+    return lines.join("\n");
+  }
+  for (const r of params.regels ?? []) {
+    const custom = String(r.kolom_tekst ?? "").trim();
+    if (custom) {
+      lines.push(custom);
+      continue;
+    }
+    const fallback = String(r.naam || r.onderdeel_naam || "").trim();
+    if (fallback) lines.push(fallback);
+  }
+  return lines.join("\n");
+}
+
+/** Haal prefix weg om vrije tekst / rest terug te krijgen bij bewerken. */
+export function stripReparatieProductenPrefix(
+  producten: string | null | undefined,
+  soort: ReparatieSoort
+): string {
+  const raw = String(producten ?? "");
+  const prefix = reparatieSoortProductenPrefix(soort);
+  if (raw.startsWith(prefix)) {
+    return raw.slice(prefix.length).replace(/^\n+/, "").trim();
+  }
+  return raw.trim();
+}
+
+/** Pas totaalprijs-override toe op onderdelen zonder Shopify-ids te wijzigen. */
+export function applyOnderdelenPrijsOverride(
+  onderdelen: ReparatieOnderdeel[],
+  overrideTotal: number | null | undefined
+): ReparatieOnderdeel[] {
+  if (overrideTotal == null || !Number.isFinite(Number(overrideTotal))) {
+    return onderdelen.map((o) => ({ ...o }));
+  }
+  const target = Math.max(0, Number(overrideTotal));
+  if (onderdelen.length === 0) return [];
+  if (onderdelen.length === 1) {
+    return [{ ...onderdelen[0]!, prijs_incl: target }];
+  }
+  const sum = onderdelen.reduce((s, o) => s + (Number(o.prijs_incl) || 0), 0);
+  if (sum < 0.01) {
+    return onderdelen.map((o, i) =>
+      i === 0 ? { ...o, prijs_incl: target } : { ...o, prijs_incl: 0 }
+    );
+  }
+  return onderdelen.map((o) => ({
+    ...o,
+    prijs_incl:
+      Math.round(((Number(o.prijs_incl) || 0) / sum) * target * 100) / 100,
+  }));
+}
+
+/**
+ * Expand ruwe form-regels naar opslag/factuur-regels.
+ * Standaard: behoud Shopify-koppelingen; prijs/uren/kolom_tekst mogen overriden.
+ */
+export function expandReparatieRegelsFromInput(
+  rawRegels: ReparatieRegelInput[],
+  standaardById: Map<string, ReparatieStandaardItem>
+): ReparatieRegelInput[] {
+  const expanded: ReparatieRegelInput[] = [];
+  for (const r of rawRegels) {
+    if (r.kind === "standaard" && r.standaard_id) {
+      const s = standaardById.get(String(r.standaard_id));
+      if (!s) continue;
+      const baseOnderdelen = normalizeStandaardOnderdelen(s);
+      const hasPrijsOverride =
+        r.onderdeel_prijs_incl != null &&
+        Number.isFinite(Number(r.onderdeel_prijs_incl));
+      const onderdelen = hasPrijsOverride
+        ? applyOnderdelenPrijsOverride(baseOnderdelen, Number(r.onderdeel_prijs_incl))
+        : baseOnderdelen.map((o) => ({ ...o }));
+      const legacy = legacyFieldsFromOnderdelen(onderdelen);
+      const hasUrenOverride =
+        r.arbeid_uren != null && Number.isFinite(Number(r.arbeid_uren));
+      expanded.push({
+        kind: "standaard",
+        standaard_id: s.id,
+        naam: s.naam,
+        onderdeel_naam: legacy.onderdeel_naam || s.naam,
+        onderdeel_prijs_incl: legacy.onderdeel_prijs_incl,
+        shopify_product_id: legacy.shopify_product_id,
+        shopify_variant_id: legacy.shopify_variant_id,
+        onderdelen,
+        arbeid_uren: hasUrenOverride
+          ? Math.max(0, Number(r.arbeid_uren) || 0)
+          : Number(s.arbeid_uren) || 0,
+        kolom_tekst: String(r.kolom_tekst ?? "").trim() || null,
+      });
+    } else if (r.kind === "custom") {
+      expanded.push({
+        kind: "custom",
+        naam: String(r.naam ?? "").trim() || "Reparatie",
+        onderdeel_naam: String(r.onderdeel_naam ?? r.naam ?? "").trim(),
+        onderdeel_prijs_incl: Math.max(0, Number(r.onderdeel_prijs_incl) || 0),
+        shopify_product_id: r.shopify_product_id ?? null,
+        shopify_variant_id: r.shopify_variant_id ?? null,
+        arbeid_uren: Math.max(0, Number(r.arbeid_uren) || 0),
+        kolom_tekst: String(r.kolom_tekst ?? "").trim() || null,
+      });
+    }
+  }
+  return expanded;
+}
 
 /** Parse/normalize onderdelen uit standaarditem (nieuw of legacy enkelveld). */
 export function normalizeStandaardOnderdelen(
@@ -239,8 +379,9 @@ export function buildReparatieShopifyLineItems(regels: ReparatieRegelInput[]): S
 
     for (const o of onderdelen) {
       const naam = String(o.naam ?? "").trim();
-      const prijs = Number(o.prijs_incl ?? 0);
-      if (!naam || prijs < 0.01) continue;
+      if (!naam) continue;
+      // €0 mag (garantie) — Shopify-koppeling blijft behouden.
+      const prijs = Math.max(0, Number(o.prijs_incl ?? 0) || 0);
       out.push({
         name: naam,
         price: prijs,
@@ -394,6 +535,7 @@ export function parseStoredReparatieRegels(raw: unknown): ReparatieRegelInput[] 
           r.shopify_variant_id != null ? Number(r.shopify_variant_id) : null,
         onderdelen: parseOnderdelenInput(r.onderdelen),
         arbeid_uren: Number(r.arbeid_uren) || 0,
+        kolom_tekst: r.kolom_tekst != null ? String(r.kolom_tekst) : null,
       });
     } else if (kind === "custom") {
       out.push({
@@ -407,6 +549,7 @@ export function parseStoredReparatieRegels(raw: unknown): ReparatieRegelInput[] 
           r.shopify_variant_id != null ? Number(r.shopify_variant_id) : null,
         onderdelen: parseOnderdelenInput(r.onderdelen),
         arbeid_uren: Number(r.arbeid_uren) || 0,
+        kolom_tekst: r.kolom_tekst != null ? String(r.kolom_tekst) : null,
       });
     }
   }

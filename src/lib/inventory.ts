@@ -2548,6 +2548,7 @@ export function reparatieLineItemsForInventoryDeduction(
     if (lower.startsWith("arbeidskosten")) continue;
     if (lower.includes("voorrijkosten")) continue;
     if (lower.includes("producten nog niet bekend")) continue;
+    if (lower.startsWith("vrije tekst")) continue;
     const productId = li.product_id != null ? Number(li.product_id) : null;
     const variantId = li.variant_id != null ? Number(li.variant_id) : null;
     if (!productId && !variantId) continue;

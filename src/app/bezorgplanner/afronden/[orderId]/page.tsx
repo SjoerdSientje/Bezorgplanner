@@ -568,7 +568,7 @@ export default function AfrondenVragenlijstPage({
 
                       <p className="mb-2 text-sm font-semibold text-koopje-black">
                         {productenNogNietBekend
-                          ? "Producten nog niet bekend — vul nu in wat er is gedaan"
+                          ? "Vrije tekst — vul nu in wat er is gedaan"
                           : "Producten en arbeid controleren"}
                       </p>
                       <p className="mb-3 text-xs text-koopje-black/60">

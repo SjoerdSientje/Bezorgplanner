@@ -169,15 +169,14 @@ export default function ProductAutocomplete({
     setShowSuggestions(false);
     setSuggestions([]);
     setActiveIndex(-1);
-    const meta: ProductAutocompleteMeta | undefined =
-      item.shopify_product_id != null || item.shopify_variant_id != null
-        ? {
-            shopify_product_id: item.shopify_product_id,
-            shopify_variant_id: item.shopify_variant_id,
-          }
-        : undefined;
+    const meta: ProductAutocompleteMeta | undefined = {
+      shopify_product_id: item.shopify_product_id,
+      shopify_variant_id: item.shopify_variant_id,
+    };
     const prijs =
       item.price != null && item.price !== "" ? item.price : undefined;
+    // Altijd meta meegeven bij selectie, zodat callers ids kunnen zetten/wissen
+    // zonder bij gewoon typen de koppeling te verliezen.
     onChange(item.title, prijs, meta);
   }
 

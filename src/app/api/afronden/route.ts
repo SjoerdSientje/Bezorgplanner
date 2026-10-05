@@ -138,7 +138,7 @@ export async function POST(request: NextRequest) {
           reparatie_betaalwijze: "contant",
           producten_nog_niet_bekend: false,
           reparatie_regels_json: [],
-          producten: "Ophalen",
+          producten: "Ophalen:",
           line_items_json: buildReparatieLineItemsJson(ophalenLineItems as any),
           bestelling_totaal_prijs: 0,
           moneybird_invoice_id: null,
@@ -164,7 +164,7 @@ export async function POST(request: NextRequest) {
           {
             error:
               Boolean(order.producten_nog_niet_bekend)
-                ? "Vul eerst de gebruikte producten en arbeidsuren in (producten waren nog niet bekend)."
+                ? "Vul eerst de gebruikte producten en arbeidsuren in (er stond vrije tekst)."
                 : "Controleer of vul producten en arbeidsuren in vóór afronden.",
           },
           { status: 400 }
@@ -174,7 +174,7 @@ export async function POST(request: NextRequest) {
       const {
         buildReparatieShopifyLineItems,
         buildReparatieLineItemsJson,
-        productenTekstFromLineItems,
+        buildReparatieProductenKolom,
         sumLineItemsIncl,
       } = await import("@/lib/reparaties");
       const { upsertReparatieSalesInvoice } = await import("@/lib/moneybird");
@@ -187,6 +187,7 @@ export async function POST(request: NextRequest) {
         shopify_product_id: r.shopify_product_id != null ? Number(r.shopify_product_id) : null,
         shopify_variant_id: r.shopify_variant_id != null ? Number(r.shopify_variant_id) : null,
         arbeid_uren: Number(r.arbeid_uren) || 0,
+        kolom_tekst: r.kolom_tekst != null ? String(r.kolom_tekst) : null,
       }));
       if (order.voorrij_bedrag != null && Number(order.voorrij_bedrag) >= 0.01) {
         expanded.push({
@@ -210,7 +211,10 @@ export async function POST(request: NextRequest) {
       await supabase
         .from("orders")
         .update({
-          producten: productenTekstFromLineItems(lineItems),
+          producten: buildReparatieProductenKolom({
+            soort: "reparatie_deur",
+            regels: regelsForStore,
+          }),
           line_items_json: buildReparatieLineItemsJson(lineItems),
           bestelling_totaal_prijs: Math.round(totaal * 100) / 100,
           producten_nog_niet_bekend: false,
@@ -233,7 +237,13 @@ export async function POST(request: NextRequest) {
               address1: String(order.volledig_adres ?? ""),
             },
             lines: lineItems
-              .filter((li) => String(li.name).toLowerCase() !== "producten nog niet bekend")
+              .filter((li) => {
+                const n = String(li.name).toLowerCase();
+                return (
+                  n !== "producten nog niet bekend" &&
+                  !n.startsWith("vrije tekst")
+                );
+              })
               .map((li) => ({
                 description: String(li.name ?? ""),
                 priceIncl:
