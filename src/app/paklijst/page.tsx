@@ -22,7 +22,8 @@ interface OrderDetail {
   aankomsttijd_slot: string | null;
   telefoon_nummer: string | null;
   bestelling_totaal_prijs: number | null;
-  betaald: boolean | null;
+  al_betaald: number | null;
+  te_betalen: number | null;
   products: LineItem[];
 }
 
@@ -128,12 +129,9 @@ function ProductBlok({ item }: { item: LineItem }) {
 }
 
 function OrderBlok({ order, index }: { order: OrderDetail; index: number }) {
-  const bedrag =
-    order.bestelling_totaal_prijs != null
-      ? `€${order.bestelling_totaal_prijs.toFixed(2)}`
-      : "—";
-  const betaaldLabel =
-    order.betaald == null ? "Onbekend" : order.betaald ? "Ja" : "Nee";
+  const formatEur = (v: number | null | undefined) =>
+    v != null && Number.isFinite(v) ? `€${v.toFixed(2)}` : "—";
+  const bedrag = formatEur(order.bestelling_totaal_prijs);
 
   return (
     <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm print:break-inside-avoid print:shadow-none">
@@ -158,7 +156,15 @@ function OrderBlok({ order, index }: { order: OrderDetail; index: number }) {
           <p className="mt-1 pl-7 text-xs text-stone-500">
             Totaal bedrag: <span className="font-medium text-stone-700">{bedrag}</span>
             {" · "}
-            Betaald?: <span className="font-medium text-stone-700">{betaaldLabel}</span>
+            Al betaald:{" "}
+            <span className="font-medium text-stone-700">
+              {formatEur(order.al_betaald)}
+            </span>
+            {" · "}
+            Te betalen:{" "}
+            <span className="font-medium text-stone-700">
+              {formatEur(order.te_betalen)}
+            </span>
             {" · "}
             Telefoonnummer:{" "}
             <span className="font-medium text-stone-700">

@@ -9,7 +9,10 @@ import {
   pakketjesShopifyRelevantFieldsEqual,
   shopifyNoteSnapshot,
   buildShopifyRitjesUpdatePayload,
+  buildShopifyLineSnapshot,
+  parseShopifyLineSnapshot,
   type ShopifyOrder,
+  type ShopifyLineSnapshot,
 } from "@/lib/shopify-order";
 import { buildPakketjesRow } from "@/lib/pakketjes-sync";
 import {
@@ -34,7 +37,7 @@ import {
   isMoneybirdConfigured,
   removeMoneybirdProductForShopifyId,
   syncSalesInvoiceFromShopifyOrder,
-  deleteSalesInvoiceForShopifyOrderId,
+  creditSalesInvoiceForShopifyOrderFullRefund,
   upsertMoneybirdProductFromShopify,
 } from "@/lib/moneybird";
 import { clearInventoryPendingProduct } from "@/lib/inventory-pending";
@@ -210,9 +213,9 @@ async function removeShopifyOrderEverywhere(
 
   if (isMoneybirdConfigured()) {
     try {
-      await deleteSalesInvoiceForShopifyOrderId(shopifyOrderId);
+      await creditSalesInvoiceForShopifyOrderFullRefund(shopifyOrderId);
     } catch (mbErr) {
-      console.error("[webhooks/shopify] moneybird invoice delete:", mbErr);
+      console.error("[webhooks/shopify] moneybird invoice credit/delete:", mbErr);
     }
   }
 
@@ -239,6 +242,7 @@ async function removeShopifyOrderEverywhere(
 type RitjesInsertRow = ReturnType<typeof mapShopifyOrderToRitjesRow> & {
   owner_email: string;
   shopify_note_snapshot?: string | null;
+  shopify_line_snapshot?: ReturnType<typeof buildShopifyLineSnapshot> | null;
 };
 
 async function insertRitjesRow(
@@ -350,10 +354,28 @@ export async function POST(request: NextRequest) {
       console.error("[webhooks/shopify] inventory:", invErr);
     }
 
-    // Moneybird: create alleen bij create; draft-update alleen bij update (bestaande factuur).
+    // Moneybird: create bij create; update/edited → draft of add/credit (met vorige line-snapshot).
     if (isMoneybirdConfigured()) {
       try {
-        await syncSalesInvoiceFromShopifyOrder(supabase, order, topic);
+        let previousSnapshot: ShopifyLineSnapshot[] | null = null;
+        if (isUpdate && shopifyOrderId) {
+          const { data: snapRow } = await supabase
+            .from("orders")
+            .select("shopify_line_snapshot")
+            .eq("order_id", shopifyOrderId)
+            .eq("source", "shopify")
+            .not("shopify_line_snapshot", "is", null)
+            .limit(1)
+            .maybeSingle();
+          if (snapRow?.shopify_line_snapshot != null) {
+            previousSnapshot = parseShopifyLineSnapshot(
+              snapRow.shopify_line_snapshot
+            );
+          }
+        }
+        await syncSalesInvoiceFromShopifyOrder(supabase, order, topic, {
+          previousSnapshot,
+        });
       } catch (mbErr) {
         console.error("[webhooks/shopify] moneybird invoice:", mbErr);
       }
@@ -467,7 +489,7 @@ export async function POST(request: NextRequest) {
       const { data: existing } = await supabase
         .from("orders")
         .select(
-          "id, status, afgerond_at, mp_tags, order_nummer, type, naam, adres_url, bel_link, bezorgtijd_voorkeur, meenemen_in_planning, nieuw_appje_sturen, datum_opmerking, opmerkingen_klant, producten, bestelling_totaal_prijs, betaald, volledig_adres, telefoon_nummer, datum, aantal_fietsen, email, telefoon_e164, line_items_json, shopify_note_snapshot"
+          "id, status, afgerond_at, mp_tags, order_nummer, type, naam, adres_url, bel_link, bezorgtijd_voorkeur, meenemen_in_planning, nieuw_appje_sturen, datum_opmerking, opmerkingen_klant, producten, bestelling_totaal_prijs, betaald, al_betaald, te_betalen, volledig_adres, telefoon_nummer, datum, aantal_fietsen, email, telefoon_e164, line_items_json, shopify_note_snapshot, shopify_line_snapshot"
         )
         .eq("owner_email", ownerEmail)
         .eq("order_id", row.order_id)
@@ -493,6 +515,8 @@ export async function POST(request: NextRequest) {
         producten: row.producten,
         bestelling_totaal_prijs: row.bestelling_totaal_prijs,
         betaald: row.betaald,
+        al_betaald: row.al_betaald,
+        te_betalen: row.te_betalen,
         volledig_adres: row.volledig_adres,
         telefoon_nummer: row.telefoon_nummer,
         order_id: row.order_id,
@@ -505,6 +529,7 @@ export async function POST(request: NextRequest) {
         mp_tags: row.mp_tags,
         line_items_json: row.line_items_json,
         shopify_note_snapshot: noteSnap,
+        shopify_line_snapshot: buildShopifyLineSnapshot(order),
       };
 
       // UPDATE-pad: alleen als de order al in de bezorgplanner staat.

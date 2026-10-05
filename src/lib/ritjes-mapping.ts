@@ -16,7 +16,8 @@ export const RITJES_HEADERS = [
   "Opmerkingen klant",
   "Product(en)",
   "Bestelling Totaal Prijs",
-  "Betaald?",
+  "Al betaald",
+  "Te betalen",
   "Volledig adress",
   "Ingevuld Telefoon nummer",
   "Order ID",
@@ -40,7 +41,8 @@ export const RITJES_HEADER_TO_FIELD: Record<string, string> = {
   "Opmerkingen klant": "opmerkingen_klant",
   "Product(en)": "producten",
   "Bestelling Totaal Prijs": "bestelling_totaal_prijs",
-  "Betaald?": "betaald",
+  "Al betaald": "al_betaald",
+  "Te betalen": "te_betalen",
   "Volledig adress": "volledig_adres",
   "Ingevuld Telefoon nummer": "telefoon_nummer",
   "Order ID": "order_id",
@@ -136,30 +138,24 @@ export function compareOrdersOnRoute(
 /** Boolean-kolommen in de ritjes-tabel */
 const RITJES_BOOLEAN_FIELDS = new Set([
   "meenemen_in_planning",
-  "betaald",
 ]);
 
 /** Numeric-kolommen */
 const RITJES_NUMERIC_FIELDS = new Set([
   "bestelling_totaal_prijs",
+  "al_betaald",
+  "te_betalen",
   "aantal_fietsen",
 ]);
 
 /**
  * Bepaalt welk veld en welke waarde er naar de API moeten voor een cel-edit.
- * Voor "Betaald?": "ja"/"nee" → betaald (boolean), anders → betaalmethode (string).
  */
 export function ritjesCellToPayload(
   header: string,
   value: string
 ): Record<string, unknown> | null {
   const trimmed = value.trim();
-  if (header === "Betaald?") {
-    const lower = trimmed.toLowerCase();
-    if (lower === "ja") return { betaald: true, betaalmethode: null };
-    if (lower === "nee") return { betaald: false, betaalmethode: null };
-    return { betaalmethode: trimmed || null };
-  }
   const field = RITJES_HEADER_TO_FIELD[header];
   if (!field) return null;
   if (RITJES_BOOLEAN_FIELDS.has(field)) {
@@ -170,30 +166,33 @@ export function ritjesCellToPayload(
   }
   if (RITJES_NUMERIC_FIELDS.has(field)) {
     if (trimmed === "") return { [field]: null };
-    const num = field === "aantal_fietsen" ? parseInt(trimmed, 10) : parseFloat(trimmed.replace(",", "."));
+    const num =
+      field === "aantal_fietsen"
+        ? parseInt(trimmed, 10)
+        : parseFloat(trimmed.replace(",", "."));
     if (Number.isNaN(num)) return null;
-    return { [field]: num };
+    const payload: Record<string, unknown> = { [field]: num };
+    // Houd boolean betaald in sync bij handmatige override van te_betalen.
+    if (field === "te_betalen") {
+      payload.betaald = num < 0.01;
+    }
+    return payload;
   }
   return { [field]: trimmed || null };
 }
 
 export function ordersToTableRows(orders: RitjesOrderFromApi[]): string[][] {
-  const isMpOrder = (o: RitjesOrderFromApi): boolean => {
-    const source = String((o as any)?.source ?? "").toLowerCase();
-    if (source === "mp") return true;
-    const mpTags = String((o as any)?.mp_tags ?? "").toLowerCase();
-    return /\bmp\b/.test(mpTags);
+  const formatMoney = (v: unknown): string => {
+    if (v == null || v === "") return "";
+    const n = typeof v === "number" ? v : parseFloat(String(v).replace(",", "."));
+    if (!Number.isFinite(n)) return "";
+    return String(Math.round(n * 100) / 100);
   };
 
   return orders.map((o) =>
     RITJES_HEADERS.map((h) => {
-      if (h === "Betaald?") {
-        // We tonen altijd ja/nee in de UI; betaalmethode komt naar voren in de planning.
-        const betaald = (o as any)?.betaald === true;
-        // Voor MP orders moet dit altijd standaard "nee" zijn (tenzij expliciet betaald=true).
-        if (isMpOrder(o)) return betaald ? "ja" : "nee";
-        return betaald ? "ja" : "nee";
-      }
+      if (h === "Al betaald") return formatMoney((o as any)?.al_betaald);
+      if (h === "Te betalen") return formatMoney((o as any)?.te_betalen);
 
       if (h === "tag") {
         const v = (o as any)?.mp_tags;

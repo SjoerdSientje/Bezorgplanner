@@ -68,13 +68,35 @@ export async function GET(request: NextRequest) {
 
         const source = String(o.source ?? "");
         if (mpPaused && source === "mp") return null;
-        const betaaldBool = o.betaald === true;
-        const betaalwijze =
-          source === "mp"
-            ? "contant aan deur"
-            : betaaldBool
-              ? "was al betaald"
-              : "Factuur betaling aan deur";
+        const type = String(o.type ?? "");
+        const reparatieBetaal = String(o.reparatie_betaalwijze ?? "").toLowerCase();
+        const teBetalenNum =
+          o.te_betalen != null && Number.isFinite(Number(o.te_betalen))
+            ? Number(o.te_betalen)
+            : null;
+        const alBetaaldNum =
+          o.al_betaald != null && Number.isFinite(Number(o.al_betaald))
+            ? Number(o.al_betaald)
+            : null;
+        const betaaldBool =
+          teBetalenNum != null ? teBetalenNum < 0.01 : o.betaald === true;
+
+        let betaalwijze = "Factuur betaling aan deur";
+        if (source === "mp") {
+          betaalwijze = "contant aan deur";
+        } else if (source === "reparatie") {
+          if (type === "reparatie_ophalen") {
+            betaalwijze = "betaling na reparatie";
+          } else if (reparatieBetaal === "contant") {
+            betaalwijze = "contant aan deur";
+          } else {
+            betaalwijze = "factuur betaling aan deur";
+          }
+        } else if (betaaldBool) {
+          betaalwijze = "was al betaald";
+        } else if ((alBetaaldNum ?? 0) >= 0.01) {
+          betaalwijze = "deels betaald";
+        }
 
         const bezorgtijdVoorkeur = String(o.bezorgtijd_voorkeur ?? "").trim();
         const tijdOpmerking = bezorgtijdVoorkeur || String(slot.tijd_opmerking ?? "").trim();
@@ -96,8 +118,9 @@ export async function GET(request: NextRequest) {
           adres_url: o.adres_url ?? "",
           bel_link: o.bel_link ?? "",
           bestelling_totaal_prijs: o.bestelling_totaal_prijs ?? "",
-          betaald: o.betaald ?? false,
           betaalwijze,
+          al_betaald: alBetaaldNum ?? "",
+          te_betalen: teBetalenNum ?? "",
           aantal_fietsen: o.aantal_fietsen ?? "",
           producten: o.producten ?? "",
           line_items_json: o.line_items_json ?? "",

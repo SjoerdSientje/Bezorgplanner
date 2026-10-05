@@ -33,6 +33,8 @@ export interface Order {
   producten: string | null;
   bestelling_totaal_prijs: number | null;
   betaald: boolean | null;
+  al_betaald?: number | null;
+  te_betalen?: number | null;
   volledig_adres: string | null;
   telefoon_nummer: string | null;
   order_id: string | null;

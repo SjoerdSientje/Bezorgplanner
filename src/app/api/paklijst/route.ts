@@ -30,7 +30,8 @@ interface OrderDetail {
   aankomsttijd_slot: string | null;
   telefoon_nummer: string | null;
   bestelling_totaal_prijs: number | null;
-  betaald: boolean | null;
+  al_betaald: number | null;
+  te_betalen: number | null;
   products: LineItemFromJson[];
 }
 
@@ -212,7 +213,10 @@ export async function GET(request: NextRequest) {
           typeof order.bestelling_totaal_prijs === "number"
             ? order.bestelling_totaal_prijs
             : null,
-        betaald: typeof order.betaald === "boolean" ? order.betaald : null,
+        al_betaald:
+          typeof order.al_betaald === "number" ? order.al_betaald : null,
+        te_betalen:
+          typeof order.te_betalen === "number" ? order.te_betalen : null,
         products,
       };
     });

@@ -399,6 +399,8 @@ export async function POST(request: NextRequest) {
       ...(soort === "bezorging" && {
         nieuw_appje_sturen: true,
         betaald: false,
+        al_betaald: 0,
+        te_betalen: totaalPrijs ?? 0,
         betaalmethode: null,
         mp_tags: "MP",
         bezorgtijd_voorkeur: ((body.bezorgtijd_voorkeur ?? "").trim().toLowerCase() === "x")
@@ -414,6 +416,9 @@ export async function POST(request: NextRequest) {
         bezorger_naam: "winkelverkoop",
         betaalmethode: "contant in winkel",
         betaald_bedrag: totaalPrijs,
+        betaald: true,
+        al_betaald: totaalPrijs ?? 0,
+        te_betalen: 0,
         opmerkingen_klant: ((body.opmerking ?? "").trim().toLowerCase() === "x")
           ? "geen opmerking"
           : (body.opmerking ?? "").trim() || null,

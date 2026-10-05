@@ -17,6 +17,8 @@ const ALLOWED_KEYS = new Set([
   "producten",
   "bestelling_totaal_prijs",
   "betaald",
+  "al_betaald",
+  "te_betalen",
   "betaalmethode",
   "volledig_adres",
   "telefoon_nummer",

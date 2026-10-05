@@ -23,7 +23,8 @@ const PLANNING_HEADERS = [
   "Bel link",
   "Bestelling Totaal Prijs",
   "Betaalwijze",
-  "Betaald?",
+  "Al betaald",
+  "Te betalen",
   "Aantal fietsen",
   "Product(en)",
   "Opmerking klant",
@@ -50,7 +51,8 @@ type PlanningRow = {
   bel_link: string;
   bestelling_totaal_prijs: string | number;
   betaalwijze: string;
-  betaald: string | boolean;
+  al_betaald: string | number;
+  te_betalen: string | number;
   aantal_fietsen: string | number;
   producten: string;
   line_items_json?: string | null;
@@ -344,7 +346,8 @@ function PlanningTabel({
                     {[
                       row.bestelling_totaal_prijs,
                       row.betaalwijze,
-                      row.betaald,
+                      row.al_betaald,
+                      row.te_betalen,
                       row.aantal_fietsen,
                       row.producten,
                       row.opmerking_klant,
@@ -359,12 +362,12 @@ function PlanningTabel({
                         data-cell-row={rowIndex}
                         data-cell-col={6 + i}
                         className={`border border-stone-300 px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-koopje-orange/40 ${
-                          i === 6 ? "min-w-[22rem]" : "min-w-[4rem]"
+                          i === 7 ? "min-w-[22rem]" : "min-w-[4rem]"
                         }`}
                       >
                         {(() => {
                           // Product(en): klikbaar (popup) maar niet bewerkbaar
-                          const isProductenCol = i === 4;
+                          const isProductenCol = i === 5;
                           if (isProductenCol) {
                             return (
                               <ProductenCell
@@ -374,7 +377,7 @@ function PlanningTabel({
                             );
                           }
 
-                          const isOpmerkingCol = i === 5;
+                          const isOpmerkingCol = i === 6;
                           if (isOpmerkingCol) {
                             return <OpmerkingKlantCell value={String(row.opmerking_klant ?? "")} />;
                           }

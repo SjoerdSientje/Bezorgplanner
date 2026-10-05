@@ -36,6 +36,8 @@ export interface ShopifyLineItemProperty {
 }
 
 export interface ShopifyLineItem {
+  /** Shopify line item id (voor edit-diff / credit). */
+  id?: string | number | null;
   name?: string | null;
   /** Eenheidsprijs vóór regelkorting (REST Admin Order line_item.price). */
   price?: string | number | null;
@@ -88,6 +90,11 @@ export interface ShopifyOrder {
   shipping_lines?: ShopifyShippingLine[] | null;
   /** Huidig ordertotaal (nieuwere Shopify webhooks). */
   current_total_price?: string | number | null;
+  /**
+   * Nog openstaand bedrag (Shopify REST). Ontbreekt soms in oudere payloads.
+   * @see https://shopify.dev/docs/api/admin-rest/latest/resources/order
+   */
+  total_outstanding?: string | number | null;
 }
 
 const PRICE_LIMIT_FIETS = 500;
@@ -869,7 +876,137 @@ function getDatum(order: ShopifyOrder): string | null {
 
 /** Betaald: paid → true, anders false. We tonen later 'betaald' / 'factuur betaling aan deur'. */
 function getBetaald(order: ShopifyOrder): boolean {
-  return (order.financial_status ?? "").toLowerCase() === "paid";
+  return shopifyOrderPaymentAmounts(order).betaald;
+}
+
+/** Parse Shopify money string/number → finite number or null. */
+function parseShopifyMoney(raw: string | number | null | undefined): number | null {
+  if (raw == null || String(raw).trim() === "") return null;
+  const n = typeof raw === "number" ? raw : parseFloat(String(raw).replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Al betaald / te betalen / totaal uit Shopify-order.
+ * Primair: total_outstanding + current_total_price.
+ * Fallback: financial_status === paid → te_betalen 0.
+ */
+export function shopifyOrderPaymentAmounts(order: ShopifyOrder): {
+  totaal: number;
+  alBetaald: number;
+  teBetalen: number;
+  betaald: boolean;
+} {
+  const totaalRaw = shopifyOrderCurrentTotal(order);
+  const totaal = Math.max(0, Math.round(totaalRaw * 100) / 100);
+  const outstanding = parseShopifyMoney(order.total_outstanding);
+  const financial = String(order.financial_status ?? "").toLowerCase();
+
+  let teBetalen: number;
+  if (outstanding != null) {
+    teBetalen = Math.max(0, Math.round(outstanding * 100) / 100);
+  } else if (financial === "paid" || financial === "refunded" || financial === "voided") {
+    teBetalen = 0;
+  } else if (financial === "partially_refunded") {
+    // Zonder outstanding: we weten niet hoeveel openstaat → behoudbaar als 0 (al terugbetaald-pad).
+    teBetalen = 0;
+  } else {
+    teBetalen = totaal;
+  }
+
+  // Outstanding kan groter zijn dan current total bij rare payloads; clamp.
+  if (teBetalen > totaal + 0.009) teBetalen = totaal;
+
+  const alBetaald = Math.max(0, Math.round((totaal - teBetalen) * 100) / 100);
+  return {
+    totaal,
+    alBetaald,
+    teBetalen,
+    betaald: teBetalen < 0.01,
+  };
+}
+
+/** Compacte snapshot voor edit-diff (Moneybird add/credit). */
+export type ShopifyLineSnapshot = {
+  id: string;
+  qty: number;
+  name: string;
+  unitPrice: number;
+};
+
+export function buildShopifyLineSnapshot(order: ShopifyOrder): ShopifyLineSnapshot[] {
+  const out: ShopifyLineSnapshot[] = [];
+  for (const li of order.line_items ?? []) {
+    const id = String(li.id ?? "").trim();
+    if (!id) continue;
+    const qty = effectiveShopifyLineQuantity(li);
+    const unitPrice =
+      typeof li.price === "number"
+        ? li.price
+        : parseFloat(String(li.price ?? "0").replace(",", ".")) || 0;
+    out.push({
+      id,
+      qty: Math.max(0, qty),
+      name: String(li.name ?? "").trim(),
+      unitPrice: Number.isFinite(unitPrice) ? unitPrice : 0,
+    });
+  }
+  return out;
+}
+
+export function parseShopifyLineSnapshot(raw: unknown): ShopifyLineSnapshot[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ShopifyLineSnapshot[] = [];
+  for (const row of raw) {
+    if (!row || typeof row !== "object") continue;
+    const r = row as Record<string, unknown>;
+    const id = String(r.id ?? "").trim();
+    if (!id) continue;
+    const qty = Math.max(0, Math.round(Number(r.qty) || 0));
+    const unitPrice = Number(r.unitPrice) || 0;
+    out.push({
+      id,
+      qty,
+      name: String(r.name ?? "").trim(),
+      unitPrice: Number.isFinite(unitPrice) ? unitPrice : 0,
+    });
+  }
+  return out;
+}
+
+export type ShopifyLineDiff = {
+  additions: ShopifyLineSnapshot[];
+  removals: ShopifyLineSnapshot[];
+};
+
+/** Vergelijk snapshots: qty-up = addition, qty-down/verwijderd = removal. */
+export function diffShopifyLineSnapshots(
+  prev: ShopifyLineSnapshot[],
+  next: ShopifyLineSnapshot[]
+): ShopifyLineDiff {
+  const prevMap = new Map(prev.map((p) => [p.id, p]));
+  const nextMap = new Map(next.map((n) => [n.id, n]));
+  const additions: ShopifyLineSnapshot[] = [];
+  const removals: ShopifyLineSnapshot[] = [];
+
+  for (const n of next) {
+    const p = prevMap.get(n.id);
+    if (!p) {
+      if (n.qty > 0) additions.push({ ...n });
+      continue;
+    }
+    if (n.qty > p.qty) {
+      additions.push({ ...n, qty: n.qty - p.qty });
+    } else if (n.qty < p.qty) {
+      removals.push({ ...p, qty: p.qty - n.qty });
+    }
+  }
+  for (const p of prev) {
+    if (!nextMap.has(p.id) && p.qty > 0) {
+      removals.push({ ...p });
+    }
+  }
+  return { additions, removals };
 }
 
 export interface RitjesOrderRow {
@@ -888,6 +1025,8 @@ export interface RitjesOrderRow {
   producten: string | null;
   bestelling_totaal_prijs: number | null;
   betaald: boolean | null;
+  al_betaald: number | null;
+  te_betalen: number | null;
   volledig_adres: string | null;
   telefoon_nummer: string | null;
   order_id: string | null;
@@ -946,6 +1085,9 @@ export function buildShopifyRitjesUpdatePayload(params: {
     producten: row.producten,
     bestelling_totaal_prijs: row.bestelling_totaal_prijs,
     betaald: row.betaald,
+    al_betaald: row.al_betaald,
+    te_betalen: row.te_betalen,
+    shopify_line_snapshot: buildShopifyLineSnapshot(order),
     volledig_adres: row.volledig_adres,
     telefoon_nummer: row.telefoon_nummer,
     order_id: row.order_id,
@@ -1015,6 +1157,7 @@ export function mapShopifyOrderToRitjesRow(
   const volledigAdres = getVolledigAdres(order);
   const telefoon = getPhone(order);
   const firstName = order.customer?.first_name ?? "";
+  const payments = shopifyOrderPaymentAmounts(order);
 
   return {
     source: "shopify",
@@ -1032,8 +1175,10 @@ export function mapShopifyOrderToRitjesRow(
     datum_opmerking: noteParsed.datumOpmerking || null,
     opmerkingen_klant: noteParsed.opmerkingenKlant || null,
     producten: getProducten(order) || null,
-    bestelling_totaal_prijs: totalPriceNumber(order),
-    betaald: getBetaald(order),
+    bestelling_totaal_prijs: payments.totaal,
+    betaald: payments.betaald,
+    al_betaald: payments.alBetaald,
+    te_betalen: payments.teBetalen,
     volledig_adres: volledigAdres || null,
     telefoon_nummer: telefoon !== "geen nummer" ? telefoon : null,
     order_id: order.id != null ? String(order.id) : null,
@@ -1092,6 +1237,8 @@ export function ritjesShopifyRelevantFieldsEqual(
     producten?: string | null;
     bestelling_totaal_prijs?: number | null;
     betaald?: boolean | null;
+    al_betaald?: number | null;
+    te_betalen?: number | null;
     volledig_adres?: string | null;
     telefoon_nummer?: string | null;
     datum?: string | null;
@@ -1115,6 +1262,8 @@ export function ritjesShopifyRelevantFieldsEqual(
     strFieldEq(existing.producten, next.producten) &&
     numFieldEq(existing.bestelling_totaal_prijs, next.bestelling_totaal_prijs) &&
     boolFieldEq(existing.betaald, next.betaald) &&
+    numFieldEq(existing.al_betaald, next.al_betaald) &&
+    numFieldEq(existing.te_betalen, next.te_betalen) &&
     strFieldEq(existing.volledig_adres, next.volledig_adres) &&
     strFieldEq(existing.telefoon_nummer, next.telefoon_nummer) &&
     numFieldEq(existing.aantal_fietsen, next.aantal_fietsen) &&

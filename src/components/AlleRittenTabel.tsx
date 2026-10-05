@@ -26,6 +26,8 @@ export type AlleRittenOrder = {
   telefoon_e164?: string | null;
   email?: string | null;
   betaald?: boolean | null;
+  al_betaald?: number | null;
+  te_betalen?: number | null;
   bezorgtijd_voorkeur?: string | null;
   planning_kleur?: PlanningKleur;
   planning_opmerking?: string | null;
@@ -207,7 +209,8 @@ export default function AlleRittenTabel({
     "Opmerkingen klant",
     "Order nr.",
     "Bedrag",
-    "Betaald?",
+    "Al betaald",
+    "Te betalen",
     "Telefoon",
     "Email",
     "Voorkeurstijd",
@@ -368,11 +371,35 @@ export default function AlleRittenTabel({
                     />
                   </td>
 
-                  {/* Betaald */}
-                  <td className="border border-stone-200 px-2 py-1.5 text-center">
-                    <MeenemenToggle
-                      value={order.betaald === true}
-                      onChange={(v) => onPatch(order.id, { betaald: v })}
+                  {/* Al betaald */}
+                  <td className="border border-stone-200 px-2 py-1.5 whitespace-nowrap">
+                    <EditableCell
+                      value={typeof order.al_betaald === "number" ? String(order.al_betaald) : ""}
+                      onSave={(v) => {
+                        const num = parseFloat(v.replace(",", "."));
+                        onPatch(order.id, {
+                          al_betaald: Number.isFinite(num) ? num : null,
+                        });
+                      }}
+                      placeholder="0"
+                      className="text-stone-600"
+                    />
+                  </td>
+
+                  {/* Te betalen */}
+                  <td className="border border-stone-200 px-2 py-1.5 whitespace-nowrap">
+                    <EditableCell
+                      value={typeof order.te_betalen === "number" ? String(order.te_betalen) : ""}
+                      onSave={(v) => {
+                        const num = parseFloat(v.replace(",", "."));
+                        const te = Number.isFinite(num) ? num : null;
+                        onPatch(order.id, {
+                          te_betalen: te,
+                          betaald: te != null ? te < 0.01 : false,
+                        });
+                      }}
+                      placeholder="0"
+                      className="text-stone-600"
                     />
                   </td>
 
