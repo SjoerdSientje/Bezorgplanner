@@ -51,6 +51,15 @@ export type InventoryMutationType = "inkomend" | "uitgaand" | "correctie";
 export const LOW_STOCK_THRESHOLD = 3;
 export const INITIAL_STOCK = 10;
 
+/**
+ * PostgREST `.contains()` op jsonb-kolommen (shopify_variant_ids, moneybird_product_ids)
+ * vereist een JSON-string. Een JS-array geeft "invalid input syntax for type json"
+ * en de lookup faalt stil — Combi-Deal-varianten matchen dan niet op de voorraadregel.
+ */
+function jsonbContains(values: Array<string | number>): string {
+  return JSON.stringify(values);
+}
+
 /** Effectieve drempel: per-regel waarde, anders globale default (3). */
 export function effectiveLowStockThreshold(
   threshold: number | null | undefined
@@ -1032,7 +1041,7 @@ async function findProductForLineItem(
       .from("inventory_products")
       .select("*")
       .eq("owner_email", ownerEmail)
-      .contains("moneybird_product_ids", [moneybirdProductId])
+      .contains("moneybird_product_ids", jsonbContains([moneybirdProductId]))
       .order("stock_quantity", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -1049,12 +1058,19 @@ async function findProductForLineItem(
 
   const variantId = item.variant_id != null ? Number(item.variant_id) : NaN;
   if (Number.isFinite(variantId) && variantId > 0) {
-    const { data } = await supabase
+    const { data, error: variantContainsErr } = await supabase
       .from("inventory_products")
       .select("*")
       .eq("owner_email", ownerEmail)
-      .contains("shopify_variant_ids", [variantId])
+      .contains("shopify_variant_ids", jsonbContains([variantId]))
       .maybeSingle();
+    if (variantContainsErr) {
+      console.warn(
+        "[inventory] shopify_variant_ids contains lookup:",
+        variantContainsErr.message,
+        variantId
+      );
+    }
     if (data) return data as InventoryProductRow;
 
     const { data: legacy } = await supabase
@@ -1168,7 +1184,7 @@ export async function attachMoneybirdProductIdToInventory(
       .from("inventory_products")
       .select("id, moneybird_product_ids")
       .eq("owner_email", ownerEmail)
-      .contains("shopify_variant_ids", [variantId]);
+      .contains("shopify_variant_ids", jsonbContains([variantId]));
     for (const row of data ?? []) {
       const id = String(row.id);
       if (rowsById.has(id)) continue;
@@ -1205,7 +1221,7 @@ export async function detachMoneybirdProductIdFromInventory(
     .from("inventory_products")
     .select("id, moneybird_product_ids")
     .eq("owner_email", ownerEmail)
-    .contains("moneybird_product_ids", [mbId]);
+    .contains("moneybird_product_ids", jsonbContains([mbId]));
 
   let updated = 0;
   for (const row of data ?? []) {
@@ -2385,7 +2401,7 @@ async function enrichMoneybirdLineItemsForInventory(
       .from("inventory_products")
       .select("id")
       .eq("owner_email", ownerEmail)
-      .contains("moneybird_product_ids", [mbId])
+      .contains("moneybird_product_ids", jsonbContains([mbId]))
       .limit(1)
       .maybeSingle();
 
