@@ -42,6 +42,7 @@ type MpOrder = {
   aantal_fietsen: number | null;
   telefoon_e164: string | null;
   link_aankoopbewijs: string | null;
+  geen_garantie?: boolean | null;
 };
 
 function cel(o: MpOrder, col: string): string {
@@ -67,7 +68,8 @@ function cel(o: MpOrder, col: string): string {
     case "Email": return o.email ?? "";
     case "Aantal Fietsen": return o.aantal_fietsen != null ? String(o.aantal_fietsen) : "";
     case "Nummer in E.164": return o.telefoon_e164 ?? "";
-    case "Link Aankoopbewijs": return o.link_aankoopbewijs ?? "";
+    case "Link Aankoopbewijs":
+      return o.geen_garantie ? "geen garantie" : o.link_aankoopbewijs ?? "";
     default: return "";
   }
 }
@@ -133,6 +135,7 @@ export default function MpOrdersClient() {
             orderId={order.id}
             link={order.link_aankoopbewijs}
             email={order.email}
+            geenGarantie={Boolean(order.geen_garantie)}
             onUpdated={({ link, email }) => {
               setOrders((prev) =>
                 prev.map((o) =>

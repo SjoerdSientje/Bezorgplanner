@@ -41,8 +41,10 @@ export async function GET(request: NextRequest) {
     const list = (orders ?? []) as Array<Record<string, unknown>>;
 
     // Safety net: zorg dat elke echte MP-order in deze lijst een aankoopbewijs-link heeft.
+    // Orders met geen_garantie krijgen bewust geen aankoopbewijs.
     for (const o of list) {
       if (String(o.source ?? "").toLowerCase() === "reparatie") continue;
+      if (Boolean(o.geen_garantie)) continue;
       const hasLink = String(o.link_aankoopbewijs ?? "").trim() !== "";
       if (hasLink) continue;
       try {

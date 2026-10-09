@@ -19,6 +19,7 @@ import {
 } from "@/lib/shopify-order";
 import {
   isShopifyProductActive,
+  markShopifyOrderAsPaid,
   type ShopifyAdminProduct,
 } from "@/lib/shopify-admin";
 
@@ -147,6 +148,15 @@ export function parseShopifyOrderIdFromReference(
 ): string | null {
   const raw = String(reference ?? "").trim();
   const m = raw.match(/^shopify:(\d+)\b/i);
+  return m?.[1] ?? null;
+}
+
+/** Alleen hoofdfactuur `shopify:{id}` — geen add-/credit-referenties. */
+export function parseMainShopifyOrderIdFromInvoiceReference(
+  reference: string | null | undefined
+): string | null {
+  const raw = String(reference ?? "").trim();
+  const m = raw.match(/^shopify:(\d+)$/i);
   return m?.[1] ?? null;
 }
 
@@ -896,14 +906,19 @@ export async function updateDraftSalesInvoiceFromShopifyOrder(
 /**
  * Routeert Moneybird-factuuractie op Shopify-webhook topic.
  * - orders/create → nieuwe conceptfactuur (indien van toepassing)
- * - orders/updated | orders/edited → draft bijwerken óf add/credit bij betaald/verstuurd
+ * - orders/updated | orders/edited → draft bijwerken; bij betaald+zelfde totaal ook draft;
+ *   anders add/credit bij betaald/verstuurd
  * - daarna: auto-mail als fulfilled én totaal < €490 (alleen hoofdfactuur)
  */
 export async function syncSalesInvoiceFromShopifyOrder(
   supabase: SupabaseClient,
   order: ShopifyOrder,
   topic: string,
-  opts?: { previousSnapshot?: ShopifyLineSnapshot[] | null }
+  opts?: {
+    previousSnapshot?: ShopifyLineSnapshot[] | null;
+    /** Ordertotaal vóór deze update (bestelling_totaal_prijs uit DB). */
+    previousTotal?: number | null;
+  }
 ): Promise<MoneybirdSalesInvoice | null> {
   const normalizedTopic = topic.trim().toLowerCase();
   let invoice: MoneybirdSalesInvoice | null = null;
@@ -940,11 +955,15 @@ export async function syncSalesInvoiceFromShopifyOrder(
 
 /**
  * orders/updated|edited: onbetaalde concept → volledige update;
+ * betaald + concept + zelfde totaal → concept bijwerken (geen add/credit);
  * anders (betaald of niet-draft) → aparte add-/credit-concepten bij regelwijzigingen.
  */
 async function syncSalesInvoiceOnShopifyOrderUpdate(
   order: ShopifyOrder,
-  opts?: { previousSnapshot?: ShopifyLineSnapshot[] | null }
+  opts?: {
+    previousSnapshot?: ShopifyLineSnapshot[] | null;
+    previousTotal?: number | null;
+  }
 ): Promise<MoneybirdSalesInvoice | null> {
   if (!isMoneybirdConfigured()) {
     console.warn("[moneybird] niet geconfigureerd — factuur-update overgeslagen.");
@@ -1015,6 +1034,32 @@ async function syncSalesInvoiceOnShopifyOrderUpdate(
       );
     }
     return main;
+  }
+
+  // Betaald (of locked) maar hoofdfactuur nog concept én ordertotaal ongewijzigd:
+  // productwissel met zelfde prijs → bestaande concept bijwerken i.p.v. add-/credit-facturen.
+  // (Betaald bedrag klant blijft dan overeenkomen met de factuur.)
+  if (main != null && isDraftMoneybirdInvoice(main)) {
+    const snapTotal = (rows: ShopifyLineSnapshot[]) =>
+      rows.reduce((sum, row) => sum + row.qty * row.unitPrice, 0);
+    const prevFromOpts =
+      opts?.previousTotal != null && Number.isFinite(Number(opts.previousTotal))
+        ? Number(opts.previousTotal)
+        : null;
+    const totalsEqual =
+      prevFromOpts != null
+        ? Math.abs(payments.totaal - prevFromOpts) < 0.01
+        : previous != null &&
+          Math.abs(snapTotal(nextSnap) - snapTotal(previous)) < 0.01;
+    if (totalsEqual) {
+      console.info(
+        "[moneybird] order update — totaal ongewijzigd (€" +
+          payments.totaal.toFixed(2) +
+          "), concept bijwerken i.p.v. add/credit",
+        reference
+      );
+      return updateDraftSalesInvoiceFromShopifyOrder(order);
+    }
   }
 
   let last: MoneybirdSalesInvoice | null = main;
@@ -1831,6 +1876,112 @@ export async function deleteReparatieSalesInvoice(params: {
   });
   console.info("[moneybird] reparatie conceptfactuur verwijderd", existing.id, reference);
   return { deleted: true, invoiceId: existing.id };
+}
+
+/**
+ * Moneybird-hoofdfactuur betaald → Shopify-order + ritjes-rijen als betaald markeren.
+ * Alleen reference `shopify:{id}` (geen add/credit). Voorraad blijft via aparte deduct-path.
+ */
+export async function markOrdersPaidFromMoneybirdShopifyInvoice(
+  supabase: SupabaseClient,
+  invoice: MoneybirdSalesInvoice
+): Promise<{
+  updated: number;
+  shopifyOrderId: string | null;
+  shopifyMarked: boolean;
+  skipped?: string;
+  shopifyError?: string;
+}> {
+  const shopifyOrderId = parseMainShopifyOrderIdFromInvoiceReference(
+    invoice.reference
+  );
+  if (!shopifyOrderId) {
+    return {
+      updated: 0,
+      shopifyOrderId: null,
+      shopifyMarked: false,
+      skipped: "not_main_shopify_ref",
+    };
+  }
+
+  const state = String(invoice.state ?? "").trim().toLowerCase();
+  if (state && state !== "paid") {
+    return {
+      updated: 0,
+      shopifyOrderId,
+      shopifyMarked: false,
+      skipped: `state_${state}`,
+    };
+  }
+
+  const { data: rows, error: readErr } = await supabase
+    .from("orders")
+    .select("id, bestelling_totaal_prijs, al_betaald, te_betalen, betaald")
+    .eq("source", "shopify")
+    .eq("order_id", shopifyOrderId);
+
+  if (readErr) {
+    throw new Error(`Orders ophalen mislukt: ${readErr.message}`);
+  }
+
+  let updated = 0;
+  for (const row of rows ?? []) {
+    const totaal = Number(row.bestelling_totaal_prijs) || 0;
+    const teBetalen = Number(row.te_betalen);
+    const alreadyPaid =
+      Boolean(row.betaald) &&
+      (Number.isFinite(teBetalen) ? teBetalen < 0.01 : true);
+    if (alreadyPaid && Math.abs(Number(row.al_betaald) - totaal) < 0.01) {
+      continue;
+    }
+    const { error: updErr } = await supabase
+      .from("orders")
+      .update({
+        betaald: true,
+        al_betaald: totaal,
+        te_betalen: 0,
+      })
+      .eq("id", row.id);
+    if (updErr) {
+      console.error(
+        "[moneybird] order betaald markeren mislukt",
+        row.id,
+        updErr.message
+      );
+      continue;
+    }
+    updated += 1;
+  }
+
+  const shopifyResult = await markShopifyOrderAsPaid(shopifyOrderId);
+  if (!shopifyResult.ok && shopifyResult.error) {
+    console.error(
+      "[moneybird] Shopify markAsPaid mislukt",
+      shopifyOrderId,
+      shopifyResult.error
+    );
+  } else if (shopifyResult.ok) {
+    console.info(
+      "[moneybird] Shopify-order als betaald gemarkeerd",
+      shopifyOrderId,
+      shopifyResult.skipped ?? ""
+    );
+  }
+
+  console.info(
+    "[moneybird] ritjes betaald na Moneybird-factuur",
+    shopifyOrderId,
+    `updated=${updated}`,
+    invoice.id
+  );
+
+  return {
+    updated,
+    shopifyOrderId,
+    shopifyMarked: Boolean(shopifyResult.ok),
+    skipped: updated === 0 && shopifyResult.skipped ? shopifyResult.skipped : undefined,
+    shopifyError: shopifyResult.error,
+  };
 }
 
 /**

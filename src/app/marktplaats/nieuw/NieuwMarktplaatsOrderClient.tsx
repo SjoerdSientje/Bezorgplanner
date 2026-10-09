@@ -198,6 +198,7 @@ export default function NieuwMarktplaatsOrderClient() {
   const [success, setSuccess] = useState<string | null>(null);
   const [garantieWarning, setGarantieWarning] = useState<string | null>(null);
   const [productRules, setProductRules] = useState<ProductDefaultItemsRulesV2>(DEFAULT_PRODUCT_RULES_V2);
+  const [geenGarantie, setGeenGarantie] = useState(false);
 
   useEffect(() => {
     if (presetSoort) setSoort(presetSoort);
@@ -256,6 +257,7 @@ export default function NieuwMarktplaatsOrderClient() {
           ...form,
           totaal_prijs: String(totaalPrijsBerekend),
           producten_lijst: producten,
+          geen_garantie: geenGarantie,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -264,6 +266,7 @@ export default function NieuwMarktplaatsOrderClient() {
       if (data.garantieError) setGarantieWarning(data.garantieError);
       setForm(EMPTY);
       setProducten([defaultProduct()]);
+      setGeenGarantie(false);
       setSoort(null);
       const redirectUrl = soort === "bezorging"
         ? "/bezorgplanner/ritjes-vandaag"
@@ -347,6 +350,22 @@ export default function NieuwMarktplaatsOrderClient() {
                 {soort === "afhaal" && (
                   <Field label="Serienummer" id="serienummer" value={form.serienummer} onChange={setField} placeholder="bijv. XYZ123456" />
                 )}
+                <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-koopje-black/10 bg-white px-3 py-3">
+                  <input
+                    type="checkbox"
+                    checked={geenGarantie}
+                    onChange={(e) => setGeenGarantie(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 accent-koopje-orange"
+                  />
+                  <span>
+                    <span className="block text-sm font-medium text-koopje-black">
+                      Order heeft geen garantie
+                    </span>
+                    <span className="mt-0.5 block text-xs text-koopje-black/60">
+                      Geen aankoopbewijs naar de klant. Voorraad wordt wel gewoon afgeschreven.
+                    </span>
+                  </span>
+                </label>
                 <Field label="Naam klant" id="naam" value={form.naam} onChange={setField} placeholder="Voor- en achternaam" required />
                 <AdresAutocomplete
                   velden={{

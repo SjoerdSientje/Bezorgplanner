@@ -15,6 +15,7 @@ type OrderForAankoopbewijs = {
   bestelling_totaal_prijs: number | null;
   aantal_fietsen: number | null;
   link_aankoopbewijs: string | null;
+  geen_garantie?: boolean | null;
 };
 
 function isLikelyEmail(v: string): boolean {
@@ -60,7 +61,7 @@ export async function GET(
     const { data: order, error: readErr } = await supabase
       .from("orders")
       .select(
-        "id, owner_email, order_nummer, naam, email, producten, model, serienummer, bestelling_totaal_prijs, aantal_fietsen, link_aankoopbewijs"
+        "id, owner_email, order_nummer, naam, email, producten, model, serienummer, bestelling_totaal_prijs, aantal_fietsen, link_aankoopbewijs, geen_garantie"
       )
       .eq("id", orderId)
       .eq("owner_email", ownerEmail)
@@ -73,6 +74,7 @@ export async function GET(
       ok: true,
       email: String(order.email ?? ""),
       link_aankoopbewijs: String(order.link_aankoopbewijs ?? ""),
+      geen_garantie: Boolean(order.geen_garantie),
       pdf: toPdfDraft(order),
     });
   } catch (e) {
@@ -104,7 +106,7 @@ export async function POST(
     const { data: order, error: readErr } = await supabase
       .from("orders")
       .select(
-        "id, owner_email, order_nummer, naam, email, producten, model, serienummer, bestelling_totaal_prijs, aantal_fietsen, link_aankoopbewijs"
+        "id, owner_email, order_nummer, naam, email, producten, model, serienummer, bestelling_totaal_prijs, aantal_fietsen, link_aankoopbewijs, geen_garantie"
       )
       .eq("id", orderId)
       .eq("owner_email", ownerEmail)
@@ -115,6 +117,12 @@ export async function POST(
     }
     if (!order) {
       return NextResponse.json({ error: "Order niet gevonden." }, { status: 404 });
+    }
+    if (Boolean(order.geen_garantie)) {
+      return NextResponse.json(
+        { error: "Deze order heeft geen garantie — geen aankoopbewijs." },
+        { status: 400 }
+      );
     }
 
     const garantieLink = await verwerkGarantiebewijs(

@@ -564,3 +564,55 @@ export async function fetchInventoryCollectionProductIds(): Promise<{
     accessoireProductIds: new Set(accessoireIds),
   };
 }
+
+/**
+ * Markeer Shopify-order als betaald (outstanding → 0).
+ * Idempotent: al-betaalde orders geven userErrors die we negeren.
+ */
+export async function markShopifyOrderAsPaid(
+  shopifyOrderId: string
+): Promise<{ ok: boolean; skipped?: string; error?: string }> {
+  const id = String(shopifyOrderId ?? "").trim();
+  if (!/^\d+$/.test(id)) {
+    return { ok: false, skipped: "invalid_order_id" };
+  }
+  if (!getShopifyAdminConfig()) {
+    return { ok: false, skipped: "shopify_not_configured" };
+  }
+
+  try {
+    const data = await shopifyAdminGraphql<{
+      orderMarkAsPaid?: {
+        order?: { id?: string | null } | null;
+        userErrors?: Array<{ message?: string | null }> | null;
+      };
+    }>(
+      `mutation orderMarkAsPaid($input: OrderMarkAsPaidInput!) {
+        orderMarkAsPaid(input: $input) {
+          order { id }
+          userErrors { field message }
+        }
+      }`,
+      { input: { id: `gid://shopify/Order/${id}` } }
+    );
+
+    const errors = data.orderMarkAsPaid?.userErrors ?? [];
+    if (errors.length > 0) {
+      const msg = errors.map((e) => e.message ?? "").filter(Boolean).join("; ");
+      // Al betaald / niets openstaand → geen fout voor onze flow.
+      if (/already paid|nothing to|no outstanding|paid/i.test(msg)) {
+        return { ok: true, skipped: "already_paid" };
+      }
+      return { ok: false, error: msg || "orderMarkAsPaid userErrors" };
+    }
+    if (!data.orderMarkAsPaid?.order?.id) {
+      return { ok: false, error: "orderMarkAsPaid gaf geen order terug" };
+    }
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}

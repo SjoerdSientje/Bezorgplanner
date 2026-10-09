@@ -391,6 +391,7 @@ export async function POST(request: NextRequest) {
       serienummer: soort === "afhaal" ? ((body.serienummer ?? "").trim() || null) : null,
       model: soort === "bezorging" ? modelBerekend : null,
       line_items_json: lineItemsJson,
+      geen_garantie: Boolean(body.geen_garantie),
       datum: datumDb,
       meenemen_in_planning: soort === "bezorging"
         ? defaultMeenemenInPlanning(new Date())
@@ -475,7 +476,7 @@ export async function POST(request: NextRequest) {
     }
 
     let garantieError: string | null = null;
-    if (soort === "afhaal") {
+    if (soort === "afhaal" && !insert.geen_garantie) {
       try {
         const garantieLink = await verwerkGarantiebewijs(
           {
@@ -506,9 +507,11 @@ export async function POST(request: NextRequest) {
 
     const message =
       soort === "afhaal"
-        ? garantieError
-          ? "Order opgeslagen in MP orders. Garantiebewijs/email kon niet worden verzonden (zie waarschuwing)."
-          : "Order opgeslagen in MP orders. Garantiebewijs aangemaakt en verstuurd naar klant."
+        ? insert.geen_garantie
+          ? "Order opgeslagen in MP orders (geen garantie — geen aankoopbewijs)."
+          : garantieError
+            ? "Order opgeslagen in MP orders. Garantiebewijs/email kon niet worden verzonden (zie waarschuwing)."
+            : "Order opgeslagen in MP orders. Garantiebewijs aangemaakt en verstuurd naar klant."
         : "Order opgeslagen in Ritjes voor vandaag.";
 
     return NextResponse.json({

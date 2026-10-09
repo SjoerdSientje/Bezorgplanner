@@ -358,13 +358,13 @@ export async function POST(request: NextRequest) {
     if (isMoneybirdConfigured()) {
       try {
         let previousSnapshot: ShopifyLineSnapshot[] | null = null;
+        let previousTotal: number | null = null;
         if (isUpdate && shopifyOrderId) {
           const { data: snapRow } = await supabase
             .from("orders")
-            .select("shopify_line_snapshot")
+            .select("shopify_line_snapshot, bestelling_totaal_prijs")
             .eq("order_id", shopifyOrderId)
             .eq("source", "shopify")
-            .not("shopify_line_snapshot", "is", null)
             .limit(1)
             .maybeSingle();
           if (snapRow?.shopify_line_snapshot != null) {
@@ -372,9 +372,16 @@ export async function POST(request: NextRequest) {
               snapRow.shopify_line_snapshot
             );
           }
+          if (
+            snapRow?.bestelling_totaal_prijs != null &&
+            Number.isFinite(Number(snapRow.bestelling_totaal_prijs))
+          ) {
+            previousTotal = Number(snapRow.bestelling_totaal_prijs);
+          }
         }
         await syncSalesInvoiceFromShopifyOrder(supabase, order, topic, {
           previousSnapshot,
+          previousTotal,
         });
       } catch (mbErr) {
         console.error("[webhooks/shopify] moneybird invoice:", mbErr);

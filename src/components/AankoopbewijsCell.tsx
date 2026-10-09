@@ -7,12 +7,23 @@ type Props = {
   orderId: string;
   link: string | null | undefined;
   email: string | null | undefined;
+  geenGarantie?: boolean | null;
   onUpdated?: (next: { link: string; email: string }) => void;
 };
 
-export default function AankoopbewijsCell({ orderId, link, email, onUpdated }: Props) {
+export default function AankoopbewijsCell({
+  orderId,
+  link,
+  email,
+  geenGarantie,
+  onUpdated,
+}: Props) {
   const href = String(link ?? "").trim();
   const currentEmail = String(email ?? "").trim();
+
+  if (geenGarantie) {
+    return <span className="text-sm text-stone-500">geen garantie</span>;
+  }
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
   const [draftEmail, setDraftEmail] = useState(currentEmail);

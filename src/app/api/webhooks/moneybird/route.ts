@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { deductInventoryForMoneybirdInvoice } from "@/lib/inventory";
 import {
   fetchSalesInvoiceById,
+  markOrdersPaidFromMoneybirdShopifyInvoice,
   verifyMoneybirdWebhookSignature,
   type MoneybirdSalesInvoice,
 } from "@/lib/moneybird";
@@ -31,9 +32,18 @@ const DEDUCT_ACTIONS = new Set([
   "sales_invoice_send_si",
 ]);
 
+/** Events waarbij Shopify-order + ritjes als betaald moeten worden gezet. */
+const PAID_ACTIONS = new Set([
+  "sales_invoice_state_changed_to_paid",
+]);
+
 function isNonDraftState(state: string | null | undefined): boolean {
   const s = String(state ?? "").trim().toLowerCase();
   return Boolean(s) && s !== "draft";
+}
+
+function isPaidState(state: string | null | undefined): boolean {
+  return String(state ?? "").trim().toLowerCase() === "paid";
 }
 
 function shouldDeductForAction(
@@ -47,6 +57,10 @@ function shouldDeductForAction(
     return isNonDraftState(invoice?.state) || isNonDraftState(payloadState);
   }
   return false;
+}
+
+function shouldMarkPaidForAction(action: string): boolean {
+  return PAID_ACTIONS.has(action);
 }
 
 export async function GET() {
@@ -87,17 +101,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, skipped: "no_entity" });
     }
 
-    if (!shouldDeductForAction(action, invoice, payload.state)) {
+    const wantsDeduct = shouldDeductForAction(action, invoice, payload.state);
+    const wantsMarkPaid = shouldMarkPaidForAction(action);
+
+    if (!wantsDeduct && !wantsMarkPaid) {
       return NextResponse.json({
         ok: true,
-        skipped: "action_not_deduct",
+        skipped: "action_not_relevant",
         action: action || null,
         state: invoice?.state ?? payload.state ?? null,
       });
     }
 
-    // Webhook-entity mist soms details → full invoice uit API.
-    if (!invoice?.details?.length && entityId) {
+    // Webhook-entity mist soms details/reference → full invoice uit API.
+    if ((!invoice?.details?.length || !invoice?.reference || wantsMarkPaid) && entityId) {
       try {
         const full = await fetchSalesInvoiceById(entityId);
         if (full) invoice = full;
@@ -110,6 +127,21 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, skipped: "no_entity_after_fetch" });
     }
 
+    const doDeduct = shouldDeductForAction(action, invoice, payload.state);
+    // Alleen expliciet paid-event; state moet paid zijn (of ontbreken na incomplete payload).
+    const doMarkPaid =
+      wantsMarkPaid &&
+      (!invoice.state || isPaidState(invoice.state));
+
+    if (!doDeduct && !doMarkPaid) {
+      return NextResponse.json({
+        ok: true,
+        skipped: "action_not_relevant_after_fetch",
+        action: action || null,
+        state: invoice.state ?? null,
+      });
+    }
+
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const serviceKey =
       process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -119,12 +151,42 @@ export async function POST(request: NextRequest) {
     }
 
     const supabase = createClient(supabaseUrl, serviceKey);
-    const result = await deductInventoryForMoneybirdInvoice(supabase, invoice);
+
+    let deducted = false;
+    let skippedReason: string | null = null;
+    if (doDeduct) {
+      const result = await deductInventoryForMoneybirdInvoice(supabase, invoice);
+      deducted = result.deducted;
+      skippedReason = result.skippedReason ?? null;
+    }
+
+    let paidResult: Awaited<
+      ReturnType<typeof markOrdersPaidFromMoneybirdShopifyInvoice>
+    > | null = null;
+    if (doMarkPaid) {
+      try {
+        paidResult = await markOrdersPaidFromMoneybirdShopifyInvoice(
+          supabase,
+          invoice
+        );
+      } catch (paidErr) {
+        console.error("[webhooks/moneybird] mark paid:", paidErr);
+      }
+    }
 
     return NextResponse.json({
       ok: true,
-      deducted: result.deducted,
-      skippedReason: result.skippedReason ?? null,
+      deducted,
+      skippedReason,
+      paid: paidResult
+        ? {
+            updated: paidResult.updated,
+            shopifyOrderId: paidResult.shopifyOrderId,
+            shopifyMarked: paidResult.shopifyMarked,
+            skipped: paidResult.skipped ?? null,
+            shopifyError: paidResult.shopifyError ?? null,
+          }
+        : null,
       invoiceId: String(invoice.id),
       action: action || null,
     });

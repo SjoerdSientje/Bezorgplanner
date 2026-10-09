@@ -12,6 +12,8 @@ const PAYMENT_OPTIONS = new Set([
   "Was al betaald",
   "Factuur betaling aan deur",
   "Contant aan deur",
+  "Opgehaald",
+  "Garantie",
   "Anders",
 ]);
 const MAKE_AFRONDEN_WEBHOOK_URL =
@@ -359,8 +361,18 @@ export async function POST(request: NextRequest) {
 
     // MP-orders: verstuur aankoopbewijs na afronden met het opgegeven serienummer.
     // (Niet voor reparatie-contant die toevallig ook in mp_orders belandt.)
+    // Orders met geen_garantie krijgen bewust geen aankoopbewijs.
+    const geenGarantie = Boolean((order as { geen_garantie?: boolean | null }).geen_garantie);
     let aankoopbewijsError: string | null = null;
-    if (isRealMpOrder && serienummerInput) {
+    if (isRealMpOrder && geenGarantie) {
+      if (serienummerInput) {
+        await supabase
+          .from("orders")
+          .update({ serienummer: serienummerInput })
+          .eq("owner_email", ownerEmail)
+          .eq("id", orderId);
+      }
+    } else if (isRealMpOrder && serienummerInput) {
       const inDoos = /^in\s*doos$/i.test(serienummerInput);
       const serienummerVoorOrder = inDoos ? serienummerInput : serienummerInput;
       try {

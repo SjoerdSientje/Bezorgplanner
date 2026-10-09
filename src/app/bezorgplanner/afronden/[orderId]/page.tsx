@@ -25,6 +25,8 @@ type PaymentOption =
   | "Was al betaald"
   | "Factuur betaling aan deur"
   | "Contant aan deur"
+  | "Opgehaald"
+  | "Garantie"
   | "Anders";
 
 interface LineItemFromJson {
@@ -51,6 +53,7 @@ type OrderDetail = {
   email?: string | null;
   telefoon_nummer?: string | null;
   moneybird_invoice_id?: string | null;
+  geen_garantie?: boolean | null;
 };
 
 type ReparatieDraftRegel = {
@@ -368,6 +371,7 @@ export default function AfrondenVragenlijstPage({
 
   const isMpOrder =
     order?.source === "mp" || /^#mp/i.test(String(order?.order_nummer ?? "").trim());
+  const geenGarantie = Boolean(order?.geen_garantie);
 
   const allChecked = isReparatieDeur || checklist.every((i) => checked[i.label]);
   const needsBedrag = betaalOptie === "Factuur betaling aan deur" || betaalOptie === "Contant aan deur";
@@ -375,7 +379,8 @@ export default function AfrondenVragenlijstPage({
   const bedragOk = !needsBedrag || (betaalBedrag.trim().length > 0 && !Number.isNaN(parsedBedrag));
   const paymentOk =
     Boolean(betaalOptie) && (betaalOptie !== "Anders" || betaalAnders.trim().length > 0) && bedragOk;
-  const serienummerOk = !isMpOrder || serienummer.trim().length > 0;
+  // Bij geen garantie is serienummer optioneel (geen aankoopbewijs).
+  const serienummerOk = !isMpOrder || geenGarantie || serienummer.trim().length > 0;
 
   const reparatieSubtotaal = useMemo(() => {
     if (!isReparatieDeur || convertToOphalen) return 0;
@@ -803,6 +808,8 @@ export default function AfrondenVragenlijstPage({
                       "Was al betaald",
                       "Factuur betaling aan deur",
                       "Contant aan deur",
+                      "Opgehaald",
+                      "Garantie",
                       "Anders",
                     ] as const
                   ).map((opt) => (
@@ -856,7 +863,16 @@ export default function AfrondenVragenlijstPage({
                 )}
               </div>
 
-              {isMpOrder && (
+              {isMpOrder && geenGarantie && (
+                <div className="rounded-2xl border border-stone-200 bg-stone-50 p-5 shadow-sm">
+                  <p className="text-sm font-semibold text-koopje-black">Geen garantie</p>
+                  <p className="mt-1 text-xs text-koopje-black/60">
+                    Deze order heeft geen garantie — er wordt geen aankoopbewijs naar de klant gestuurd.
+                  </p>
+                </div>
+              )}
+
+              {isMpOrder && !geenGarantie && (
                 <div className="rounded-2xl border border-koopje-orange/30 bg-koopje-orange-light/20 p-5 shadow-sm">
                   <p className="mb-1 text-sm font-semibold text-koopje-black">Serienummer fiets</p>
                   <p className="mb-3 text-xs text-koopje-black/60">

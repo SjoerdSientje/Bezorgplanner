@@ -46,6 +46,8 @@ export interface Order {
   serienummer: string | null;
   mp_tags: string | null;
   link_aankoopbewijs: string | null;
+  /** MP-order zonder garantie → geen aankoopbewijs. */
+  geen_garantie?: boolean | null;
   route_nummer?: number | null;
   route_naam?: string | null;
   rit_nummer?: number | null;
