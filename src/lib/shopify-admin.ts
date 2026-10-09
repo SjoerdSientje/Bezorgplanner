@@ -566,6 +566,117 @@ export async function fetchInventoryCollectionProductIds(): Promise<{
 }
 
 /**
+ * Markeer Shopify-order als afgehandeld (alle open fulfillment orders fulfilled).
+ * Idempotent als er niets meer openstaat. Geen klantnotificatie.
+ */
+export async function markShopifyOrderAsFulfilled(
+  shopifyOrderId: string
+): Promise<{ ok: boolean; fulfilled: number; skipped?: string; error?: string }> {
+  const id = String(shopifyOrderId ?? "").trim();
+  if (!/^\d+$/.test(id)) {
+    return { ok: false, fulfilled: 0, skipped: "invalid_order_id" };
+  }
+  if (!getShopifyAdminConfig()) {
+    return { ok: false, fulfilled: 0, skipped: "shopify_not_configured" };
+  }
+
+  try {
+    const orderData = await shopifyAdminGraphql<{
+      order?: {
+        id?: string | null;
+        displayFulfillmentStatus?: string | null;
+        fulfillmentOrders?: {
+          nodes?: Array<{
+            id: string;
+            status?: string | null;
+          }> | null;
+        } | null;
+      } | null;
+    }>(
+      `query orderFulfillmentOrders($id: ID!) {
+        order(id: $id) {
+          id
+          displayFulfillmentStatus
+          fulfillmentOrders(first: 20) {
+            nodes { id status }
+          }
+        }
+      }`,
+      { id: `gid://shopify/Order/${id}` }
+    );
+
+    if (!orderData.order?.id) {
+      return { ok: false, fulfilled: 0, skipped: "order_not_found" };
+    }
+
+    const status = String(orderData.order.displayFulfillmentStatus ?? "").toUpperCase();
+    if (status === "FULFILLED") {
+      return { ok: true, fulfilled: 0, skipped: "already_fulfilled" };
+    }
+
+    const openStatuses = new Set(["OPEN", "IN_PROGRESS", "SCHEDULED"]);
+    const openOrders = (orderData.order.fulfillmentOrders?.nodes ?? []).filter((fo) =>
+      openStatuses.has(String(fo.status ?? "").toUpperCase())
+    );
+
+    if (openOrders.length === 0) {
+      return { ok: true, fulfilled: 0, skipped: "no_open_fulfillment_orders" };
+    }
+
+    let fulfilled = 0;
+    const errors: string[] = [];
+    for (const fo of openOrders) {
+      const result = await shopifyAdminGraphql<{
+        fulfillmentCreate?: {
+          fulfillment?: { id?: string | null } | null;
+          userErrors?: Array<{ message?: string | null }> | null;
+        };
+      }>(
+        `mutation fulfillmentCreate($fulfillment: FulfillmentInput!) {
+          fulfillmentCreate(fulfillment: $fulfillment) {
+            fulfillment { id }
+            userErrors { field message }
+          }
+        }`,
+        {
+          fulfillment: {
+            notifyCustomer: false,
+            lineItemsByFulfillmentOrder: [{ fulfillmentOrderId: fo.id }],
+          },
+        }
+      );
+
+      const userErrors = result.fulfillmentCreate?.userErrors ?? [];
+      if (userErrors.length > 0) {
+        const msg = userErrors.map((e) => e.message ?? "").filter(Boolean).join("; ");
+        if (/already|fulfilled|nothing/i.test(msg)) {
+          continue;
+        }
+        errors.push(msg || "fulfillmentCreate userErrors");
+        continue;
+      }
+      if (result.fulfillmentCreate?.fulfillment?.id) fulfilled += 1;
+    }
+
+    if (errors.length > 0 && fulfilled === 0) {
+      return { ok: false, fulfilled: 0, error: errors.join(" | ") };
+    }
+    return {
+      ok: true,
+      fulfilled,
+      skipped: fulfilled === 0 ? "nothing_fulfilled" : undefined,
+      error: errors.length ? errors.join(" | ") : undefined,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      fulfilled: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
  * Markeer Shopify-order als betaald (outstanding → 0).
  * Idempotent: al-betaalde orders geven userErrors die we negeren.
  */

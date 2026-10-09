@@ -437,8 +437,8 @@ export async function POST(request: NextRequest) {
 
     // Voorraad bij afronden:
     // - Echte MP-orders: reservering committen (aftrekken).
-    // - Shopify-orders (ook met mp-tags): committen/clearen via Shopify-id,
-    //   nooit via marktplaats-key (die matcht de reservering niet).
+    // - Shopify < €490: committen via Shopify-id (ook al vaak via fulfilled).
+    // - Shopify ≥ €490: níet hier — voorraad pas bij handmatig versturen Moneybird-factuur.
     try {
       if (orderSource === "mp") {
         const { commitInventoryForMpOrder } = await import(
@@ -451,55 +451,103 @@ export async function POST(request: NextRequest) {
           String((order as { order_nummer?: string | null }).order_nummer ?? orderId)
         );
       } else if (orderSource === "shopify") {
-        const shopifyOrderId = String(
-          (order as { order_id?: string | null }).order_id ?? ""
-        ).trim();
-        if (shopifyOrderId) {
-          const { commitReservationsForOrder } = await import(
-            "@/lib/inventory-reservations"
+        const { AUTO_FINALIZE_INVOICE_BELOW_EUR } = await import("@/lib/moneybird");
+        const totaal = Number(
+          (order as { bestelling_totaal_prijs?: number | null }).bestelling_totaal_prijs
+        );
+        const skipForLargeInvoice =
+          Number.isFinite(totaal) && totaal >= AUTO_FINALIZE_INVOICE_BELOW_EUR;
+
+        if (skipForLargeInvoice) {
+          console.info(
+            "[api/afronden] Shopify ≥€" +
+              AUTO_FINALIZE_INVOICE_BELOW_EUR +
+              " — voorraad niet bij afronden (wacht op handmatige factuur)",
+            orderId,
+            totaal
           );
-          const { buildInventoryDeductionLineItems } = await import(
-            "@/lib/inventory"
-          );
-          const { loadProductDefaultItemsRules } = await import(
-            "@/lib/product-rules-server"
-          );
-          let lineItemsFallback: Array<{
-            name?: string | null;
-            quantity?: number | null;
-            product_id?: string | number | null;
-            variant_id?: string | number | null;
-          }> = [];
-          try {
-            const raw = (order as { line_items_json?: unknown }).line_items_json;
-            const parsed =
-              typeof raw === "string"
-                ? (JSON.parse(raw) as unknown)
-                : raw;
-            if (Array.isArray(parsed)) {
-              const rules = await loadProductDefaultItemsRules(supabase, ownerEmail);
-              lineItemsFallback = buildInventoryDeductionLineItems(
-                parsed as Parameters<typeof buildInventoryDeductionLineItems>[0],
-                rules
-              );
+        } else {
+          const shopifyOrderId = String(
+            (order as { order_id?: string | null }).order_id ?? ""
+          ).trim();
+          if (shopifyOrderId) {
+            const { commitReservationsForOrder } = await import(
+              "@/lib/inventory-reservations"
+            );
+            const { buildInventoryDeductionLineItems } = await import(
+              "@/lib/inventory"
+            );
+            const { loadProductDefaultItemsRules } = await import(
+              "@/lib/product-rules-server"
+            );
+            let lineItemsFallback: Array<{
+              name?: string | null;
+              quantity?: number | null;
+              product_id?: string | number | null;
+              variant_id?: string | number | null;
+            }> = [];
+            try {
+              const raw = (order as { line_items_json?: unknown }).line_items_json;
+              const parsed =
+                typeof raw === "string"
+                  ? (JSON.parse(raw) as unknown)
+                  : raw;
+              if (Array.isArray(parsed)) {
+                const rules = await loadProductDefaultItemsRules(supabase, ownerEmail);
+                lineItemsFallback = buildInventoryDeductionLineItems(
+                  parsed as Parameters<typeof buildInventoryDeductionLineItems>[0],
+                  rules
+                );
+              }
+            } catch {
+              // fallback leeg → alleen bestaande reserveringsrijen
             }
-          } catch {
-            // fallback leeg → alleen bestaande reserveringsrijen
+            await commitReservationsForOrder(supabase, {
+              ownerEmail,
+              source: "shopify",
+              externalOrderId: shopifyOrderId,
+              orderReference: String(
+                (order as { order_nummer?: string | null }).order_nummer ??
+                  shopifyOrderId
+              ),
+              lineItemsFallback,
+            });
           }
-          await commitReservationsForOrder(supabase, {
-            ownerEmail,
-            source: "shopify",
-            externalOrderId: shopifyOrderId,
-            orderReference: String(
-              (order as { order_nummer?: string | null }).order_nummer ??
-                shopifyOrderId
-            ),
-            lineItemsFallback,
-          });
         }
       }
     } catch (invErr) {
       console.error("[api/afronden] inventory commit:", invErr);
+    }
+
+    // Shopify: bij afronden order als afgehandeld (fulfilled) zetten.
+    if (orderSource === "shopify") {
+      const shopifyOrderId = String(
+        (order as { order_id?: string | null }).order_id ?? ""
+      ).trim();
+      if (shopifyOrderId) {
+        try {
+          const { markShopifyOrderAsFulfilled } = await import(
+            "@/lib/shopify-admin"
+          );
+          const fulfillRes = await markShopifyOrderAsFulfilled(shopifyOrderId);
+          if (!fulfillRes.ok) {
+            console.error(
+              "[api/afronden] Shopify fulfill mislukt",
+              shopifyOrderId,
+              fulfillRes.error ?? fulfillRes.skipped
+            );
+          } else {
+            console.info(
+              "[api/afronden] Shopify-order afgehandeld",
+              shopifyOrderId,
+              `fulfilled=${fulfillRes.fulfilled}`,
+              fulfillRes.skipped ?? ""
+            );
+          }
+        } catch (fulfillErr) {
+          console.error("[api/afronden] Shopify fulfill:", fulfillErr);
+        }
+      }
     }
 
     // Controleer hoeveel slots er zijn vóór delete (voor debuggen).
