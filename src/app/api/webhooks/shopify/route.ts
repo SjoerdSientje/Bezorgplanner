@@ -11,6 +11,7 @@ import {
   buildShopifyRitjesUpdatePayload,
   buildShopifyLineSnapshot,
   parseShopifyLineSnapshot,
+  shopifyOrderPaymentAmounts,
   type ShopifyOrder,
   type ShopifyLineSnapshot,
 } from "@/lib/shopify-order";
@@ -147,58 +148,72 @@ async function handleProductWebhook(
 
 /**
  * Verwijder Shopify-order uit ritjes/pakketjes.
- * Conceptfactuur weg; alleen openstaande reserveringen vrijgeven (geen stock-restore
- * als de factuur al is verzonden / voorraad al is afgeschreven).
+ * Moneybird: onbetaald → concept weg; betaald → concept laten + full credit.
+ * Alleen openstaande reserveringen vrijgeven (geen stock-restore na factuur-send).
  */
 async function removeShopifyOrderEverywhere(
   supabase: SupabaseClient,
   shopifyOrderId: string,
   orderForInventory: ShopifyOrder | null
 ): Promise<void> {
-  // orders/deleted stuurt vaak alleen { id }. Haal naam/line items uit DB voor correcte restore.
+  // orders/deleted stuurt vaak alleen { id }. Haal naam/line items/betaling uit DB.
   let orderPayload: ShopifyOrder | null = orderForInventory;
-  if (!orderPayload?.name || !(orderPayload.line_items?.length)) {
+  let wasPaidFromDb = false;
+  {
     const { data: dbOrder } = await supabase
       .from("orders")
-      .select("order_nummer, line_items_json, producten")
+      .select(
+        "order_nummer, line_items_json, producten, betaald, al_betaald, te_betalen"
+      )
       .eq("order_id", shopifyOrderId)
       .eq("source", "shopify")
       .limit(1)
       .maybeSingle();
 
     if (dbOrder) {
-      const synthetic: ShopifyOrder = {
-        id: shopifyOrderId,
-        name: String(dbOrder.order_nummer ?? shopifyOrderId),
-        line_items: [],
-      };
-      try {
-        const parsed = JSON.parse(String(dbOrder.line_items_json ?? "[]"));
-        if (Array.isArray(parsed)) {
-          synthetic.line_items = parsed.map((li: { name?: string; quantity?: number }) => ({
-            name: String(li.name ?? ""),
-            quantity: Math.max(1, Number(li.quantity ?? 1) || 1),
-          }));
+      const teBetalen = Number(dbOrder.te_betalen);
+      const alBetaald = Number(dbOrder.al_betaald);
+      wasPaidFromDb =
+        Boolean(dbOrder.betaald) ||
+        (Number.isFinite(alBetaald) && alBetaald >= 0.01) ||
+        (Number.isFinite(teBetalen) && teBetalen < 0.01 && alBetaald > 0);
+
+      if (!orderPayload?.name || !(orderPayload.line_items?.length)) {
+        const synthetic: ShopifyOrder = {
+          id: shopifyOrderId,
+          name: String(dbOrder.order_nummer ?? shopifyOrderId),
+          line_items: [],
+        };
+        try {
+          const parsed = JSON.parse(String(dbOrder.line_items_json ?? "[]"));
+          if (Array.isArray(parsed)) {
+            synthetic.line_items = parsed.map(
+              (li: { name?: string; quantity?: number }) => ({
+                name: String(li.name ?? ""),
+                quantity: Math.max(1, Number(li.quantity ?? 1) || 1),
+              })
+            );
+          }
+        } catch {
+          // ignore
         }
-      } catch {
-        // ignore
+        if (!synthetic.line_items?.length && dbOrder.producten) {
+          synthetic.line_items = String(dbOrder.producten)
+            .split("\n")
+            .map((n) => n.trim())
+            .filter(Boolean)
+            .map((name) => ({ name, quantity: 1 }));
+        }
+        orderPayload = {
+          ...synthetic,
+          ...(orderForInventory ?? {}),
+          id: shopifyOrderId,
+          name: orderForInventory?.name ?? synthetic.name,
+          line_items: orderForInventory?.line_items?.length
+            ? orderForInventory.line_items
+            : synthetic.line_items,
+        };
       }
-      if (!synthetic.line_items?.length && dbOrder.producten) {
-        synthetic.line_items = String(dbOrder.producten)
-          .split("\n")
-          .map((n) => n.trim())
-          .filter(Boolean)
-          .map((name) => ({ name, quantity: 1 }));
-      }
-      orderPayload = {
-        ...synthetic,
-        ...(orderForInventory ?? {}),
-        id: shopifyOrderId,
-        name: orderForInventory?.name ?? synthetic.name,
-        line_items: orderForInventory?.line_items?.length
-          ? orderForInventory.line_items
-          : synthetic.line_items,
-      };
     }
   }
 
@@ -213,7 +228,15 @@ async function removeShopifyOrderEverywhere(
 
   if (isMoneybirdConfigured()) {
     try {
-      await creditSalesInvoiceForShopifyOrderFullRefund(shopifyOrderId);
+      const payments = orderForInventory
+        ? shopifyOrderPaymentAmounts(orderForInventory)
+        : null;
+      const wasPaidFromShopify = Boolean(
+        payments && (payments.betaald || payments.alBetaald >= 0.01)
+      );
+      await creditSalesInvoiceForShopifyOrderFullRefund(shopifyOrderId, {
+        wasPaid: wasPaidFromShopify || wasPaidFromDb,
+      });
     } catch (mbErr) {
       console.error("[webhooks/shopify] moneybird invoice credit/delete:", mbErr);
     }

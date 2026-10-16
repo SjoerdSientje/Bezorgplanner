@@ -1236,10 +1236,14 @@ async function createPartialCreditFromRemovals(
 }
 
 /**
- * Volledige refund/cancel: concept verwijderen, anders full credit (draft) aanmaken.
+ * Volledige refund/cancel:
+ * - onbetaald + concept → concept verwijderen
+ * - betaald (ook als concept) → concept laten staan, full credit-concept aanmaken
+ * - niet-concept (verstuurd) → full credit-concept (ongeacht betaling)
  */
 export async function creditSalesInvoiceForShopifyOrderFullRefund(
-  shopifyOrderId: string
+  shopifyOrderId: string,
+  opts?: { wasPaid?: boolean }
 ): Promise<{
   credited: boolean;
   deleted?: boolean;
@@ -1261,7 +1265,11 @@ export async function creditSalesInvoiceForShopifyOrderFullRefund(
   }
 
   const full = (await fetchSalesInvoiceById(existing.id)) ?? existing;
-  if (isDraftMoneybirdInvoice(full)) {
+  const wasPaid = Boolean(opts?.wasPaid);
+  const isDraft = isDraftMoneybirdInvoice(full);
+
+  // Onbetaald concept: weghalen. Betaald concept blijft staan + credit hieronder.
+  if (isDraft && !wasPaid) {
     const del = await deleteSalesInvoiceForShopifyOrderId(id);
     return {
       credited: false,
@@ -1318,7 +1326,8 @@ export async function creditSalesInvoiceForShopifyOrderFullRefund(
       "[moneybird] full credit-concept aangemaakt",
       updated.id ?? duplicated.id,
       creditRef,
-      `van ${full.id}`
+      `van ${full.id}`,
+      wasPaid ? "(betaalde order)" : "(niet-concept)"
     );
     return {
       credited: true,
