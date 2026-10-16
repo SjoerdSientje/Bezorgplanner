@@ -2350,11 +2350,12 @@ type MoneybirdInvoiceInput = {
   details?: MoneybirdInvoiceDetailInput[] | null;
 };
 
+/** Alleen hoofdfactuur `shopify:{id}` — add/credit/correctie committen geen voorraad. */
 function parseShopifyOrderIdFromInvoiceReference(
   reference: string | null | undefined
 ): string | null {
   const raw = String(reference ?? "").trim();
-  const m = raw.match(/^shopify:(\d+)\b/i);
+  const m = raw.match(/^shopify:(\d+)$/i);
   return m?.[1] ?? null;
 }
 

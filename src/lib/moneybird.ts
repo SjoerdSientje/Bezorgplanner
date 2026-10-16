@@ -218,8 +218,8 @@ async function findSalesInvoiceByReference(
 
 async function findSalesInvoiceByReferenceWithRetry(
   reference: string,
-  attempts = 8,
-  delayMs = 400
+  attempts = 3,
+  delayMs = 250
 ): Promise<MoneybirdSalesInvoice | null> {
   for (let i = 0; i < attempts; i++) {
     const found = await findSalesInvoiceByReference(reference);
@@ -579,6 +579,29 @@ async function buildInvoiceDetailsInternal(
     });
   }
 
+  // Prefetch Moneybird product-ids parallel (niet N× sequentieel).
+  const productIdsToPrefetch = new Set<string>();
+  if (opts.mode === "snapshots") {
+    const byIdPrefetch = new Map(
+      (order.line_items ?? []).map((li) => [String(li.id ?? "").trim(), li])
+    );
+    for (const snap of opts.snapshots) {
+      const li = byIdPrefetch.get(snap.id);
+      const pid = String(li?.product_id ?? "").trim();
+      if (pid && pid !== "0") productIdsToPrefetch.add(pid);
+    }
+  } else {
+    for (const li of order.line_items ?? []) {
+      const pid = String(li.product_id ?? "").trim();
+      if (pid && pid !== "0") productIdsToPrefetch.add(pid);
+    }
+  }
+  await Promise.all(
+    Array.from(productIdsToPrefetch).map((pid) =>
+      moneybirdProductIdForShopifyProduct(pid)
+    )
+  );
+
   if (opts.mode === "snapshots") {
     const byId = new Map(
       (order.line_items ?? []).map((li) => [String(li.id ?? "").trim(), li])
@@ -824,12 +847,41 @@ function invoiceDetailsUnchanged(
   );
 }
 
+/** Schaal factuurregel-prijzen (excl.) zodat som incl. ≈ targetIncl. */
+function scaleInvoiceDetailsToTargetIncl(
+  details: MoneybirdInvoiceDetailPayload[],
+  targetIncl: number
+): MoneybirdInvoiceDetailPayload[] {
+  if (!(targetIncl >= 0.01) || details.length === 0) return details;
+  const current = details.reduce((sum, d) => sum + invoiceDetailLineTotalIncl(d), 0);
+  if (!(current >= 0.01) || Math.abs(current - targetIncl) < 0.01) return details;
+  const factor = targetIncl / current;
+  return details.map((d) => ({
+    ...d,
+    price: ((parseFloat(d.price) || 0) * factor).toFixed(2),
+  }));
+}
+
+function correctionKenmerkForMainInvoice(main: MoneybirdSalesInvoice): string {
+  const num =
+    String(main.invoice_id ?? "").trim() ||
+    String(main.id ?? "").trim() ||
+    "onbekend";
+  return `correctie factuur ${num}`;
+}
+
+function shopifyCorrectionReference(shopifyOrderId: string): string {
+  return `shopify:${shopifyOrderId}:correctie`;
+}
+
 /**
  * orders/updated: alleen bestaande conceptfactuur bijwerken — nooit een nieuwe aanmaken.
  * Alleen PATCH als regels/contact echt wijzigen t.o.v. de huidige conceptfactuur.
+ * @param lockTotalIncl als gezet: nieuwe producten, maar prijzen geschaald naar dit totaal (betaalde concept).
  */
 export async function updateDraftSalesInvoiceFromShopifyOrder(
-  order: ShopifyOrder
+  order: ShopifyOrder,
+  opts?: { lockTotalIncl?: number | null }
 ): Promise<MoneybirdSalesInvoice | null> {
   if (!isMoneybirdConfigured()) {
     console.warn("[moneybird] niet geconfigureerd — factuur-update overgeslagen.");
@@ -839,7 +891,15 @@ export async function updateDraftSalesInvoiceFromShopifyOrder(
   const shopifyOrderId = String(order.id ?? "").trim();
   if (!shopifyOrderId) return null;
 
-  if (isZeroInvoiceTotal(shopifyOrderBillableTotalIncl(order))) {
+  const lockTotal =
+    opts?.lockTotalIncl != null && Number.isFinite(Number(opts.lockTotalIncl))
+      ? Number(opts.lockTotalIncl)
+      : null;
+
+  if (
+    lockTotal == null &&
+    isZeroInvoiceTotal(shopifyOrderBillableTotalIncl(order))
+  ) {
     console.info(
       "[moneybird] order update totaal €0 — geen factuurwijziging",
       shopifyOrderId,
@@ -871,10 +931,13 @@ export async function updateDraftSalesInvoiceFromShopifyOrder(
     return full;
   }
 
-  const details = await buildInvoiceDetailsFromShopifyOrder(order);
+  let details = await buildInvoiceDetailsFromShopifyOrder(order);
   if (!details) {
     console.warn("[moneybird] order update — geen factuurregels", shopifyOrderId);
     return null;
+  }
+  if (lockTotal != null && lockTotal >= 0.01) {
+    details = scaleInvoiceDetailsToTargetIncl(details, lockTotal);
   }
 
   const contact = await findOrCreateContactForShopifyOrder(order);
@@ -1059,7 +1122,7 @@ export async function syncSalesInvoiceFromShopifyOrder(
     normalizedTopic === "orders/updated" ||
     normalizedTopic === "orders/edited"
   ) {
-    invoice = await syncSalesInvoiceOnShopifyOrderUpdate(order, opts);
+    invoice = await syncSalesInvoiceOnShopifyOrderUpdate(supabase, order, opts);
   } else if (normalizedTopic === "orders/create") {
     invoice = await createSalesInvoiceFromShopifyOrder(supabase, order);
   } else {
@@ -1104,10 +1167,12 @@ export async function syncSalesInvoiceFromShopifyOrder(
 
 /**
  * orders/updated|edited: onbetaalde concept → volledige update;
- * betaald + concept + zelfde totaal → concept bijwerken (geen add/credit);
- * anders (betaald of niet-draft) → aparte add-/credit-concepten bij regelwijzigingen.
+ * betaald + concept + zelfde totaal → concept bijwerken;
+ * betaald + concept + ander totaal → concept (nieuwe producten, oude totaal) + delta-correctie;
+ * verstuurde hoofdfactuur → add-/credit-concepten bij regelwijzigingen.
  */
 async function syncSalesInvoiceOnShopifyOrderUpdate(
+  supabase: SupabaseClient,
   order: ShopifyOrder,
   opts?: {
     previousSnapshot?: ShopifyLineSnapshot[] | null;
@@ -1125,9 +1190,18 @@ async function syncSalesInvoiceOnShopifyOrderUpdate(
   const payments = shopifyOrderPaymentAmounts(order);
   const reference = shopifyReferenceForOrderId(shopifyOrderId);
   const existing = await findSalesInvoiceByReference(reference);
-  const main = existing?.id
+  let main = existing?.id
     ? ((await fetchSalesInvoiceById(existing.id)) ?? existing)
     : null;
+
+  // Missende hoofdfactuur (create timeout/lock): alsnog aanmaken op update.
+  if (!main) {
+    console.info(
+      "[moneybird] order update — geen hoofdfactuur, create alsnog",
+      reference
+    );
+    return createSalesInvoiceFromShopifyOrder(supabase, order);
+  }
 
   const nextSnap = buildShopifyLineSnapshot(order);
   const previous = opts?.previousSnapshot;
@@ -1141,7 +1215,6 @@ async function syncSalesInvoiceOnShopifyOrderUpdate(
     diff != null && diff.additions.length === 0 && diff.removals.length === 0;
 
   const unpaidDraft =
-    main != null &&
     isDraftMoneybirdInvoice(main) &&
     payments.alBetaald < 0.01;
 
@@ -1159,12 +1232,11 @@ async function syncSalesInvoiceOnShopifyOrderUpdate(
 
   const lockedOrPaid =
     payments.alBetaald >= 0.01 ||
-    (main != null && !isDraftMoneybirdInvoice(main));
+    !isDraftMoneybirdInvoice(main);
 
   if (!lockedOrPaid) {
-    // Geen hoofdfactuur + niets betaald → geen create op update.
     console.info(
-      "[moneybird] order update — geen hoofdfactuur/lock-pad, skip",
+      "[moneybird] order update — geen lock-pad, skip",
       reference
     );
     return null;
@@ -1185,9 +1257,10 @@ async function syncSalesInvoiceOnShopifyOrderUpdate(
     return main;
   }
 
-  // Betaald (of locked) maar hoofdfactuur nog concept én ordertotaal ongewijzigd:
-  // productwissel met zelfde prijs → bestaande concept bijwerken i.p.v. add-/credit-facturen.
-  // (Betaald bedrag klant blijft dan overeenkomen met de factuur.)
+  // Betaald + hoofdfactuur nog concept:
+  // - totaal gelijk → concept volledig bijwerken
+  // - totaal wijzigt → concept bijwerken met nieuwe producten maar oude totaalprijs,
+  //   plus correctiefactuur voor alleen het verschil (negatief = credit).
   if (main != null && isDraftMoneybirdInvoice(main)) {
     const snapTotal = (rows: ShopifyLineSnapshot[]) =>
       rows.reduce((sum, row) => sum + row.qty * row.unitPrice, 0);
@@ -1195,22 +1268,70 @@ async function syncSalesInvoiceOnShopifyOrderUpdate(
       opts?.previousTotal != null && Number.isFinite(Number(opts.previousTotal))
         ? Number(opts.previousTotal)
         : null;
+    const previousTotal =
+      prevFromOpts ??
+      (previous != null ? snapTotal(previous) : null);
+    const newTotal = payments.totaal;
     const totalsEqual =
-      prevFromOpts != null
-        ? Math.abs(payments.totaal - prevFromOpts) < 0.01
-        : previous != null &&
-          Math.abs(snapTotal(nextSnap) - snapTotal(previous)) < 0.01;
-    if (totalsEqual) {
+      previousTotal != null &&
+      Number.isFinite(previousTotal) &&
+      Number.isFinite(newTotal) &&
+      Math.abs(newTotal - previousTotal) < 0.01;
+
+    if (totalsEqual || previousTotal == null) {
       console.info(
-        "[moneybird] order update — totaal ongewijzigd (€" +
-          payments.totaal.toFixed(2) +
-          "), concept bijwerken i.p.v. add/credit",
-        reference
+        "[moneybird] order update — concept bijwerken",
+        reference,
+        totalsEqual ? `(totaal ongewijzigd €${newTotal.toFixed(2)})` : "(geen vorig totaal)"
       );
       return updateDraftSalesInvoiceFromShopifyOrder(order);
     }
+
+    const deltaIncl = Math.round((newTotal - previousTotal) * 100) / 100;
+    console.info(
+      "[moneybird] order update — concept + correctie delta",
+      reference,
+      `was €${previousTotal.toFixed(2)} → €${newTotal.toFixed(2)}`,
+      `(Δ €${deltaIncl.toFixed(2)})`
+    );
+
+    const updatedMain = await updateDraftSalesInvoiceFromShopifyOrder(order, {
+      lockTotalIncl: previousTotal,
+    });
+    const mainForCorr = updatedMain ?? main;
+
+    // Totaal omhoog → nieuw product op correctie (én op hoofdconcept).
+    // Totaal omlaag → oud product op negatieve correctie (nieuw staat al op hoofdconcept).
+    const lineDescription =
+      deltaIncl < 0
+        ? (diff.removals[0]?.name && String(diff.removals[0].name).trim()) ||
+          (previous?.find((s) => s.qty > 0)?.name &&
+            String(previous.find((s) => s.qty > 0)!.name).trim()) ||
+          String(order.name ?? shopifyOrderId)
+        : (diff.additions[0]?.name && String(diff.additions[0].name).trim()) ||
+          (nextSnap.find((s) => s.qty > 0)?.name &&
+            String(nextSnap.find((s) => s.qty > 0)!.name).trim()) ||
+          String(order.name ?? shopifyOrderId);
+
+    try {
+      const correction = await createOrUpdateDeltaCorrectionInvoice({
+        order,
+        main: mainForCorr,
+        deltaIncl,
+        lineDescription,
+      });
+      return correction ?? mainForCorr;
+    } catch (err) {
+      console.error(
+        "[moneybird] correctiefactuur mislukt",
+        shopifyOrderId,
+        err instanceof Error ? err.message : err
+      );
+      return mainForCorr;
+    }
   }
 
+  // Verstuurde hoofdfactuur (niet meer concept): klassieke add-/credit-concepten.
   let last: MoneybirdSalesInvoice | null = main;
 
   if (diff.additions.length > 0) {
@@ -1249,6 +1370,109 @@ async function syncSalesInvoiceOnShopifyOrderUpdate(
   }
 
   return last;
+}
+
+/**
+ * Correctiefactuur voor betaald concept: alleen het verschil.
+ * deltaIncl > 0 → concept met nieuw product (extra te betalen);
+ * deltaIncl < 0 → concept met oud product + negatief bedrag (nieuw staat op hoofdconcept).
+ * Kenmerk: "correctie factuur {hoofdnummer}".
+ */
+async function createOrUpdateDeltaCorrectionInvoice(params: {
+  order: ShopifyOrder;
+  main: MoneybirdSalesInvoice;
+  deltaIncl: number;
+  lineDescription: string;
+}): Promise<MoneybirdSalesInvoice | null> {
+  const shopifyOrderId = String(params.order.id ?? "").trim();
+  const deltaIncl = params.deltaIncl;
+  if (!shopifyOrderId || Math.abs(deltaIncl) < 0.01) return null;
+
+  const machineRef = shopifyCorrectionReference(shopifyOrderId);
+  const kenmerk = correctionKenmerkForMainInvoice(params.main);
+  const orderName = String(params.order.name ?? shopifyOrderId).trim();
+  const productLabel = String(params.lineDescription ?? "").trim() || "Correctie";
+  const absIncl = Math.abs(deltaIncl);
+  const signedIncl = deltaIncl; // negatief = credit-achtig
+  const { taxRateId, vatMultiplier } = resolveInvoiceTaxForTitle(productLabel);
+  const ledgerAccountId = process.env.MONEYBIRD_LEDGER_ACCOUNT_ID!.trim();
+  const priceExcl = signedIncl / vatMultiplier;
+
+  const detail: MoneybirdInvoiceDetailPayload = {
+    description: `${productLabel} (${kenmerk}) (${orderName})`,
+    price: priceExcl.toFixed(2),
+    amount: "1",
+    tax_rate_id: taxRateId,
+    ledger_account_id: ledgerAccountId,
+  };
+
+  const contact = await findOrCreateContactForShopifyOrder(params.order);
+
+  // Idempotent: vaste machine-reference per Shopify-order.
+  let existing =
+    (await findSalesInvoiceByReference(machineRef)) ??
+    (await findSalesInvoiceByReference(kenmerk));
+
+  if (existing?.id) {
+    const full = (await fetchSalesInvoiceById(existing.id)) ?? existing;
+    if (!isDraftMoneybirdInvoice(full)) {
+      console.info(
+        "[moneybird] correctie niet meer concept — skip update",
+        full.id,
+        full.state
+      );
+      return full;
+    }
+    const destroyOld = (full.details ?? [])
+      .filter((d) => d.id)
+      .map((d) => ({ id: d.id, _destroy: "1" as const }));
+    const updated = await moneybirdFetch<MoneybirdSalesInvoice>(
+      `/sales_invoices/${full.id}.json`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          sales_invoice: {
+            contact_id: contact.id,
+            reference: kenmerk,
+            details_attributes: [...destroyOld, detail],
+          },
+        }),
+      }
+    );
+    console.info(
+      "[moneybird] correctie-concept bijgewerkt",
+      updated.id,
+      kenmerk,
+      `€${deltaIncl.toFixed(2)}`
+    );
+    return updated;
+  }
+
+  const created = await moneybirdFetch<MoneybirdSalesInvoice>(
+    "/sales_invoices.json",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        sales_invoice: {
+          contact_id: contact.id,
+          // Kenmerk: "correctie factuur {hoofdnummer}". (Geen shopify:-prefix → geen voorraadaftrek.)
+          reference: kenmerk,
+          currency: "EUR",
+          prices_are_incl_tax: false,
+          details_attributes: [detail],
+        },
+      }),
+    }
+  );
+
+  console.info(
+    "[moneybird] correctie-concept aangemaakt",
+    created.id,
+    kenmerk,
+    `€${deltaIncl.toFixed(2)}`,
+    `(abs €${absIncl.toFixed(2)})`
+  );
+  return created;
 }
 
 /** Nieuwe conceptfactuur alleen voor toegevoegde regels (geen main-order lock). */
@@ -1565,7 +1789,7 @@ export async function createSalesInvoiceFromShopifyOrder(
   }
 
   const reference = shopifyReferenceForOrderId(shopifyOrderId);
-  const lock = await acquireMoneybirdShopifyInvoiceLock(supabase, shopifyOrderId);
+  let lock = await acquireMoneybirdShopifyInvoiceLock(supabase, shopifyOrderId);
   if (lock === "existing") {
     const existing = await findSalesInvoiceByReferenceWithRetry(reference);
     if (existing) {
@@ -1577,15 +1801,24 @@ export async function createSalesInvoiceFromShopifyOrder(
       );
       return existing;
     }
+    // Vastgelopen lock (timeout vóór POST) → vrijgeven en opnieuw proberen.
     console.warn(
-      "[moneybird] invoice lock bestaat maar geen factuur gevonden voor",
-      reference,
-      "— skip create"
+      "[moneybird] stale invoice lock zonder factuur — release + retry",
+      reference
     );
-    return null;
+    await releaseMoneybirdShopifyInvoiceLock(supabase, shopifyOrderId);
+    lock = await acquireMoneybirdShopifyInvoiceLock(supabase, shopifyOrderId);
+    if (lock === "existing") {
+      const again = await findSalesInvoiceByReference(reference);
+      if (again) return again;
+      console.warn(
+        "[moneybird] lock opnieuw bezet zonder factuur — skip create",
+        reference
+      );
+      return null;
+    }
   }
 
-  const lockHeld = lock === "acquired";
   let created: MoneybirdSalesInvoice | null = null;
   try {
     const existing = await findSalesInvoiceByReference(reference);
@@ -1632,26 +1865,14 @@ export async function createSalesInvoiceFromShopifyOrder(
       Number.isFinite(totalIncl) ? `(totaal €${totalIncl.toFixed(2)})` : ""
     );
 
-    // Direct na create: Mollie tr_ op concept zetten (idempotent in sync daarna).
-    if (created?.id) {
-      try {
-        await registerMolliePaymentOnShopifyInvoice(shopifyOrderId, created.id);
-      } catch (mollieErr) {
-        console.error(
-          "[moneybird] Mollie tr_ na create mislukt",
-          shopifyOrderId,
-          mollieErr instanceof Error ? mollieErr.message : mollieErr
-        );
-      }
-    }
-
+    // Mollie tr_ gebeurt één keer in syncSalesInvoiceFromShopifyOrder (niet hier dubbel).
     return created;
   } finally {
     if (created?.id) {
-      if (lockHeld) {
+      if (lock === "acquired") {
         await storeMoneybirdShopifyInvoiceId(supabase, shopifyOrderId, created.id);
       }
-    } else if (lockHeld) {
+    } else if (lock === "acquired") {
       await releaseMoneybirdShopifyInvoiceLock(supabase, shopifyOrderId);
     }
   }

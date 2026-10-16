@@ -48,6 +48,8 @@ import {
   isOrderMarkedCompleted,
 } from "@/lib/order-completion";
 
+export const maxDuration = 60;
+
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey =
   process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -365,19 +367,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, skipped: "unhandled_topic", topic }, { status: 200 });
     }
 
-    // Voorraad: create/update = reserveren; fulfilled <€490 = afschrijven; delete/cancel = vrijgeven/restore.
-    try {
-      if (isCreate) {
-        await reserveInventoryForShopifyOrder(supabase, order);
-      } else if (isUpdate) {
-        await syncReservationsForShopifyOrderUpdate(supabase, order);
-      }
-      await maybeCommitInventoryOnShopifyFulfilled(supabase, order);
-    } catch (invErr) {
-      console.error("[webhooks/shopify] inventory:", invErr);
-    }
-
-    // Moneybird: create bij create; update/edited → draft of add/credit (met vorige line-snapshot).
+    // Moneybird eerst (conceptfactuur snel zichtbaar), daarna voorraad parallel-ongeacht.
     if (isMoneybirdConfigured()) {
       try {
         let previousSnapshot: ShopifyLineSnapshot[] | null = null;
@@ -413,6 +403,18 @@ export async function POST(request: NextRequest) {
       console.warn(
         "[webhooks/shopify] Moneybird niet geconfigureerd — factuur overgeslagen (zet MONEYBIRD_ADMINISTRATION_ID, MONEYBIRD_API_TOKEN, MONEYBIRD_TAX_RATE_ID, MONEYBIRD_LEDGER_ACCOUNT_ID)."
       );
+    }
+
+    // Voorraad: create/update = reserveren; fulfilled <€490 = afschrijven; delete/cancel = vrijgeven/restore.
+    try {
+      if (isCreate) {
+        await reserveInventoryForShopifyOrder(supabase, order);
+      } else if (isUpdate) {
+        await syncReservationsForShopifyOrderUpdate(supabase, order);
+      }
+      await maybeCommitInventoryOnShopifyFulfilled(supabase, order);
+    } catch (invErr) {
+      console.error("[webhooks/shopify] inventory:", invErr);
     }
 
     // ── Pakketjes ──────────────────────────────────────────────────────────

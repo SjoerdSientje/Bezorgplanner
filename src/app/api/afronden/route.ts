@@ -261,9 +261,26 @@ export async function POST(request: NextRequest) {
               .from("orders")
               .update({ moneybird_invoice_id: inv.id })
               .eq("id", orderId);
+          } else {
+            return NextResponse.json(
+              {
+                error:
+                  "Reparatie-factuur kon niet worden aangemaakt in Moneybird. Controleer de Moneybird-koppeling.",
+              },
+              { status: 500 }
+            );
           }
         } catch (mbErr) {
           console.error("[api/afronden] reparatie moneybird:", mbErr);
+          return NextResponse.json(
+            {
+              error:
+                mbErr instanceof Error
+                  ? `Reparatie-factuur mislukt: ${mbErr.message}`
+                  : "Reparatie-factuur aanmaken/bijwerken mislukt.",
+            },
+            { status: 500 }
+          );
         }
       } else {
         // Geen factuur: concept verwijderen als die er nog was.
@@ -287,17 +304,63 @@ export async function POST(request: NextRequest) {
 
     // Reparatie aan huis: bij afronden factuur versturen + voorraad afschrijven
     // (niet bij omzetting naar ophalen). Terugbrengen: factuur/voorraad al bij aanmaken.
+    let reparatieFactuurError: string | null = null;
     if (order.type === "reparatie_deur" && !convertedToOphalen) {
-      if (reparatieWilFactuur && reparatieInvoiceId) {
+      if (reparatieWilFactuur) {
+        if (!reparatieInvoiceId) {
+          return NextResponse.json(
+            { error: "Geen Moneybird-factuur-id — kan factuur niet versturen." },
+            { status: 500 }
+          );
+        }
         try {
           const { sendReparatieSalesInvoice } = await import("@/lib/moneybird");
-          await sendReparatieSalesInvoice({
+          const sendRes = await sendReparatieSalesInvoice({
             orderId,
             invoiceId: reparatieInvoiceId,
             email: String(order.email ?? "").trim() || null,
           });
+          if (!sendRes.sent) {
+            const skipped = String(sendRes.skipped ?? "");
+            // Al verstuurd/open/betaald → ok. Anders fout tonen.
+            if (
+              skipped.startsWith("state_") &&
+              !skipped.includes("draft")
+            ) {
+              console.info(
+                "[api/afronden] reparatie factuur al niet meer concept",
+                reparatieInvoiceId,
+                skipped
+              );
+            } else {
+              reparatieFactuurError =
+                skipped === "no_invoice"
+                  ? "Factuur niet gevonden in Moneybird."
+                  : skipped === "moneybird_not_configured"
+                    ? "Moneybird niet geconfigureerd."
+                    : skipped
+                      ? `Factuur niet verzonden (${skipped}).`
+                      : "Factuur niet verzonden.";
+              console.error(
+                "[api/afronden] reparatie moneybird send skip:",
+                sendRes
+              );
+            }
+          }
         } catch (sendErr) {
           console.error("[api/afronden] reparatie moneybird send:", sendErr);
+          reparatieFactuurError =
+            sendErr instanceof Error
+              ? sendErr.message
+              : "Factuur versturen mislukt.";
+        }
+        if (reparatieFactuurError) {
+          return NextResponse.json(
+            {
+              error: `Order niet afgerond: factuur niet verzonden. ${reparatieFactuurError}`,
+            },
+            { status: 500 }
+          );
         }
       }
       try {
@@ -317,8 +380,9 @@ export async function POST(request: NextRequest) {
       } catch (invErr) {
         console.error("[api/afronden] reparatie inventory commit:", invErr);
       }
-    } else if (order.type === "reparatie_deur" && convertedToOphalen) {
+    } else if (convertedToOphalen) {
       // Omgezet naar ophalen: geen producten meer → reservering vrijgeven.
+      // (order.type is al reparatie_ophalen gemuteerd.)
       try {
         const { clearReservationsForOrder } = await import(
           "@/lib/inventory-reservations"
