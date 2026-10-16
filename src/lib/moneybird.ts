@@ -18,6 +18,7 @@ import {
   shopifyOrderPaymentAmounts,
 } from "@/lib/shopify-order";
 import {
+  fetchShopifyOrderMolliePayment,
   isShopifyProductActive,
   markShopifyOrderAsPaid,
   type ShopifyAdminProduct,
@@ -106,6 +107,13 @@ export type MoneybirdSalesInvoiceDetail = {
   product_id?: string | null;
 };
 
+export type MoneybirdPayment = {
+  id?: string;
+  transaction_identifier?: string | null;
+  price?: string | number | null;
+  payment_date?: string | null;
+};
+
 export type MoneybirdSalesInvoice = {
   id: string;
   invoice_id?: string | null;
@@ -113,6 +121,10 @@ export type MoneybirdSalesInvoice = {
   state?: string | null;
   contact_id?: string | null;
   details?: MoneybirdSalesInvoiceDetail[] | null;
+  payments?: MoneybirdPayment[] | null;
+  total_paid?: string | number | null;
+  total_unpaid?: string | number | null;
+  price_total?: string | number | null;
 };
 
 /** Machine-leesbare Shopify-koppeling op factuur.reference. */
@@ -904,11 +916,131 @@ export async function updateDraftSalesInvoiceFromShopifyOrder(
 }
 
 /**
+ * Registreer Mollie-betaling op Moneybird-factuur met transaction_identifier (tr_…).
+ * Nodig zodat de officiële Moneybird↔Mollie-koppeling uitbetalingen kan afletteren.
+ * Alleen als Shopify-order via Mollie is betaald; idempotent op dezelfde tr_.
+ */
+export async function registerMolliePaymentOnShopifyInvoice(
+  shopifyOrderId: string,
+  invoiceId?: string | null
+): Promise<{
+  registered: boolean;
+  skipped?: string;
+  molliePaymentId?: string;
+  paymentId?: string;
+  error?: string;
+}> {
+  if (!isMoneybirdConfigured()) {
+    return { registered: false, skipped: "moneybird_not_configured" };
+  }
+  const orderId = String(shopifyOrderId ?? "").trim();
+  if (!orderId) return { registered: false, skipped: "missing_shopify_order_id" };
+
+  const mollie = await fetchShopifyOrderMolliePayment(orderId);
+  if (!mollie?.molliePaymentId) {
+    return { registered: false, skipped: "no_mollie_payment" };
+  }
+
+  let invoice: MoneybirdSalesInvoice | null = null;
+  const invId = String(invoiceId ?? "").trim();
+  if (invId) invoice = await fetchSalesInvoiceById(invId);
+  if (!invoice?.id) {
+    invoice = await findSalesInvoiceByReference(shopifyReferenceForOrderId(orderId));
+  }
+  if (!invoice?.id) {
+    return {
+      registered: false,
+      skipped: "no_invoice",
+      molliePaymentId: mollie.molliePaymentId,
+    };
+  }
+
+  const full = (await fetchSalesInvoiceById(invoice.id)) ?? invoice;
+  const existingPayments = Array.isArray(full.payments) ? full.payments : [];
+  const already = existingPayments.some(
+    (p) =>
+      String(p.transaction_identifier ?? "").trim() === mollie.molliePaymentId
+  );
+  if (already) {
+    return {
+      registered: false,
+      skipped: "already_registered",
+      molliePaymentId: mollie.molliePaymentId,
+      paymentId: full.id,
+    };
+  }
+
+  const invoiceTotal = parseMoneyAmount(full.price_total);
+  const price =
+    mollie.amount > 0.009
+      ? mollie.amount
+      : Number.isFinite(invoiceTotal) && invoiceTotal > 0
+        ? invoiceTotal
+        : 0;
+  if (!(price > 0.009)) {
+    return {
+      registered: false,
+      skipped: "zero_amount",
+      molliePaymentId: mollie.molliePaymentId,
+    };
+  }
+  const paymentDateRaw = mollie.processedAt
+    ? new Date(mollie.processedAt)
+    : new Date();
+  const paymentDate = Number.isNaN(paymentDateRaw.getTime())
+    ? new Date().toISOString().slice(0, 10)
+    : paymentDateRaw.toISOString().slice(0, 10);
+
+  try {
+    const created = await moneybirdFetch<MoneybirdPayment>(
+      `/sales_invoices/${full.id}/payments.json`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          payment: {
+            payment_date: paymentDate,
+            price: price.toFixed(2),
+            transaction_identifier: mollie.molliePaymentId,
+            manual_payment_action: "payment_without_proof",
+          },
+        }),
+      }
+    );
+    console.info(
+      "[moneybird] Mollie-betaling geregistreerd",
+      full.id,
+      mollie.molliePaymentId,
+      `€${price.toFixed(2)}`
+    );
+    return {
+      registered: true,
+      molliePaymentId: mollie.molliePaymentId,
+      paymentId: created?.id,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // Draft-facturen accepteren soms geen betaling — later opnieuw bij versturen.
+    console.error(
+      "[moneybird] Mollie-betaling registreren mislukt",
+      full.id,
+      mollie.molliePaymentId,
+      msg
+    );
+    return {
+      registered: false,
+      molliePaymentId: mollie.molliePaymentId,
+      error: msg,
+    };
+  }
+}
+
+/**
  * Routeert Moneybird-factuuractie op Shopify-webhook topic.
  * - orders/create → nieuwe conceptfactuur (indien van toepassing)
  * - orders/updated | orders/edited → draft bijwerken; bij betaald+zelfde totaal ook draft;
  *   anders add/credit bij betaald/verstuurd
  * - daarna: auto-mail als fulfilled én totaal < €490 (alleen hoofdfactuur)
+ * - daarna: Mollie tr_ op factuurbetaling (voor uitbetalingskoppeling)
  */
 export async function syncSalesInvoiceFromShopifyOrder(
   supabase: SupabaseClient,
@@ -946,6 +1078,23 @@ export async function syncSalesInvoiceFromShopifyOrder(
   } catch (err) {
     console.error(
       "[moneybird] auto-send na sync mislukt (webhook gaat door):",
+      err instanceof Error ? err.message : err
+    );
+  }
+
+  // Elke Mollie-order met conceptfactuur → tr_ op de factuurbetaling.
+  // (Geen Mollie-tx → no_mollie_payment; andere gateways blijven ongemoeid.)
+  try {
+    const shopifyOrderId = String(order.id ?? "").trim();
+    if (shopifyOrderId && invoice?.id) {
+      await registerMolliePaymentOnShopifyInvoice(shopifyOrderId, invoice.id);
+    } else if (shopifyOrderId && !invoice?.id) {
+      // Update-pad zonder factuur-return: alsnog proberen via reference.
+      await registerMolliePaymentOnShopifyInvoice(shopifyOrderId);
+    }
+  } catch (err) {
+    console.error(
+      "[moneybird] Mollie payment sync mislukt (webhook gaat door):",
       err instanceof Error ? err.message : err
     );
   }
@@ -1482,6 +1631,19 @@ export async function createSalesInvoiceFromShopifyOrder(
       orderName,
       Number.isFinite(totalIncl) ? `(totaal €${totalIncl.toFixed(2)})` : ""
     );
+
+    // Direct na create: Mollie tr_ op concept zetten (idempotent in sync daarna).
+    if (created?.id) {
+      try {
+        await registerMolliePaymentOnShopifyInvoice(shopifyOrderId, created.id);
+      } catch (mollieErr) {
+        console.error(
+          "[moneybird] Mollie tr_ na create mislukt",
+          shopifyOrderId,
+          mollieErr instanceof Error ? mollieErr.message : mollieErr
+        );
+      }
+    }
 
     return created;
   } finally {

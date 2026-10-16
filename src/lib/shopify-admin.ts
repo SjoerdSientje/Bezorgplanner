@@ -565,6 +565,121 @@ export async function fetchInventoryCollectionProductIds(): Promise<{
   };
 }
 
+export type ShopifyMolliePayment = {
+  transactionId: string;
+  /** Volledige Mollie payment-id, bv. tr_5B8cwPMGnU6qLbRvo7qEZo */
+  molliePaymentId: string;
+  amount: number;
+  processedAt: string | null;
+  gateway: string;
+};
+
+const MOLLIE_TR_RE = /\b(tr_[A-Za-z0-9]+)\b/;
+
+function collectStringsDeep(value: unknown, out: string[], depth = 0): void {
+  if (depth > 6 || value == null) return;
+  if (typeof value === "string" || typeof value === "number") {
+    out.push(String(value));
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectStringsDeep(item, out, depth + 1);
+    return;
+  }
+  if (typeof value === "object") {
+    for (const v of Object.values(value as Record<string, unknown>)) {
+      collectStringsDeep(v, out, depth + 1);
+    }
+  }
+}
+
+function extractMollieTrFromTransaction(tx: Record<string, unknown>): string | null {
+  const direct = [
+    tx.authorization,
+    tx.payment_id,
+    (tx.receipt as Record<string, unknown> | null | undefined)?.payment_id,
+    (tx.receipt as Record<string, unknown> | null | undefined)?.id,
+    (tx.payment_details as Record<string, unknown> | null | undefined)?.payment_id,
+  ];
+  for (const raw of direct) {
+    const s = String(raw ?? "").trim();
+    const m = s.match(MOLLIE_TR_RE);
+    if (m) return m[1]!;
+  }
+  const blobs: string[] = [];
+  collectStringsDeep(tx.receipt, blobs);
+  collectStringsDeep(tx.payment_details, blobs);
+  collectStringsDeep(tx.receipt_json, blobs);
+  for (const s of blobs) {
+    const m = s.match(MOLLIE_TR_RE);
+    if (m) return m[1]!;
+  }
+  return null;
+}
+
+function isMollieGateway(gateway: string): boolean {
+  const g = gateway.toLowerCase();
+  return g.includes("mollie");
+}
+
+/**
+ * Zoek succesvolle Mollie-betaling op een Shopify-order (Admin API transactions).
+ * Alleen Mollie-gateways; andere betaalmethoden → null.
+ */
+export async function fetchShopifyOrderMolliePayment(
+  shopifyOrderId: string
+): Promise<ShopifyMolliePayment | null> {
+  const id = String(shopifyOrderId ?? "").trim();
+  if (!/^\d+$/.test(id)) return null;
+  if (!getShopifyAdminConfig()) return null;
+
+  try {
+    const data = await shopifyAdminJson<{
+      transactions?: Array<Record<string, unknown>>;
+    }>(`/orders/${id}/transactions.json`);
+
+    const txs = Array.isArray(data.transactions) ? data.transactions : [];
+    const candidates: ShopifyMolliePayment[] = [];
+
+    for (const tx of txs) {
+      const gateway = String(tx.gateway ?? "");
+      if (!isMollieGateway(gateway)) continue;
+      const status = String(tx.status ?? "").toLowerCase();
+      if (status && status !== "success") continue;
+      const kind = String(tx.kind ?? "").toLowerCase();
+      if (kind && !["sale", "capture"].includes(kind)) continue;
+
+      const molliePaymentId = extractMollieTrFromTransaction(tx);
+      if (!molliePaymentId) continue;
+
+      const amountRaw =
+        typeof tx.amount === "number"
+          ? tx.amount
+          : parseFloat(String(tx.amount ?? "0").replace(",", "."));
+      const amount = Number.isFinite(amountRaw) ? amountRaw : 0;
+      candidates.push({
+        transactionId: String(tx.id ?? ""),
+        molliePaymentId,
+        amount,
+        processedAt: tx.processed_at != null ? String(tx.processed_at) : null,
+        gateway,
+      });
+    }
+
+    if (candidates.length === 0) return null;
+    // Meest recente / grootste succesvolle capture/sale.
+    candidates.sort((a, b) => b.amount - a.amount);
+    return candidates[0]!;
+  } catch (err) {
+    console.error(
+      "[shopify-admin] Mollie-transactie ophalen mislukt",
+      id,
+      err instanceof Error ? err.message : err
+    );
+    return null;
+  }
+}
+
 /**
  * Markeer Shopify-order als afgehandeld (alle open fulfillment orders fulfilled).
  * Idempotent als er niets meer openstaat. Geen klantnotificatie.

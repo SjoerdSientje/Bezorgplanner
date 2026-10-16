@@ -4,6 +4,8 @@ import { deductInventoryForMoneybirdInvoice } from "@/lib/inventory";
 import {
   fetchSalesInvoiceById,
   markOrdersPaidFromMoneybirdShopifyInvoice,
+  parseMainShopifyOrderIdFromInvoiceReference,
+  registerMolliePaymentOnShopifyInvoice,
   verifyMoneybirdWebhookSignature,
   type MoneybirdSalesInvoice,
 } from "@/lib/moneybird";
@@ -174,6 +176,26 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Bij versturen/open van Shopify-factuur: Mollie tr_ alsnog zetten (o.a. ≥€490 handmatig).
+    let molliePayment: Awaited<
+      ReturnType<typeof registerMolliePaymentOnShopifyInvoice>
+    > | null = null;
+    if (doDeduct) {
+      const shopifyOrderId = parseMainShopifyOrderIdFromInvoiceReference(
+        invoice.reference
+      );
+      if (shopifyOrderId) {
+        try {
+          molliePayment = await registerMolliePaymentOnShopifyInvoice(
+            shopifyOrderId,
+            invoice.id
+          );
+        } catch (mollieErr) {
+          console.error("[webhooks/moneybird] mollie payment:", mollieErr);
+        }
+      }
+    }
+
     return NextResponse.json({
       ok: true,
       deducted,
@@ -185,6 +207,14 @@ export async function POST(request: NextRequest) {
             shopifyMarked: paidResult.shopifyMarked,
             skipped: paidResult.skipped ?? null,
             shopifyError: paidResult.shopifyError ?? null,
+          }
+        : null,
+      molliePayment: molliePayment
+        ? {
+            registered: molliePayment.registered,
+            skipped: molliePayment.skipped ?? null,
+            molliePaymentId: molliePayment.molliePaymentId ?? null,
+            error: molliePayment.error ?? null,
           }
         : null,
       invoiceId: String(invoice.id),
