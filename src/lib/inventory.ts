@@ -2359,6 +2359,29 @@ function parseShopifyOrderIdFromInvoiceReference(
   return m?.[1] ?? null;
 }
 
+/** Klarna-hoofdfactuur heeft payment-id als kenmerk → order-id via lock. */
+async function resolveShopifyOrderIdForInventoryDeduct(
+  supabase: SupabaseClient,
+  invoice: MoneybirdInvoiceInput
+): Promise<string | null> {
+  const fromRef = parseShopifyOrderIdFromInvoiceReference(invoice.reference);
+  if (fromRef) return fromRef;
+
+  const raw = String(invoice.reference ?? "").trim();
+  if (/^shopify:\d+:/i.test(raw)) return null;
+
+  const invoiceId = String(invoice.id ?? "").trim();
+  if (!invoiceId) return null;
+
+  const { data } = await supabase
+    .from("moneybird_shopify_invoice_locks")
+    .select("shopify_order_id")
+    .eq("moneybird_invoice_id", invoiceId)
+    .maybeSingle();
+  const orderId = String(data?.shopify_order_id ?? "").trim();
+  return orderId || null;
+}
+
 function moneybirdDetailsToLineItems(
   details: MoneybirdInvoiceDetailInput[] | null | undefined
 ): LineItemForDeduction[] {
@@ -2462,7 +2485,10 @@ export async function deductInventoryForMoneybirdInvoice(
     String(invoice.invoice_id ?? "").trim() ||
     `moneybird:${invoiceId}`;
 
-  const shopifyOrderId = parseShopifyOrderIdFromInvoiceReference(invoice.reference);
+  const shopifyOrderId = await resolveShopifyOrderIdForInventoryDeduct(
+    supabase,
+    invoice
+  );
   if (shopifyOrderId) {
     const { commitShopifyReservationsFromMoneybirdInvoice } = await import(
       "@/lib/inventory-reservations"

@@ -18,11 +18,13 @@ import {
   shopifyOrderPaymentAmounts,
 } from "@/lib/shopify-order";
 import {
+  fetchShopifyOrderKlarnaPayment,
   fetchShopifyOrderMolliePayment,
   isShopifyProductActive,
   markShopifyOrderAsPaid,
   type ShopifyAdminProduct,
 } from "@/lib/shopify-admin";
+import { createServerSupabaseClient } from "@/lib/supabase";
 
 const MONEYBIRD_API_BASE = "https://moneybird.com/api/v2";
 
@@ -127,9 +129,32 @@ export type MoneybirdSalesInvoice = {
   price_total?: string | number | null;
 };
 
-/** Machine-leesbare Shopify-koppeling op factuur.reference. */
+/** Machine-leesbare Shopify-koppeling op factuur.reference (niet-Klarna). */
 export function shopifyReferenceForOrderId(shopifyOrderId: string): string {
   return `shopify:${shopifyOrderId}`;
+}
+
+/**
+ * Kenmerk (reference) voor hoofdfactuur:
+ * - Klarna → Shopify Payment ID (staat zo in Klarna clearing)
+ * - overig → shopify:{orderId}
+ */
+export async function resolveShopifyMainInvoiceReference(
+  shopifyOrderId: string
+): Promise<string> {
+  const id = String(shopifyOrderId ?? "").trim();
+  if (!id) return shopifyReferenceForOrderId(id);
+  try {
+    const klarna = await fetchShopifyOrderKlarnaPayment(id);
+    if (klarna?.paymentId) return klarna.paymentId;
+  } catch (err) {
+    console.warn(
+      "[moneybird] Klarna payment-id ophalen mislukt, fallback shopify:id",
+      id,
+      err instanceof Error ? err.message : err
+    );
+  }
+  return shopifyReferenceForOrderId(id);
 }
 
 /** Reference voor bijfactuur na betaalde/verstuurde hoofdfactuur (toegevoegde regels). */
@@ -170,6 +195,143 @@ export function parseMainShopifyOrderIdFromInvoiceReference(
   const raw = String(reference ?? "").trim();
   const m = raw.match(/^shopify:(\d+)$/i);
   return m?.[1] ?? null;
+}
+
+/** True als reference een Shopify add/credit/correctie-kenmerk is (geen hoofdfactuur). */
+function isShopifyDerivedInvoiceReference(
+  reference: string | null | undefined
+): boolean {
+  return /^shopify:\d+:/i.test(String(reference ?? "").trim());
+}
+
+/**
+ * Shopify order-id bij een Moneybird-hoofdfactuur.
+ * Klassiek via `shopify:{id}`; Klarna via lock op moneybird_invoice_id.
+ */
+export async function resolveShopifyOrderIdFromMoneybirdMainInvoice(
+  supabase: SupabaseClient,
+  invoice: { id?: string | null; reference?: string | null }
+): Promise<string | null> {
+  const fromRef = parseMainShopifyOrderIdFromInvoiceReference(invoice.reference);
+  if (fromRef) return fromRef;
+  if (isShopifyDerivedInvoiceReference(invoice.reference)) return null;
+
+  const invoiceId = String(invoice.id ?? "").trim();
+  if (!invoiceId) return null;
+
+  const { data } = await supabase
+    .from("moneybird_shopify_invoice_locks")
+    .select("shopify_order_id")
+    .eq("moneybird_invoice_id", invoiceId)
+    .maybeSingle();
+  const orderId = String(data?.shopify_order_id ?? "").trim();
+  return orderId || null;
+}
+
+/**
+ * Zoek hoofdfactuur: shopify:{id} → lock.invoice_id → Klarna payment-id als kenmerk.
+ */
+async function findShopifyMainInvoice(
+  shopifyOrderId: string,
+  supabase?: SupabaseClient | null
+): Promise<MoneybirdSalesInvoice | null> {
+  const orderId = String(shopifyOrderId ?? "").trim();
+  if (!orderId) return null;
+
+  const classic = await findSalesInvoiceByReference(
+    shopifyReferenceForOrderId(orderId)
+  );
+  if (classic?.id) return classic;
+
+  const sb =
+    supabase ??
+    (process.env.NEXT_PUBLIC_SUPABASE_URL ? createServerSupabaseClient() : null);
+  if (sb) {
+    const { data: lockRow } = await sb
+      .from("moneybird_shopify_invoice_locks")
+      .select("moneybird_invoice_id")
+      .eq("shopify_order_id", orderId)
+      .maybeSingle();
+    const storedId = String(lockRow?.moneybird_invoice_id ?? "").trim();
+    if (storedId) {
+      const byId = await fetchSalesInvoiceById(storedId);
+      if (byId) return byId;
+    }
+  }
+
+  try {
+    const klarna = await fetchShopifyOrderKlarnaPayment(orderId);
+    if (klarna?.paymentId) {
+      const byPay = await findSalesInvoiceByReference(klarna.paymentId);
+      if (byPay?.id) return byPay;
+    }
+  } catch {
+    // ignore — fallback hieronder
+  }
+
+  return null;
+}
+
+async function findShopifyMainInvoiceWithRetry(
+  shopifyOrderId: string,
+  supabase: SupabaseClient | null | undefined,
+  attempts = 3,
+  delayMs = 250
+): Promise<MoneybirdSalesInvoice | null> {
+  for (let i = 0; i < attempts; i++) {
+    const found = await findShopifyMainInvoice(shopifyOrderId, supabase);
+    if (found) return found;
+    if (i < attempts - 1) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  return null;
+}
+
+/**
+ * Zet/upgrade kenmerk naar Klarna Shopify Payment ID wanneer beschikbaar.
+ * Non-Klarna blijft shopify:{orderId}.
+ */
+export async function ensureKlarnaPaymentIdAsInvoiceReference(
+  supabase: SupabaseClient,
+  shopifyOrderId: string,
+  invoice?: MoneybirdSalesInvoice | null
+): Promise<MoneybirdSalesInvoice | null> {
+  const orderId = String(shopifyOrderId ?? "").trim();
+  if (!orderId) return invoice ?? null;
+
+  const klarna = await fetchShopifyOrderKlarnaPayment(orderId);
+  if (!klarna?.paymentId) return invoice ?? null;
+
+  let main = invoice?.id
+    ? invoice
+    : await findShopifyMainInvoice(orderId, supabase);
+  if (!main?.id) return null;
+
+  const full = (await fetchSalesInvoiceById(main.id)) ?? main;
+  const current = String(full.reference ?? "").trim();
+  if (current === klarna.paymentId) return full;
+  if (isShopifyDerivedInvoiceReference(current)) return full;
+
+  const updated = await moneybirdFetch<MoneybirdSalesInvoice>(
+    `/sales_invoices/${full.id}.json`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        sales_invoice: { reference: klarna.paymentId },
+      }),
+    }
+  );
+  console.info(
+    "[moneybird] kenmerk → Klarna payment-id",
+    full.id,
+    current || "(leeg)",
+    "→",
+    klarna.paymentId,
+    "order",
+    orderId
+  );
+  return updated;
 }
 
 /** Volledige factuur ophalen (incl. details) — o.a. als webhook-entity incomplete is. */
@@ -763,14 +925,13 @@ export async function maybeSendSalesInvoiceAfterShopifyFulfillment(
     return { sent: false, skipped: "missing_order_id" };
   }
 
-  const reference = shopifyReferenceForOrderId(shopifyOrderId);
-  let invoice = await findSalesInvoiceByReference(reference);
+  let invoice = await findShopifyMainInvoice(shopifyOrderId, supabase);
 
   // Edge case: create miste eerder, order is nu al fulfilled.
   if (!invoice?.id) {
     console.info(
       "[moneybird] fulfilled <490 zonder factuur — create alsnog",
-      reference
+      shopifyOrderId
     );
     invoice = await createSalesInvoiceFromShopifyOrder(supabase, order);
   }
@@ -799,7 +960,7 @@ export async function maybeSendSalesInvoiceAfterShopifyFulfillment(
     console.info(
       "[moneybird] factuur auto-verzonden (fulfilled <€490)",
       sent.id ?? full.id,
-      reference,
+      full.reference ?? shopifyOrderId,
       `€${shopifyOrderBillableTotalIncl(order).toFixed(2)}`
     );
     return { sent: true, invoiceId: sent.id ?? full.id };
@@ -807,7 +968,7 @@ export async function maybeSendSalesInvoiceAfterShopifyFulfillment(
     console.error(
       "[moneybird] auto-send mislukt",
       full.id,
-      reference,
+      full.reference ?? shopifyOrderId,
       err instanceof Error ? err.message : err
     );
     return { sent: false, skipped: "send_failed", invoiceId: full.id };
@@ -908,12 +1069,11 @@ export async function updateDraftSalesInvoiceFromShopifyOrder(
     return null;
   }
 
-  const reference = shopifyReferenceForOrderId(shopifyOrderId);
-  const existing = await findSalesInvoiceByReference(reference);
+  const existing = await findShopifyMainInvoice(shopifyOrderId);
   if (!existing?.id) {
     console.info(
       "[moneybird] order update — geen bestaande factuur, geen nieuwe create",
-      reference
+      shopifyOrderId
     );
     return null;
   }
@@ -1004,11 +1164,11 @@ export async function registerMolliePaymentOnShopifyInvoice(
     return { registered: false, skipped: "no_mollie_payment" };
   }
 
-  let invoice: MoneybirdSalesInvoice | null = null;
-  const invId = String(invoiceId ?? "").trim();
-  if (invId) invoice = await fetchSalesInvoiceById(invId);
+  // Altijd hoofdfactuur (shopify:{id} of Klarna payment-id) — geen correctie/add.
+  let invoice = await findShopifyMainInvoice(orderId);
   if (!invoice?.id) {
-    invoice = await findSalesInvoiceByReference(shopifyReferenceForOrderId(orderId));
+    const invId = String(invoiceId ?? "").trim();
+    if (invId) invoice = await fetchSalesInvoiceById(invId);
   }
   if (!invoice?.id) {
     return {
@@ -1145,14 +1305,28 @@ export async function syncSalesInvoiceFromShopifyOrder(
     );
   }
 
-  // Elke Mollie-order met conceptfactuur → tr_ op de factuurbetaling.
-  // (Geen Mollie-tx → no_mollie_payment; andere gateways blijven ongemoeid.)
+  // Klarna: kenmerk upgraden naar Shopify Payment ID zodra beschikbaar.
   try {
     const shopifyOrderId = String(order.id ?? "").trim();
-    if (shopifyOrderId && invoice?.id) {
-      await registerMolliePaymentOnShopifyInvoice(shopifyOrderId, invoice.id);
-    } else if (shopifyOrderId && !invoice?.id) {
-      // Update-pad zonder factuur-return: alsnog proberen via reference.
+    if (shopifyOrderId) {
+      const withKlarnaRef = await ensureKlarnaPaymentIdAsInvoiceReference(
+        supabase,
+        shopifyOrderId,
+        invoice
+      );
+      if (withKlarnaRef) invoice = withKlarnaRef;
+    }
+  } catch (err) {
+    console.error(
+      "[moneybird] Klarna kenmerk sync mislukt (webhook gaat door):",
+      err instanceof Error ? err.message : err
+    );
+  }
+
+  // Mollie tr_ altijd op de HOOFDfactuur, nooit op correctie/add/credit.
+  try {
+    const shopifyOrderId = String(order.id ?? "").trim();
+    if (shopifyOrderId) {
       await registerMolliePaymentOnShopifyInvoice(shopifyOrderId);
     }
   } catch (err) {
@@ -1188,17 +1362,19 @@ async function syncSalesInvoiceOnShopifyOrderUpdate(
   if (!shopifyOrderId) return null;
 
   const payments = shopifyOrderPaymentAmounts(order);
-  const reference = shopifyReferenceForOrderId(shopifyOrderId);
-  const existing = await findSalesInvoiceByReference(reference);
+  const existing = await findShopifyMainInvoice(shopifyOrderId, supabase);
   let main = existing?.id
     ? ((await fetchSalesInvoiceById(existing.id)) ?? existing)
     : null;
+  const reference =
+    String(main?.reference ?? "").trim() ||
+    shopifyReferenceForOrderId(shopifyOrderId);
 
   // Missende hoofdfactuur (create timeout/lock): alsnog aanmaken op update.
   if (!main) {
     console.info(
       "[moneybird] order update — geen hoofdfactuur, create alsnog",
-      reference
+      shopifyOrderId
     );
     return createSalesInvoiceFromShopifyOrder(supabase, order);
   }
@@ -1314,21 +1490,21 @@ async function syncSalesInvoiceOnShopifyOrderUpdate(
           String(order.name ?? shopifyOrderId);
 
     try {
-      const correction = await createOrUpdateDeltaCorrectionInvoice({
+      await createOrUpdateDeltaCorrectionInvoice({
         order,
         main: mainForCorr,
         deltaIncl,
         lineDescription,
       });
-      return correction ?? mainForCorr;
     } catch (err) {
       console.error(
         "[moneybird] correctiefactuur mislukt",
         shopifyOrderId,
         err instanceof Error ? err.message : err
       );
-      return mainForCorr;
     }
+    // Altijd hoofdfactuur teruggeven (Mollie/sync), niet de correctie.
+    return mainForCorr;
   }
 
   // Verstuurde hoofdfactuur (niet meer concept): klassieke add-/credit-concepten.
@@ -1376,7 +1552,8 @@ async function syncSalesInvoiceOnShopifyOrderUpdate(
  * Correctiefactuur voor betaald concept: alleen het verschil.
  * deltaIncl > 0 → concept met nieuw product (extra te betalen);
  * deltaIncl < 0 → concept met oud product + negatief bedrag (nieuw staat op hoofdconcept).
- * Kenmerk: "correctie factuur {hoofdnummer}".
+ * Reference vast: shopify:{id}:correctie (idempotent bij parallelle webhooks).
+ * Omschrijving bevat "correctie factuur {hoofdnummer}".
  */
 async function createOrUpdateDeltaCorrectionInvoice(params: {
   order: ShopifyOrder;
@@ -1393,13 +1570,13 @@ async function createOrUpdateDeltaCorrectionInvoice(params: {
   const orderName = String(params.order.name ?? shopifyOrderId).trim();
   const productLabel = String(params.lineDescription ?? "").trim() || "Correctie";
   const absIncl = Math.abs(deltaIncl);
-  const signedIncl = deltaIncl; // negatief = credit-achtig
+  const signedIncl = deltaIncl;
   const { taxRateId, vatMultiplier } = resolveInvoiceTaxForTitle(productLabel);
   const ledgerAccountId = process.env.MONEYBIRD_LEDGER_ACCOUNT_ID!.trim();
   const priceExcl = signedIncl / vatMultiplier;
 
   const detail: MoneybirdInvoiceDetailPayload = {
-    description: `${productLabel} (${kenmerk}) (${orderName})`,
+    description: `${kenmerk} — ${productLabel} (${orderName})`,
     price: priceExcl.toFixed(2),
     amount: "1",
     tax_rate_id: taxRateId,
@@ -1408,10 +1585,12 @@ async function createOrUpdateDeltaCorrectionInvoice(params: {
 
   const contact = await findOrCreateContactForShopifyOrder(params.order);
 
-  // Idempotent: vaste machine-reference per Shopify-order.
-  let existing =
-    (await findSalesInvoiceByReference(machineRef)) ??
-    (await findSalesInvoiceByReference(kenmerk));
+  // Idempotent: ALTIJD vaste machine-reference (niet de losse kenmerk-tekst).
+  let existing = await findSalesInvoiceByReference(machineRef);
+  if (!existing?.id) {
+    // Legacy: eerdere bug zette kenmerk als reference.
+    existing = await findSalesInvoiceByReference(kenmerk);
+  }
 
   if (existing?.id) {
     const full = (await fetchSalesInvoiceById(existing.id)) ?? existing;
@@ -1433,7 +1612,7 @@ async function createOrUpdateDeltaCorrectionInvoice(params: {
         body: JSON.stringify({
           sales_invoice: {
             contact_id: contact.id,
-            reference: kenmerk,
+            reference: machineRef,
             details_attributes: [...destroyOld, detail],
           },
         }),
@@ -1442,6 +1621,7 @@ async function createOrUpdateDeltaCorrectionInvoice(params: {
     console.info(
       "[moneybird] correctie-concept bijgewerkt",
       updated.id,
+      machineRef,
       kenmerk,
       `€${deltaIncl.toFixed(2)}`
     );
@@ -1455,8 +1635,7 @@ async function createOrUpdateDeltaCorrectionInvoice(params: {
       body: JSON.stringify({
         sales_invoice: {
           contact_id: contact.id,
-          // Kenmerk: "correctie factuur {hoofdnummer}". (Geen shopify:-prefix → geen voorraadaftrek.)
-          reference: kenmerk,
+          reference: machineRef,
           currency: "EUR",
           prices_are_incl_tax: false,
           details_attributes: [detail],
@@ -1465,14 +1644,68 @@ async function createOrUpdateDeltaCorrectionInvoice(params: {
     }
   );
 
+  // Race: parallelle webhook kan net ook ge-POSTed hebben → ontdubbel op reference.
+  const deduped = await dedupeDraftInvoicesByReference(machineRef, created);
   console.info(
     "[moneybird] correctie-concept aangemaakt",
-    created.id,
+    deduped.id ?? created.id,
+    machineRef,
     kenmerk,
     `€${deltaIncl.toFixed(2)}`,
     `(abs €${absIncl.toFixed(2)})`
   );
-  return created;
+  return deduped;
+}
+
+/** Bij parallelle creates met dezelfde reference: houd de oudste concept, verwijder rest. */
+async function dedupeDraftInvoicesByReference(
+  reference: string,
+  preferred: MoneybirdSalesInvoice
+): Promise<MoneybirdSalesInvoice> {
+  try {
+    const filter = encodeURIComponent(`reference:${reference},period:this_year`);
+    const list = await moneybirdFetch<MoneybirdSalesInvoice[]>(
+      `/sales_invoices.json?filter=${filter}&per_page=25`
+    );
+    const matches = (Array.isArray(list) ? list : []).filter(
+      (inv) => String(inv.reference ?? "") === reference
+    );
+    if (matches.length <= 1) return preferred;
+
+    const sorted = [...matches].sort((a, b) =>
+      String(a.id).localeCompare(String(b.id))
+    );
+    const keep = sorted[0]!;
+    for (const extra of sorted.slice(1)) {
+      if (!extra.id || extra.id === keep.id) continue;
+      if (!isDraftMoneybirdInvoice(extra)) continue;
+      try {
+        await moneybirdFetch<unknown>(`/sales_invoices/${extra.id}.json`, {
+          method: "DELETE",
+        });
+        console.warn(
+          "[moneybird] dubbele correctie/add concept verwijderd",
+          extra.id,
+          reference,
+          `(keep ${keep.id})`
+        );
+      } catch (delErr) {
+        console.error(
+          "[moneybird] dedupe delete mislukt",
+          extra.id,
+          delErr instanceof Error ? delErr.message : delErr
+        );
+      }
+    }
+    return (await fetchSalesInvoiceById(keep.id)) ?? keep;
+  } catch (err) {
+    console.error(
+      "[moneybird] dedupe mislukt",
+      reference,
+      err instanceof Error ? err.message : err
+    );
+    return preferred;
+  }
 }
 
 /** Nieuwe conceptfactuur alleen voor toegevoegde regels (geen main-order lock). */
@@ -1631,8 +1864,7 @@ export async function creditSalesInvoiceForShopifyOrderFullRefund(
   const id = String(shopifyOrderId ?? "").trim();
   if (!id) return { credited: false, error: "missing_shopify_order_id" };
 
-  const reference = shopifyReferenceForOrderId(id);
-  const existing = await findSalesInvoiceByReference(reference);
+  const existing = await findShopifyMainInvoice(id);
   if (!existing?.id) {
     return { credited: false, skipped: "no_invoice" };
   }
@@ -1715,7 +1947,7 @@ export async function creditSalesInvoiceForShopifyOrderFullRefund(
 }
 
 /**
- * Verwijder Moneybird-conceptfactuur voor een Shopify-order (reference shopify:{id}).
+ * Verwijder Moneybird-conceptfactuur voor een Shopify-order.
  * Alleen state=draft — verstuurde/open facturen blijven staan.
  */
 export async function deleteSalesInvoiceForShopifyOrderId(
@@ -1727,8 +1959,7 @@ export async function deleteSalesInvoiceForShopifyOrderId(
   const id = String(shopifyOrderId ?? "").trim();
   if (!id) return { deleted: false, error: "missing_shopify_order_id" };
 
-  const reference = shopifyReferenceForOrderId(id);
-  const existing = await findSalesInvoiceByReference(reference);
+  const existing = await findShopifyMainInvoice(id);
   if (!existing?.id) {
     return { deleted: false };
   }
@@ -1740,7 +1971,7 @@ export async function deleteSalesInvoiceForShopifyOrderId(
       full.id,
       full.state ?? "?",
       "voor",
-      reference
+      full.reference ?? id
     );
     return { deleted: false, invoiceId: full.id, skipped: `state_${full.state ?? "unknown"}` };
   }
@@ -1749,7 +1980,12 @@ export async function deleteSalesInvoiceForShopifyOrderId(
     await moneybirdFetch<unknown>(`/sales_invoices/${full.id}.json`, {
       method: "DELETE",
     });
-    console.info("[moneybird] conceptfactuur verwijderd", full.id, "voor", reference);
+    console.info(
+      "[moneybird] conceptfactuur verwijderd",
+      full.id,
+      "voor",
+      full.reference ?? id
+    );
     return { deleted: true, invoiceId: full.id };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -1760,7 +1996,8 @@ export async function deleteSalesInvoiceForShopifyOrderId(
 
 /**
  * Maakt een sales invoice in Moneybird voor een Shopify-order.
- * Reference = shopify:{id} zodat de Moneybird-webhook dubbele voorraadaftrek kan skippen.
+ * Kenmerk: Klarna → Shopify Payment ID; anders shopify:{id}.
+ * Koppeling blijft via moneybird_shopify_invoice_locks.
  *
  * Altijd als concept. Auto-mail gebeurt apart bij fulfillment_status=fulfilled
  * én totaal < €490. Totaal €0: geen factuur.
@@ -1788,10 +2025,15 @@ export async function createSalesInvoiceFromShopifyOrder(
     return null;
   }
 
-  const reference = shopifyReferenceForOrderId(shopifyOrderId);
+  const reference = await resolveShopifyMainInvoiceReference(shopifyOrderId);
   let lock = await acquireMoneybirdShopifyInvoiceLock(supabase, shopifyOrderId);
   if (lock === "existing") {
-    const existing = await findSalesInvoiceByReferenceWithRetry(reference);
+    const existing = await findShopifyMainInvoiceWithRetry(
+      shopifyOrderId,
+      supabase,
+      3,
+      250
+    );
     if (existing) {
       console.info(
         "[moneybird] factuur bestaat al (lock) voor",
@@ -1801,15 +2043,51 @@ export async function createSalesInvoiceFromShopifyOrder(
       );
       return existing;
     }
-    // Vastgelopen lock (timeout vóór POST) → vrijgeven en opnieuw proberen.
+
+    const { data: lockRow } = await supabase
+      .from("moneybird_shopify_invoice_locks")
+      .select("created_at, moneybird_invoice_id")
+      .eq("shopify_order_id", shopifyOrderId)
+      .maybeSingle();
+
+    const storedId = String(lockRow?.moneybird_invoice_id ?? "").trim();
+    if (storedId) {
+      const byId = await fetchSalesInvoiceById(storedId);
+      if (byId) return byId;
+    }
+
+    const ageMs = lockRow?.created_at
+      ? Date.now() - new Date(String(lockRow.created_at)).getTime()
+      : 0;
+    const STALE_LOCK_MS = 5 * 60 * 1000;
+
+    if (Number.isFinite(ageMs) && ageMs >= 0 && ageMs < STALE_LOCK_MS) {
+      // Andere worker is waarschijnlijk nog bezig — niet stelen, langer wachten.
+      const waited = await findShopifyMainInvoiceWithRetry(
+        shopifyOrderId,
+        supabase,
+        10,
+        500
+      );
+      if (waited) return waited;
+      console.warn(
+        "[moneybird] lock bezet zonder factuur (niet stale) — skip create",
+        reference,
+        `age=${Math.round(ageMs / 1000)}s`
+      );
+      return null;
+    }
+
+    // Lock ouder dan 5 min zonder factuur → reclaim.
     console.warn(
       "[moneybird] stale invoice lock zonder factuur — release + retry",
-      reference
+      reference,
+      `age=${Math.round(ageMs / 1000)}s`
     );
     await releaseMoneybirdShopifyInvoiceLock(supabase, shopifyOrderId);
     lock = await acquireMoneybirdShopifyInvoiceLock(supabase, shopifyOrderId);
     if (lock === "existing") {
-      const again = await findSalesInvoiceByReference(reference);
+      const again = await findShopifyMainInvoice(shopifyOrderId, supabase);
       if (again) return again;
       console.warn(
         "[moneybird] lock opnieuw bezet zonder factuur — skip create",
@@ -1821,11 +2099,11 @@ export async function createSalesInvoiceFromShopifyOrder(
 
   let created: MoneybirdSalesInvoice | null = null;
   try {
-    const existing = await findSalesInvoiceByReference(reference);
+    const existing = await findShopifyMainInvoice(shopifyOrderId, supabase);
     if (existing) {
       console.info(
         "[moneybird] factuur bestaat al voor",
-        reference,
+        existing.reference ?? reference,
         "— skip create",
         existing.id
       );
@@ -1862,10 +2140,11 @@ export async function createSalesInvoiceFromShopifyOrder(
       created.id,
       "voor Shopify",
       orderName,
+      `kenmerk=${reference}`,
       Number.isFinite(totalIncl) ? `(totaal €${totalIncl.toFixed(2)})` : ""
     );
 
-    // Mollie tr_ gebeurt één keer in syncSalesInvoiceFromShopifyOrder (niet hier dubbel).
+    // Mollie tr_ / Klarna kenmerk gebeurt in syncSalesInvoiceFromShopifyOrder.
     return created;
   } finally {
     if (created?.id) {
@@ -2272,7 +2551,7 @@ export async function deleteReparatieSalesInvoice(params: {
 
 /**
  * Moneybird-hoofdfactuur betaald → Shopify-order + ritjes-rijen als betaald markeren.
- * Alleen reference `shopify:{id}` (geen add/credit). Voorraad blijft via aparte deduct-path.
+ * Hoofdfactuur via `shopify:{id}` of Klarna payment-id (+ lock). Geen add/credit.
  */
 export async function markOrdersPaidFromMoneybirdShopifyInvoice(
   supabase: SupabaseClient,
@@ -2284,8 +2563,9 @@ export async function markOrdersPaidFromMoneybirdShopifyInvoice(
   skipped?: string;
   shopifyError?: string;
 }> {
-  const shopifyOrderId = parseMainShopifyOrderIdFromInvoiceReference(
-    invoice.reference
+  const shopifyOrderId = await resolveShopifyOrderIdFromMoneybirdMainInvoice(
+    supabase,
+    invoice
   );
   if (!shopifyOrderId) {
     return {

@@ -622,6 +622,123 @@ function isMollieGateway(gateway: string): boolean {
   return g.includes("mollie");
 }
 
+export type ShopifyKlarnaPayment = {
+  transactionId: string;
+  /**
+   * Shopify Payment ID (gateway “Payment ID”) — staat in Klarna clearing
+   * als merchant_reference, niet het Shopify order-id.
+   */
+  paymentId: string;
+  amount: number;
+  processedAt: string | null;
+  gateway: string;
+};
+
+function isKlarnaGateway(gateway: string): boolean {
+  const g = gateway.toLowerCase();
+  return g.includes("klarna");
+}
+
+/** Haal Shopify Payment ID uit Klarna-transactie (receipt.payment_id e.d.). */
+function extractKlarnaShopifyPaymentId(tx: Record<string, unknown>): string | null {
+  const receipt =
+    tx.receipt && typeof tx.receipt === "object"
+      ? (tx.receipt as Record<string, unknown>)
+      : null;
+  const paymentDetails =
+    tx.payment_details && typeof tx.payment_details === "object"
+      ? (tx.payment_details as Record<string, unknown>)
+      : null;
+
+  // Shopify Admin toont bij Klarna “Payment ID” → meestal receipt.payment_id.
+  const preferred = [
+    receipt?.payment_id,
+    receipt?.paymentId,
+    receipt?.PaymentId,
+    paymentDetails?.payment_id,
+    tx.payment_id,
+  ];
+  for (const raw of preferred) {
+    const s = String(raw ?? "").trim();
+    if (!s || /^tr_/i.test(s) || /^shopify:/i.test(s)) continue;
+    if (s.length >= 8) return s;
+  }
+
+  const blobs: string[] = [];
+  collectStringsDeep(tx.receipt, blobs);
+  collectStringsDeep(tx.payment_details, blobs);
+  for (const s of blobs) {
+    const t = s.trim();
+    if (!t || /^tr_/i.test(t) || /^shopify:/i.test(t)) continue;
+    // Typische Shopify/Klarna payment ids: UUID of lange hex/base64-achtig.
+    if (
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(t) ||
+      /^[0-9a-f]{16,}$/i.test(t) ||
+      /^[A-Za-z0-9_-]{12,}$/.test(t)
+    ) {
+      return t;
+    }
+  }
+  return null;
+}
+
+/**
+ * Zoek succesvolle Klarna-betaling + Shopify Payment ID op een order.
+ */
+export async function fetchShopifyOrderKlarnaPayment(
+  shopifyOrderId: string
+): Promise<ShopifyKlarnaPayment | null> {
+  const id = String(shopifyOrderId ?? "").trim();
+  if (!/^\d+$/.test(id)) return null;
+  if (!getShopifyAdminConfig()) return null;
+
+  try {
+    const data = await shopifyAdminJson<{
+      transactions?: Array<Record<string, unknown>>;
+    }>(`/orders/${id}/transactions.json`);
+
+    const txs = Array.isArray(data.transactions) ? data.transactions : [];
+    const candidates: ShopifyKlarnaPayment[] = [];
+
+    for (const tx of txs) {
+      const gateway = String(tx.gateway ?? "");
+      if (!isKlarnaGateway(gateway)) continue;
+      const status = String(tx.status ?? "").toLowerCase();
+      if (status && status !== "success" && status !== "pending") continue;
+      const kind = String(tx.kind ?? "").toLowerCase();
+      if (kind && !["sale", "capture", "authorization"].includes(kind)) continue;
+
+      const paymentId = extractKlarnaShopifyPaymentId(tx);
+      if (!paymentId) continue;
+
+      const amountRaw =
+        typeof tx.amount === "number"
+          ? tx.amount
+          : parseFloat(String(tx.amount ?? "0").replace(",", "."));
+      const amount = Number.isFinite(amountRaw) ? amountRaw : 0;
+      candidates.push({
+        transactionId: String(tx.id ?? ""),
+        paymentId,
+        amount,
+        processedAt: tx.processed_at != null ? String(tx.processed_at) : null,
+        gateway,
+      });
+    }
+
+    if (candidates.length === 0) return null;
+    // Prefer capture/sale over authorization; then highest amount.
+    candidates.sort((a, b) => b.amount - a.amount);
+    return candidates[0]!;
+  } catch (err) {
+    console.error(
+      "[shopify-admin] Klarna-transactie ophalen mislukt",
+      id,
+      err instanceof Error ? err.message : err
+    );
+    return null;
+  }
+}
+
 /**
  * Zoek succesvolle Mollie-betaling op een Shopify-order (Admin API transactions).
  * Alleen Mollie-gateways; andere betaalmethoden → null.

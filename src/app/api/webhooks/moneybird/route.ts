@@ -4,7 +4,7 @@ import { deductInventoryForMoneybirdInvoice } from "@/lib/inventory";
 import {
   fetchSalesInvoiceById,
   markOrdersPaidFromMoneybirdShopifyInvoice,
-  parseMainShopifyOrderIdFromInvoiceReference,
+  resolveShopifyOrderIdFromMoneybirdMainInvoice,
   registerMolliePaymentOnShopifyInvoice,
   verifyMoneybirdWebhookSignature,
   type MoneybirdSalesInvoice,
@@ -181,8 +181,9 @@ export async function POST(request: NextRequest) {
       ReturnType<typeof registerMolliePaymentOnShopifyInvoice>
     > | null = null;
     if (doDeduct) {
-      const shopifyOrderId = parseMainShopifyOrderIdFromInvoiceReference(
-        invoice.reference
+      const shopifyOrderId = await resolveShopifyOrderIdFromMoneybirdMainInvoice(
+        supabase,
+        invoice
       );
       if (shopifyOrderId) {
         try {
