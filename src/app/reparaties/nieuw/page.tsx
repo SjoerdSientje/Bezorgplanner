@@ -394,7 +394,12 @@ export default function ReparatieNieuwPage() {
                 <div className="mt-2 flex gap-2">
                   {(
                     [
-                      ["factuur", "Factuur (Moneybird concept)"],
+                      [
+                        "factuur",
+                        soort === "reparatie_terugbrengen"
+                          ? "Factuur (wordt meteen verstuurd)"
+                          : "Factuur (concept tot afronden)",
+                      ],
                       ["contant", "Contant (geen factuur)"],
                     ] as const
                   ).map(([value, label]) => (

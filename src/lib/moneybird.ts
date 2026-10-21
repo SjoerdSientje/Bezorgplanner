@@ -2884,15 +2884,23 @@ export async function markOrdersPaidFromMoneybirdShopifyInvoice(
   };
 }
 
+function isUsableInvoiceEmail(email: string | null | undefined): boolean {
+  const e = String(email ?? "").trim().toLowerCase();
+  if (!e.includes("@")) return false;
+  if (e === "onbekend@koopjefatbike.nl") return false;
+  return true;
+}
+
 /**
  * Verstuur reparatie-conceptfactuur (draft → open) per e-mail.
- * No-op als factuur al geen concept meer is.
+ * Retries kort na create (Moneybird is soms nog niet klaar).
+ * No-op (skipped state_*) als factuur al geen concept meer is.
  */
 export async function sendReparatieSalesInvoice(params: {
   orderId: string;
   invoiceId?: string | null;
   email?: string | null;
-}): Promise<{ sent: boolean; invoiceId?: string; skipped?: string }> {
+}): Promise<{ sent: boolean; invoiceId?: string; skipped?: string; error?: string }> {
   if (!isMoneybirdConfigured()) {
     return { sent: false, skipped: "moneybird_not_configured" };
   }
@@ -2900,28 +2908,62 @@ export async function sendReparatieSalesInvoice(params: {
   if (!orderId) return { sent: false, skipped: "missing_order_id" };
 
   const reference = reparatieReferenceForOrderId(orderId);
-  let existing: MoneybirdSalesInvoice | null = null;
   const invId = String(params.invoiceId ?? "").trim();
-  if (invId) existing = await fetchSalesInvoiceById(invId);
-  if (!existing) existing = await findSalesInvoiceByReference(reference);
-  if (!existing?.id) return { sent: false, skipped: "no_invoice" };
+  const email = isUsableInvoiceEmail(params.email) ? String(params.email).trim() : null;
 
-  const full = (await fetchSalesInvoiceById(existing.id)) ?? existing;
-  if (!isDraftMoneybirdInvoice(full)) {
-    return {
-      sent: false,
-      invoiceId: full.id,
-      skipped: `state_${String(full.state ?? "unknown").toLowerCase()}`,
-    };
+  const maxAttempts = 3;
+  let lastError = "";
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      let existing: MoneybirdSalesInvoice | null = null;
+      if (invId) existing = await fetchSalesInvoiceById(invId);
+      if (!existing) existing = await findSalesInvoiceByReference(reference);
+      if (!existing?.id) {
+        lastError = "no_invoice";
+        if (attempt < maxAttempts) {
+          await new Promise((r) => setTimeout(r, 350 * attempt));
+          continue;
+        }
+        return { sent: false, skipped: "no_invoice" };
+      }
+
+      const full = (await fetchSalesInvoiceById(existing.id)) ?? existing;
+      if (!isDraftMoneybirdInvoice(full)) {
+        return {
+          sent: false,
+          invoiceId: full.id,
+          skipped: `state_${String(full.state ?? "unknown").toLowerCase()}`,
+        };
+      }
+
+      const sent = await sendSalesInvoiceByEmail(full.id, {
+        emailAddress: email,
+      });
+      console.info(
+        "[moneybird] reparatie factuur verzonden",
+        sent.id ?? full.id,
+        reference,
+        attempt > 1 ? `(poging ${attempt})` : ""
+      );
+      return { sent: true, invoiceId: sent.id ?? full.id };
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+      console.warn(
+        "[moneybird] reparatie send poging mislukt",
+        attempt,
+        reference,
+        lastError
+      );
+      if (attempt < maxAttempts) {
+        await new Promise((r) => setTimeout(r, 350 * attempt));
+      }
+    }
   }
 
-  const sent = await sendSalesInvoiceByEmail(full.id, {
-    emailAddress: params.email,
-  });
-  console.info(
-    "[moneybird] reparatie factuur verzonden",
-    sent.id ?? full.id,
-    reference
-  );
-  return { sent: true, invoiceId: sent.id ?? full.id };
+  return {
+    sent: false,
+    skipped: "send_failed",
+    error: lastError || "Factuur versturen mislukt",
+  };
 }

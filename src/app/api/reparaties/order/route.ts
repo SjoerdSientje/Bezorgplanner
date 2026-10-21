@@ -445,7 +445,7 @@ export async function POST(request: NextRequest) {
             zipcode: postcode,
             city: woonplaats,
           },
-            lines: lineItemsToInvoiceLines(
+          lines: lineItemsToInvoiceLines(
             lineItems.filter((li) => {
               const n = String(li.name).toLowerCase();
               return (
@@ -464,22 +464,34 @@ export async function POST(request: NextRequest) {
         }
       } catch (mbErr) {
         console.error("[reparaties] moneybird create:", mbErr);
+        // Terugbrengen + factuur: hard fail — anders denkt de gebruiker dat alles ok is.
+        if (soort === "reparatie_terugbrengen") {
+          return NextResponse.json(
+            {
+              error:
+                mbErr instanceof Error
+                  ? `Order aangemaakt, maar factuur mislukt: ${mbErr.message}. Controleer Moneybird.`
+                  : "Order aangemaakt, maar factuur aanmaken mislukt. Controleer Moneybird.",
+              order: { ...order, moneybird_invoice_id: null },
+            },
+            { status: 500 }
+          );
+        }
+      }
+      if (soort === "reparatie_terugbrengen" && !moneybirdInvoiceId) {
+        return NextResponse.json(
+          {
+            error:
+              "Order aangemaakt, maar geen Moneybird-factuur aangemaakt. Controleer de koppeling en probeer opnieuw via Geplande reparaties.",
+            order: { ...order, moneybird_invoice_id: null },
+          },
+          { status: 500 }
+        );
       }
     }
 
-    // Terugbrengen: bij aanmaken factuur meteen versturen + voorraad afschrijven.
+    // Terugbrengen: voorraad meteen afschrijven; bij factuur meteen versturen.
     if (soort === "reparatie_terugbrengen" && !productenNogNietBekend) {
-      if (betaalwijze === "factuur" && moneybirdInvoiceId) {
-        try {
-          await sendReparatieSalesInvoice({
-            orderId: order.id,
-            invoiceId: moneybirdInvoiceId,
-            email: email || null,
-          });
-        } catch (sendErr) {
-          console.error("[reparaties] moneybird send (terugbrengen):", sendErr);
-        }
-      }
       try {
         await deductInventoryForReparatieOrder(
           supabase,
@@ -490,6 +502,43 @@ export async function POST(request: NextRequest) {
         );
       } catch (invErr) {
         console.error("[reparaties] inventory deduct (terugbrengen):", invErr);
+      }
+
+      if (betaalwijze === "factuur") {
+        if (!moneybirdInvoiceId) {
+          return NextResponse.json(
+            {
+              error:
+                "Geen factuur-id — kan factuur niet versturen. Order staat wel in de planner (voorraad wel afgeschreven).",
+              order: { ...order, moneybird_invoice_id: null },
+            },
+            { status: 500 }
+          );
+        }
+        const sendRes = await sendReparatieSalesInvoice({
+          orderId: order.id,
+          invoiceId: moneybirdInvoiceId,
+          email: email || null,
+        });
+        if (!sendRes.sent) {
+          const skipped = String(sendRes.skipped ?? "");
+          // Al open/betaald = ok (dubbele webhook / handmatig al verstuurd).
+          if (!(skipped.startsWith("state_") && !skipped.includes("draft"))) {
+            console.error(
+              "[reparaties] moneybird send (terugbrengen) mislukt:",
+              sendRes
+            );
+            return NextResponse.json(
+              {
+                error: `Order aangemaakt en voorraad afgeschreven, maar factuur niet verzonden: ${
+                  sendRes.error || skipped || "onbekende fout"
+                }. Open de factuur in Moneybird en verstuur handmatig.`,
+                order: { ...order, moneybird_invoice_id: moneybirdInvoiceId },
+              },
+              { status: 500 }
+            );
+          }
+        }
       }
     }
 

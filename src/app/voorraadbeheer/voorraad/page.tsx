@@ -998,9 +998,9 @@ export default function VoorraadbeheerPage() {
         <textarea
           value={editOpmerking}
           onChange={(e) => setEditOpmerking(e.target.value)}
-          rows={4}
+          rows={2}
           placeholder="Optionele notitie…"
-          className="mt-1 min-h-[5.5rem] w-full resize-y rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm leading-snug"
+          className="mt-1 min-h-[3.5rem] w-full resize-y rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm leading-snug"
         />
       </div>
       <button
@@ -1405,11 +1405,17 @@ export default function VoorraadbeheerPage() {
       {editProduct && (
         <>
           <div className="fixed inset-0 z-40 bg-black/40" onClick={closeModals} />
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
-              <h2 className="text-lg font-semibold text-koopje-black">Voorraad aanpassen</h2>
-              {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
-              {mutationForm(editProduct, () => submitMutation(editProduct))}
+          <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4">
+            <div className="flex max-h-[92vh] w-full max-w-md flex-col rounded-t-2xl bg-white shadow-xl sm:rounded-2xl">
+              <div className="shrink-0 border-b border-stone-100 px-5 py-4">
+                <h2 className="text-lg font-semibold text-koopje-black">
+                  Voorraad aanpassen
+                </h2>
+                {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+                {mutationForm(editProduct, () => submitMutation(editProduct))}
+              </div>
             </div>
           </div>
         </>
@@ -1418,15 +1424,21 @@ export default function VoorraadbeheerPage() {
       {manageOpen && (
         <>
           <div className="fixed inset-0 z-40 bg-black/40" onClick={closeModals} />
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4">
             <div
-              className={`w-full rounded-2xl bg-white p-6 shadow-xl ${
+              className={`flex max-h-[92vh] w-full flex-col rounded-t-2xl bg-white shadow-xl sm:rounded-2xl ${
                 manageStep === "mutate" ? "max-w-xl" : "max-w-lg"
               }`}
             >
-              <h2 className="text-lg font-semibold text-koopje-black">Voorraad beheren</h2>
-              {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
-              {manageStep === "pick" ? managePickForm() : bulkMutationForm()}
+              <div className="shrink-0 border-b border-stone-100 px-5 py-4">
+                <h2 className="text-lg font-semibold text-koopje-black">
+                  Voorraad beheren
+                </h2>
+                {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+                {manageStep === "pick" ? managePickForm() : bulkMutationForm()}
+              </div>
             </div>
           </div>
         </>

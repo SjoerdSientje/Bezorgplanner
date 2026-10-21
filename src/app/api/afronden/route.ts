@@ -334,13 +334,16 @@ export async function POST(request: NextRequest) {
               );
             } else {
               reparatieFactuurError =
-                skipped === "no_invoice"
+                sendRes.error ||
+                (skipped === "no_invoice"
                   ? "Factuur niet gevonden in Moneybird."
                   : skipped === "moneybird_not_configured"
                     ? "Moneybird niet geconfigureerd."
-                    : skipped
-                      ? `Factuur niet verzonden (${skipped}).`
-                      : "Factuur niet verzonden.";
+                    : skipped === "send_failed"
+                      ? "Moneybird weigerde het versturen (probeer handmatig in Moneybird)."
+                      : skipped
+                        ? `Factuur niet verzonden (${skipped}).`
+                        : "Factuur niet verzonden.");
               console.error(
                 "[api/afronden] reparatie moneybird send skip:",
                 sendRes

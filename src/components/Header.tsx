@@ -1,5 +1,6 @@
 import Link from "next/link";
 import Image from "next/image";
+import HandleidingButton from "@/components/HandleidingButton";
 import LogoutButton from "@/components/LogoutButton";
 
 export default function Header() {
@@ -19,7 +20,10 @@ export default function Header() {
             Bezorgplanner
           </span>
         </Link>
-        <LogoutButton />
+        <div className="flex items-center gap-2">
+          <HandleidingButton />
+          <LogoutButton />
+        </div>
       </div>
     </header>
   );
