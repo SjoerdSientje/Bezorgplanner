@@ -37,6 +37,7 @@ import {
   enqueueInventoryPendingProduct,
   isShopifyProductLinkedToInventory,
 } from "@/lib/inventory-pending";
+import { isOrderMarkedCompleted } from "@/lib/order-completion";
 
 export type InventoryCategory = "fiets" | "onderdeel" | "accessoire" | "overig";
 export type InventorySource =
@@ -2217,9 +2218,10 @@ async function reverseNetShopifyDeductionsForOrder(
 }
 
 /**
- * orders/updated: voorraad in sync brengen met huidige line items.
- * Alleen het verschil toepassen (geen terugboeking + her-aftrek).
- * Alleen als er al een shopify-aftrek was, of de order al in de planner staat.
+ * orders/updated: voorraad-delta na eerdere afschrijving (factuur verzonden e.d.).
+ * Alleen verschil (inkomend voor verwijderd, uitgaand voor nieuw).
+ * Skip als order afgehandeld is (bezorgd/mp_orders) — dan geen terug-/afschrijven.
+ * Zonder eerdere aftrek: niets (reserveringen regelen dat pad).
  */
 export async function syncInventoryForShopifyOrderUpdate(
   supabase: SupabaseClient,
@@ -2240,30 +2242,39 @@ export async function syncInventoryForShopifyOrderUpdate(
       "shopify",
       shopifyOrderId
     );
+    if (!hadDeduction) continue;
 
     const { data: existingOrder } = await supabase
       .from("orders")
-      .select("id")
+      .select("id, status, afgerond_at")
       .eq("owner_email", ownerEmail)
       .eq("order_id", shopifyOrderId)
       .eq("source", "shopify")
       .maybeSingle();
 
-    if (!hadDeduction && !existingOrder?.id) {
-      // Order stond niet in planner en had geen voorraadaftrek → niets doen (geen "stille create").
+    if (
+      existingOrder &&
+      isOrderMarkedCompleted({
+        status: existingOrder.status as string | null,
+        afgerond_at: existingOrder.afgerond_at as string | null,
+      })
+    ) {
+      console.info(
+        "[inventory] Shopify update — order afgehandeld, geen voorraad-delta",
+        orderReference,
+        ownerEmail
+      );
       continue;
     }
 
     if (rawItems.length === 0) {
-      if (hadDeduction) {
-        await reverseNetShopifyDeductionsForOrder(
-          supabase,
-          ownerEmail,
-          orderReference,
-          "Terugboeking vóór her-aftrek (order update)"
-        );
-        await clearOrderDeduction(supabase, ownerEmail, "shopify", shopifyOrderId);
-      }
+      await reverseNetShopifyDeductionsForOrder(
+        supabase,
+        ownerEmail,
+        orderReference,
+        "Terugboeking order update (geen line items)"
+      );
+      await clearOrderDeduction(supabase, ownerEmail, "shopify", shopifyOrderId);
       console.info(
         "[inventory] Shopify update — geen line items, aftrek gewist",
         orderReference,
@@ -2274,58 +2285,39 @@ export async function syncInventoryForShopifyOrderUpdate(
 
     const rules = await loadProductDefaultItemsRules(supabase, ownerEmail);
     const lineItems = buildInventoryDeductionLineItems(rawItems, rules);
-
-    if (hadDeduction) {
-      const currentNet = await netShopifyDeductionsByProduct(
-        supabase,
-        ownerEmail,
-        orderReference
-      );
-      const desired = await desiredDeductionByProduct(
-        supabase,
-        ownerEmail,
-        lineItems
-      );
-      const result = await applyShopifyInventoryDeltas(supabase, {
-        ownerEmail,
-        orderReference,
-        lineItems,
-        currentNet,
-        desired,
-      });
-      if (result.skipped) {
-        console.info(
-          "[inventory] Shopify update — voorraad al in sync, skip",
-          orderReference,
-          ownerEmail
-        );
-      } else {
-        console.info(
-          "[inventory] Shopify update — delta toegepast",
-          orderReference,
-          "stappen",
-          result.applied,
-          "owner",
-          ownerEmail
-        );
-      }
-      continue;
-    }
-
-    await deductInventoryForLineItems(supabase, {
+    const currentNet = await netShopifyDeductionsByProduct(
+      supabase,
       ownerEmail,
-      source: "shopify",
-      externalOrderId: shopifyOrderId,
+      orderReference
+    );
+    const desired = await desiredDeductionByProduct(
+      supabase,
+      ownerEmail,
+      lineItems
+    );
+    const result = await applyShopifyInventoryDeltas(supabase, {
+      ownerEmail,
       orderReference,
       lineItems,
+      currentNet,
+      desired,
     });
-
-    console.info(
-      "[inventory] Shopify update — eerste aftrek",
-      orderReference,
-      "owner",
-      ownerEmail
-    );
+    if (result.skipped) {
+      console.info(
+        "[inventory] Shopify update — voorraad al in sync, skip",
+        orderReference,
+        ownerEmail
+      );
+    } else {
+      console.info(
+        "[inventory] Shopify update — delta toegepast",
+        orderReference,
+        "stappen",
+        result.applied,
+        "owner",
+        ownerEmail
+      );
+    }
   }
 }
 

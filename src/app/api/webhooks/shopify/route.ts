@@ -25,6 +25,8 @@ import { loadProductDefaultItemsRules } from "@/lib/product-rules-server";
 import {
   removeInventoryProductByShopifyId,
   syncInventoryProductFromShopify,
+  syncInventoryForShopifyOrderUpdate,
+  restoreInventoryForShopifyOrder,
   attachMoneybirdProductIdToInventory,
   detachMoneybirdProductIdFromInventory,
 } from "@/lib/inventory";
@@ -39,10 +41,15 @@ import {
   removeMoneybirdProductForShopifyId,
   syncSalesInvoiceFromShopifyOrder,
   creditSalesInvoiceForShopifyOrderFullRefund,
+  syncCreditsFromShopifyRefunds,
   upsertMoneybirdProductFromShopify,
 } from "@/lib/moneybird";
 import { clearInventoryPendingProduct } from "@/lib/inventory-pending";
-import type { ShopifyAdminProduct } from "@/lib/shopify-admin";
+import {
+  fetchShopifyOrderById,
+  type ShopifyAdminProduct,
+} from "@/lib/shopify-admin";
+import type { ShopifyRefund } from "@/lib/shopify-order";
 import {
   inferCompletedStatus,
   isOrderMarkedCompleted,
@@ -150,8 +157,8 @@ async function handleProductWebhook(
 
 /**
  * Verwijder Shopify-order uit ritjes/pakketjes.
- * Moneybird: onbetaald → concept weg; betaald → concept laten + full credit.
- * Alleen openstaande reserveringen vrijgeven (geen stock-restore na factuur-send).
+ * Moneybird: onbetaald (concept of verzonden) → factuur weg + voorraad terug;
+ * betaald → hoofdfactuur laten + full credit-concept.
  */
 async function removeShopifyOrderEverywhere(
   supabase: SupabaseClient,
@@ -219,25 +226,34 @@ async function removeShopifyOrderEverywhere(
     }
   }
 
+  const payments = orderForInventory
+    ? shopifyOrderPaymentAmounts(orderForInventory)
+    : null;
+  const wasPaidFromShopify = Boolean(
+    payments && (payments.betaald || payments.alBetaald >= 0.01)
+  );
+  const wasPaid = wasPaidFromShopify || wasPaidFromDb;
+
   if (orderPayload) {
     try {
-      // Alleen reserveringen; nooit werkelijke voorraad terugboeken na commit/factuur-send.
       await releaseReservationsForShopifyOrder(supabase, orderPayload);
     } catch (invErr) {
       console.error("[webhooks/shopify] inventory reservations release:", invErr);
+    }
+    // Onbetaald cancel/delete: ook afgeschreven voorraad terug (na verzonden factuur).
+    if (!wasPaid) {
+      try {
+        await restoreInventoryForShopifyOrder(supabase, orderPayload);
+      } catch (invErr) {
+        console.error("[webhooks/shopify] inventory restore:", invErr);
+      }
     }
   }
 
   if (isMoneybirdConfigured()) {
     try {
-      const payments = orderForInventory
-        ? shopifyOrderPaymentAmounts(orderForInventory)
-        : null;
-      const wasPaidFromShopify = Boolean(
-        payments && (payments.betaald || payments.alBetaald >= 0.01)
-      );
       await creditSalesInvoiceForShopifyOrderFullRefund(shopifyOrderId, {
-        wasPaid: wasPaidFromShopify || wasPaidFromDb,
+        wasPaid,
       });
     } catch (mbErr) {
       console.error("[webhooks/shopify] moneybird invoice credit/delete:", mbErr);
@@ -318,6 +334,52 @@ export async function POST(request: NextRequest) {
           { status: 200 }
         );
       }
+    }
+
+    // Optionele dedicated refund-webhook (naast orders/updated met refunds[]).
+    if (topic === "refunds/create") {
+      if (!isMoneybirdConfigured()) {
+        return NextResponse.json({ ok: true, skipped: "moneybird_not_configured" });
+      }
+      const refundPayload = JSON.parse(raw) as ShopifyRefund & {
+        order_id?: string | number | null;
+      };
+      const orderId = String(refundPayload.order_id ?? "").trim();
+      if (!orderId) {
+        return NextResponse.json({ ok: true, skipped: "missing_order_id" });
+      }
+      const fullOrder = await fetchShopifyOrderById(orderId);
+      if (!fullOrder) {
+        return NextResponse.json({ ok: true, skipped: "order_fetch_failed", orderId });
+      }
+      // Zorg dat deze refund in de lijst staat (Admin order kan iets achterlopen).
+      const refundId = String(refundPayload.id ?? "").trim();
+      const existingRefunds = Array.isArray(fullOrder.refunds) ? fullOrder.refunds : [];
+      if (
+        refundId &&
+        !existingRefunds.some((r) => String(r.id ?? "") === refundId)
+      ) {
+        fullOrder.refunds = [...existingRefunds, refundPayload];
+      }
+      const financial = String(fullOrder.financial_status ?? "").toLowerCase();
+      if (financial === "refunded" || financial === "voided") {
+        const supabase = createClient(supabaseUrl, supabaseServiceKey);
+        await removeShopifyOrderEverywhere(supabase, orderId, fullOrder);
+        return NextResponse.json({
+          ok: true,
+          deleted: true,
+          reason: "refunded",
+          shopifyOrderId: orderId,
+          via: "refunds/create",
+        });
+      }
+      const result = await syncCreditsFromShopifyRefunds(fullOrder);
+      return NextResponse.json({
+        ok: true,
+        topic: "refunds/create",
+        shopifyOrderId: orderId,
+        ...result,
+      });
     }
 
     const order = JSON.parse(raw) as ShopifyOrder;
@@ -405,12 +467,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Voorraad: create/update = reserveren; fulfilled <€490 = afschrijven; delete/cancel = vrijgeven/restore.
+    // Voorraad: create/update = reserveren; na factuur-aftrek = delta (tenzij afgehandeld);
+    // fulfilled <€490 = afschrijven; delete/cancel = alleen reserveringen vrijgeven.
     try {
       if (isCreate) {
         await reserveInventoryForShopifyOrder(supabase, order);
       } else if (isUpdate) {
         await syncReservationsForShopifyOrderUpdate(supabase, order);
+        // Al afgeschreven (verzonden factuur) + niet afgehandeld → producten terug/afschrijven.
+        await syncInventoryForShopifyOrderUpdate(supabase, order);
       }
       await maybeCommitInventoryOnShopifyFulfilled(supabase, order);
     } catch (invErr) {
@@ -576,6 +641,20 @@ export async function POST(request: NextRequest) {
               .update({ status: inferCompletedStatus(existing) })
               .eq("id", existing.id);
           }
+          // Snapshot/totaal wél bijwerken zodat Moneybird later incrementeel blijft
+          // (geen dubbele credits). Status/planning niet terugzetten.
+          await supabase
+            .from("orders")
+            .update({
+              shopify_line_snapshot: buildShopifyLineSnapshot(order),
+              bestelling_totaal_prijs: row.bestelling_totaal_prijs,
+              betaald: row.betaald,
+              al_betaald: row.al_betaald,
+              te_betalen: row.te_betalen,
+              line_items_json: row.line_items_json,
+              producten: row.producten,
+            })
+            .eq("id", existing.id);
           continue;
         }
 

@@ -70,6 +70,30 @@ export interface ShopifyShippingLine {
   discounted_price?: string | number | null;
 }
 
+/** Refund-regel uit Shopify Order / refunds webhook. */
+export type ShopifyRefundLineItem = {
+  id?: string | number | null;
+  quantity?: number | null;
+  line_item_id?: string | number | null;
+  restock_type?: string | null;
+  /** Genest line_item (vaak aanwezig in Order.refunds). */
+  line_item?: ShopifyLineItem | null;
+  subtotal?: string | number | null;
+  total_tax?: string | number | null;
+};
+
+export type ShopifyRefund = {
+  id?: string | number | null;
+  created_at?: string | null;
+  note?: string | null;
+  refund_line_items?: ShopifyRefundLineItem[] | null;
+  transactions?: Array<{
+    amount?: string | number | null;
+    kind?: string | null;
+    status?: string | null;
+  }> | null;
+};
+
 export interface ShopifyOrder {
   id?: string | number | null;
   name?: string | null;
@@ -95,6 +119,8 @@ export interface ShopifyOrder {
    * @see https://shopify.dev/docs/api/admin-rest/latest/resources/order
    */
   total_outstanding?: string | number | null;
+  /** Refunds (meestal aanwezig op orders/updated bij gedeeltelijke terugbetaling). */
+  refunds?: ShopifyRefund[] | null;
 }
 
 const PRICE_LIMIT_FIETS = 500;
@@ -1007,6 +1033,104 @@ export function diffShopifyLineSnapshots(
     }
   }
   return { additions, removals };
+}
+
+function parseMoneyish(raw: unknown): number {
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : 0;
+  const n = parseFloat(String(raw ?? "0").replace(",", "."));
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * Zet één Shopify-refund om naar line-snapshots voor Moneybird-credit.
+ * Heeft voorkeur voor refund_line_items; anders één regel met refund-totaal.
+ */
+export function shopifyRefundToCreditSnapshots(
+  refund: ShopifyRefund,
+  order?: Pick<ShopifyOrder, "line_items" | "name"> | null
+): { refundId: string; snapshots: ShopifyLineSnapshot[]; amountIncl: number } | null {
+  const refundId = String(refund.id ?? "").trim();
+  if (!refundId) return null;
+
+  const lineById = new Map<string, ShopifyLineItem>();
+  for (const li of order?.line_items ?? []) {
+    const id = String(li.id ?? "").trim();
+    if (id) lineById.set(id, li);
+  }
+
+  const snapshots: ShopifyLineSnapshot[] = [];
+  let amountIncl = 0;
+
+  for (const rli of refund.refund_line_items ?? []) {
+    const qty = Math.max(0, Math.round(Number(rli.quantity) || 0));
+    if (qty <= 0) continue;
+    const lineItemId = String(
+      rli.line_item_id ?? rli.line_item?.id ?? ""
+    ).trim();
+    const nested = rli.line_item;
+    const fromOrder = lineItemId ? lineById.get(lineItemId) : undefined;
+    const src = nested ?? fromOrder;
+    const unitPrice = parseMoneyish(src?.price);
+    const name =
+      String(src?.name ?? "").trim() ||
+      `Terugbetaling${order?.name ? ` ${order.name}` : ""}`;
+    const subtotal = parseMoneyish(rli.subtotal);
+    const tax = parseMoneyish(rli.total_tax);
+    const lineIncl =
+      subtotal > 0.009 || tax > 0.009
+        ? subtotal + tax
+        : unitPrice * qty;
+    amountIncl += lineIncl;
+    snapshots.push({
+      id: lineItemId || `refund-line-${String(rli.id ?? snapshots.length)}`,
+      qty,
+      name,
+      unitPrice:
+        qty > 0 && lineIncl > 0.009
+          ? Math.round((lineIncl / qty) * 100) / 100
+          : unitPrice,
+    });
+  }
+
+  if (snapshots.length === 0) {
+    // Geld-refund zonder line items: som van succesvolle refund-transacties.
+    for (const tx of refund.transactions ?? []) {
+      const kind = String(tx.kind ?? "").toLowerCase();
+      const status = String(tx.status ?? "").toLowerCase();
+      if (kind && kind !== "refund") continue;
+      if (status && status !== "success" && status !== "pending") continue;
+      amountIncl += Math.abs(parseMoneyish(tx.amount));
+    }
+    if (amountIncl < 0.01) return null;
+    snapshots.push({
+      id: `refund-amount-${refundId}`,
+      qty: 1,
+      name: `Terugbetaling${order?.name ? ` ${order.name}` : ""}`,
+      unitPrice: Math.round(amountIncl * 100) / 100,
+    });
+  }
+
+  return {
+    refundId,
+    snapshots,
+    amountIncl: Math.round(amountIncl * 100) / 100,
+  };
+}
+
+/** Alle refunds op een order → credit-snapshots (idempotent per refund-id elders). */
+export function listShopifyRefundCredits(
+  order: ShopifyOrder
+): Array<{ refundId: string; snapshots: ShopifyLineSnapshot[]; amountIncl: number }> {
+  const out: Array<{
+    refundId: string;
+    snapshots: ShopifyLineSnapshot[];
+    amountIncl: number;
+  }> = [];
+  for (const refund of order.refunds ?? []) {
+    const mapped = shopifyRefundToCreditSnapshots(refund, order);
+    if (mapped) out.push(mapped);
+  }
+  return out;
 }
 
 export interface RitjesOrderRow {

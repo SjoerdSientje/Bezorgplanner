@@ -506,7 +506,8 @@ export async function syncReservationsForShopifyOrderUpdate(
     }
 
     if (await hasOrderDeduction(supabase, ownerEmail, "shopify", shopifyOrderId)) {
-      // Al afgeschreven — reserveringen zouden leeg moeten zijn.
+      // Al afgeschreven (factuur verzonden e.d.) — geen her-reserveren.
+      // Stock-delta bij productwijziging: syncInventoryForShopifyOrderUpdate (tenzij afgehandeld).
       await clearReservationsForOrder(supabase, ownerEmail, "shopify", shopifyOrderId);
       continue;
     }

@@ -15,6 +15,7 @@ import {
   buildShopifyLineSnapshot,
   diffShopifyLineSnapshots,
   effectiveShopifyLineQuantity,
+  listShopifyRefundCredits,
   shopifyOrderPaymentAmounts,
 } from "@/lib/shopify-order";
 import {
@@ -162,7 +163,8 @@ export function shopifyAdditionReference(
   shopifyOrderId: string,
   snapshots: ShopifyLineSnapshot[]
 ): string {
-  const ids = [...snapshots.map((s) => s.id)].sort().join(",");
+  // Incl. qty zodat 2→1 en later 1→0 niet dezelfde idempotency-key delen.
+  const ids = [...snapshots.map((s) => `${s.id}x${s.qty}`)].sort().join(",");
   return `shopify:${shopifyOrderId}:add:${ids}`;
 }
 
@@ -171,8 +173,16 @@ export function shopifyCreditReference(
   shopifyOrderId: string,
   snapshots: ShopifyLineSnapshot[]
 ): string {
-  const ids = [...snapshots.map((s) => s.id)].sort().join(",");
+  const ids = [...snapshots.map((s) => `${s.id}x${s.qty}`)].sort().join(",");
   return `shopify:${shopifyOrderId}:credit:${ids}`;
+}
+
+/** Reference voor credit op één Shopify-refund (idempotent per refund-id). */
+export function shopifyRefundCreditReference(
+  shopifyOrderId: string,
+  refundId: string
+): string {
+  return `shopify:${shopifyOrderId}:refund:${refundId}`;
 }
 
 /** Reference voor volledige credit bij refund/cancel. */
@@ -846,6 +856,19 @@ export function isDraftMoneybirdInvoice(invoice: MoneybirdSalesInvoice): boolean
   return String(invoice.state ?? "").toLowerCase() === "draft";
 }
 
+/** Hoofdfactuur mag in-place bijgewerkt: concept, of verzonden zolang (Shopify) onbetaald. */
+function canUpdateShopifyMainInvoiceInPlace(
+  invoice: MoneybirdSalesInvoice,
+  shopifyUnpaid: boolean
+): boolean {
+  if (isDraftMoneybirdInvoice(invoice)) return true;
+  if (!shopifyUnpaid) return false;
+  const state = String(invoice.state ?? "").toLowerCase();
+  // Betaald/oninvorderbaar: niet meer wijzigen (koppeling betaling).
+  if (state === "paid" || state === "uncollectible") return false;
+  return true;
+}
+
 /** Shopify-order e-mail voor factuurverzending (leeg = Moneybird contact-default). */
 function shopifyOrderInvoiceEmail(order: ShopifyOrder): string | null {
   const raw = String(
@@ -1031,18 +1054,55 @@ function correctionKenmerkForMainInvoice(main: MoneybirdSalesInvoice): string {
   return `correctie factuur ${num}`;
 }
 
+/** Uniek kenmerk dat altijd naar de hoofdfactuur verwijst (zichtbaar in Moneybird). */
+function correctionKenmerkWithSuffix(
+  main: MoneybirdSalesInvoice,
+  suffix: string
+): string {
+  const base = correctionKenmerkForMainInvoice(main);
+  const s = String(suffix ?? "").trim();
+  if (!s) return base;
+  // Houd kenmerk leesbaar; suffix voor idempotency bij meerdere credits.
+  const short = s.length > 48 ? s.slice(-48) : s;
+  return `${base} (${short})`;
+}
+
+function moneybirdInvoiceTotalIncl(invoice: MoneybirdSalesInvoice): number | null {
+  const raw =
+    (invoice as { total_price_incl_tax?: string | number | null })
+      .total_price_incl_tax ?? invoice.price_total;
+  const n =
+    typeof raw === "number"
+      ? raw
+      : parseFloat(String(raw ?? "").replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Factuur mag weg bij Shopify-cancel: concept, of verzonden zolang niet betaald. */
+function canDeleteUnpaidShopifyMainInvoice(
+  invoice: MoneybirdSalesInvoice,
+  shopifyUnpaid: boolean
+): boolean {
+  if (!shopifyUnpaid) return false;
+  const state = String(invoice.state ?? "").toLowerCase();
+  if (state === "paid" || state === "uncollectible") return false;
+  return true; // draft, open, pending_payment, late, reminded, …
+}
+
 function shopifyCorrectionReference(shopifyOrderId: string): string {
   return `shopify:${shopifyOrderId}:correctie`;
 }
 
 /**
- * orders/updated: alleen bestaande conceptfactuur bijwerken — nooit een nieuwe aanmaken.
- * Alleen PATCH als regels/contact echt wijzigen t.o.v. de huidige conceptfactuur.
+ * orders/updated: bestaande hoofdfactuur bijwerken — nooit een nieuwe aanmaken.
+ * Concept altijd; verzonden alleen als Shopify-order onbetaald is (geen auto-herzenden).
+ * Alleen PATCH als regels/contact echt wijzigen.
  * @param lockTotalIncl als gezet: nieuwe producten, maar prijzen geschaald naar dit totaal (betaalde concept).
+ * @param shopifyUnpaid Shopify al_betaald &lt; €0,01 — nodig om open factuur te mogen patchen.
  */
 export async function updateDraftSalesInvoiceFromShopifyOrder(
   order: ShopifyOrder,
-  opts?: { lockTotalIncl?: number | null }
+  opts?: { lockTotalIncl?: number | null; shopifyUnpaid?: boolean }
 ): Promise<MoneybirdSalesInvoice | null> {
   if (!isMoneybirdConfigured()) {
     console.warn("[moneybird] niet geconfigureerd — factuur-update overgeslagen.");
@@ -1056,6 +1116,10 @@ export async function updateDraftSalesInvoiceFromShopifyOrder(
     opts?.lockTotalIncl != null && Number.isFinite(Number(opts.lockTotalIncl))
       ? Number(opts.lockTotalIncl)
       : null;
+  const unpaid =
+    opts?.shopifyUnpaid != null
+      ? Boolean(opts.shopifyUnpaid)
+      : shopifyOrderPaymentAmounts(order).alBetaald < 0.01;
 
   if (
     lockTotal == null &&
@@ -1082,11 +1146,12 @@ export async function updateDraftSalesInvoiceFromShopifyOrder(
     `/sales_invoices/${existing.id}.json`
   );
 
-  if (!isDraftMoneybirdInvoice(full)) {
+  if (!canUpdateShopifyMainInvoiceInPlace(full, unpaid)) {
     console.info(
-      "[moneybird] order update — factuur niet meer concept, skip",
+      "[moneybird] order update — factuur niet in-place bewerkbaar, skip",
       full.id,
-      full.state ?? "?"
+      full.state ?? "?",
+      unpaid ? "shopify_unpaid" : "shopify_paid"
     );
     return full;
   }
@@ -1105,7 +1170,7 @@ export async function updateDraftSalesInvoiceFromShopifyOrder(
     String(full.contact_id ?? "") === String(contact.id ?? "");
   if (contactUnchanged && invoiceDetailsUnchanged(full.details, details)) {
     console.info(
-      "[moneybird] order update — conceptfactuur al in sync, skip",
+      "[moneybird] order update — factuur al in sync, skip",
       full.id,
       order.name ?? shopifyOrderId
     );
@@ -1129,11 +1194,15 @@ export async function updateDraftSalesInvoiceFromShopifyOrder(
     }
   );
 
+  const wasDraft = isDraftMoneybirdInvoice(full);
   console.info(
-    "[moneybird] conceptfactuur bijgewerkt",
+    wasDraft
+      ? "[moneybird] conceptfactuur bijgewerkt"
+      : "[moneybird] verzonden factuur bijgewerkt (geen auto-herzenden)",
     updated.id,
     "voor Shopify",
-    order.name ?? shopifyOrderId
+    order.name ?? shopifyOrderId,
+    full.state ?? "?"
   );
   return updated;
 }
@@ -1283,6 +1352,15 @@ export async function syncSalesInvoiceFromShopifyOrder(
     normalizedTopic === "orders/edited"
   ) {
     invoice = await syncSalesInvoiceOnShopifyOrderUpdate(supabase, order, opts);
+    // Gedeeltelijke refunds (refunds[]) — ook als line-snapshot niet wijzigt.
+    try {
+      await syncCreditsFromShopifyRefunds(order, invoice);
+    } catch (err) {
+      console.error(
+        "[moneybird] refund-credits sync mislukt (webhook gaat door):",
+        err instanceof Error ? err.message : err
+      );
+    }
   } else if (normalizedTopic === "orders/create") {
     invoice = await createSalesInvoiceFromShopifyOrder(supabase, order);
   } else {
@@ -1340,10 +1418,13 @@ export async function syncSalesInvoiceFromShopifyOrder(
 }
 
 /**
- * orders/updated|edited: onbetaalde concept → volledige update;
- * betaald + concept + zelfde totaal → concept bijwerken;
- * betaald + concept + ander totaal → concept (nieuwe producten, oude totaal) + delta-correctie;
- * verstuurde hoofdfactuur → add-/credit-concepten bij regelwijzigingen.
+ * orders/updated|edited:
+ * - onbetaald concept → hoofdfactuur bijwerken
+ * - onbetaald verzonden → hoofdfactuur bijwerken (geen auto-herzenden)
+ * - betaald concept + zelfde totaal → concept bijwerken
+ * - betaald concept + ander totaal → concept (nieuwe producten, oude totaal) + delta-correctie
+ * - betaald verzonden + zelfde totaal → credit removals + add additions (geen PATCH hoofd)
+ * - betaald verzonden + ander totaal → alleen delta-correctie (hoofd ongemoeid)
  */
 async function syncSalesInvoiceOnShopifyOrderUpdate(
   supabase: SupabaseClient,
@@ -1362,6 +1443,7 @@ async function syncSalesInvoiceOnShopifyOrderUpdate(
   if (!shopifyOrderId) return null;
 
   const payments = shopifyOrderPaymentAmounts(order);
+  const shopifyUnpaid = payments.alBetaald < 0.01;
   const existing = await findShopifyMainInvoice(shopifyOrderId, supabase);
   let main = existing?.id
     ? ((await fetchSalesInvoiceById(existing.id)) ?? existing)
@@ -1390,34 +1472,24 @@ async function syncSalesInvoiceOnShopifyOrderUpdate(
   const paymentOnly =
     diff != null && diff.additions.length === 0 && diff.removals.length === 0;
 
-  const unpaidDraft =
-    isDraftMoneybirdInvoice(main) &&
-    payments.alBetaald < 0.01;
+  const isDraft = isDraftMoneybirdInvoice(main);
 
-  if (unpaidDraft) {
+  // Onbetaald (concept of verzonden): hoofdfactuur in-place bijwerken.
+  if (shopifyUnpaid) {
     if (paymentOnly) {
       console.info(
-        "[moneybird] order update — alleen betaling, concept ongewijzigd",
-        reference
+        "[moneybird] order update — alleen betaling, factuur ongewijzigd",
+        reference,
+        isDraft ? "concept" : "verzonden"
       );
       return main;
     }
-    // Geen eerdere snapshot: behoud oud gedrag (fingerprint skip in update).
-    return updateDraftSalesInvoiceFromShopifyOrder(order);
+    return updateDraftSalesInvoiceFromShopifyOrder(order, {
+      shopifyUnpaid: true,
+    });
   }
 
-  const lockedOrPaid =
-    payments.alBetaald >= 0.01 ||
-    !isDraftMoneybirdInvoice(main);
-
-  if (!lockedOrPaid) {
-    console.info(
-      "[moneybird] order update — geen lock-pad, skip",
-      reference
-    );
-    return null;
-  }
-
+  // Vanaf hier: Shopify-betaald.
   if (paymentOnly || diff == null || !hasLineChanges) {
     if (paymentOnly) {
       console.info(
@@ -1433,51 +1505,61 @@ async function syncSalesInvoiceOnShopifyOrderUpdate(
     return main;
   }
 
+  const snapTotal = (rows: ShopifyLineSnapshot[]) =>
+    rows.reduce((sum, row) => sum + row.qty * row.unitPrice, 0);
+  const prevFromOpts =
+    opts?.previousTotal != null && Number.isFinite(Number(opts.previousTotal))
+      ? Number(opts.previousTotal)
+      : null;
+  const previousTotal =
+    prevFromOpts ?? (previous != null ? snapTotal(previous) : null);
+  const newTotal = payments.totaal;
+  const totalsEqual =
+    previousTotal != null &&
+    Number.isFinite(previousTotal) &&
+    Number.isFinite(newTotal) &&
+    Math.abs(newTotal - previousTotal) < 0.01;
+
   // Betaald + hoofdfactuur nog concept:
   // - totaal gelijk → concept volledig bijwerken
-  // - totaal wijzigt → concept bijwerken met nieuwe producten maar oude totaalprijs,
-  //   plus correctiefactuur voor alleen het verschil (negatief = credit).
-  if (main != null && isDraftMoneybirdInvoice(main)) {
-    const snapTotal = (rows: ShopifyLineSnapshot[]) =>
-      rows.reduce((sum, row) => sum + row.qty * row.unitPrice, 0);
-    const prevFromOpts =
-      opts?.previousTotal != null && Number.isFinite(Number(opts.previousTotal))
-        ? Number(opts.previousTotal)
-        : null;
-    const previousTotal =
-      prevFromOpts ??
-      (previous != null ? snapTotal(previous) : null);
-    const newTotal = payments.totaal;
-    const totalsEqual =
-      previousTotal != null &&
-      Number.isFinite(previousTotal) &&
+  // - totaal wijzigt → concept bijwerken (nieuwe producten, oude totaalprijs)
+  //   + correctiefactuur voor extra / te veel betaald (positief of negatief).
+  if (isDraft) {
+    const baselineTotal =
+      previousTotal ?? moneybirdInvoiceTotalIncl(main);
+    const totalsNowEqual =
+      baselineTotal != null &&
+      Number.isFinite(baselineTotal) &&
       Number.isFinite(newTotal) &&
-      Math.abs(newTotal - previousTotal) < 0.01;
+      Math.abs(newTotal - baselineTotal) < 0.01;
 
-    if (totalsEqual || previousTotal == null) {
+    if (totalsNowEqual || baselineTotal == null) {
       console.info(
-        "[moneybird] order update — concept bijwerken",
+        "[moneybird] order update — betaald concept bijwerken",
         reference,
-        totalsEqual ? `(totaal ongewijzigd €${newTotal.toFixed(2)})` : "(geen vorig totaal)"
+        totalsNowEqual
+          ? `(totaal ongewijzigd €${newTotal.toFixed(2)})`
+          : "(geen baseline-totaal)"
       );
-      return updateDraftSalesInvoiceFromShopifyOrder(order);
+      return updateDraftSalesInvoiceFromShopifyOrder(order, {
+        shopifyUnpaid: false,
+      });
     }
 
-    const deltaIncl = Math.round((newTotal - previousTotal) * 100) / 100;
+    const deltaIncl = Math.round((newTotal - baselineTotal) * 100) / 100;
     console.info(
-      "[moneybird] order update — concept + correctie delta",
+      "[moneybird] order update — betaald concept + correctie delta",
       reference,
-      `was €${previousTotal.toFixed(2)} → €${newTotal.toFixed(2)}`,
+      `was €${baselineTotal.toFixed(2)} → €${newTotal.toFixed(2)}`,
       `(Δ €${deltaIncl.toFixed(2)})`
     );
 
     const updatedMain = await updateDraftSalesInvoiceFromShopifyOrder(order, {
-      lockTotalIncl: previousTotal,
+      lockTotalIncl: baselineTotal,
+      shopifyUnpaid: false,
     });
     const mainForCorr = updatedMain ?? main;
 
-    // Totaal omhoog → nieuw product op correctie (én op hoofdconcept).
-    // Totaal omlaag → oud product op negatieve correctie (nieuw staat al op hoofdconcept).
     const lineDescription =
       deltaIncl < 0
         ? (diff.removals[0]?.name && String(diff.removals[0].name).trim()) ||
@@ -1503,16 +1585,37 @@ async function syncSalesInvoiceOnShopifyOrderUpdate(
         err instanceof Error ? err.message : err
       );
     }
-    // Altijd hoofdfactuur teruggeven (Mollie/sync), niet de correctie.
     return mainForCorr;
   }
 
-  // Verstuurde hoofdfactuur (niet meer concept): klassieke add-/credit-concepten.
+  // Betaald + verzonden: nooit PATCH op hoofd. Altijd product-credit + add
+  // (ook bij ander totaal — anders missen productwisselingen een echte credit).
+  // Removals bij partially_refunded + refunds[] → syncCreditsFromShopifyRefunds
+  // (voorkomt dubbele credit: snapshot-diff én refunds[]).
+  const financial = String(order.financial_status ?? "").toLowerCase();
+  const refundsHandleRemovals =
+    financial === "partially_refunded" &&
+    Array.isArray(order.refunds) &&
+    order.refunds.length > 0;
+
+  console.info(
+    "[moneybird] order update — betaald+verzonden, credit+add",
+    reference,
+    totalsEqual
+      ? `(totaal ongewijzigd €${newTotal.toFixed(2)})`
+      : previousTotal != null
+        ? `(totaal €${previousTotal.toFixed(2)} → €${newTotal.toFixed(2)})`
+        : "(geen vorig totaal)",
+    refundsHandleRemovals ? "(removals via refunds[])" : ""
+  );
   let last: MoneybirdSalesInvoice | null = main;
 
   if (diff.additions.length > 0) {
     try {
-      const added = await createAdditionDraftFromSnapshots(order, diff.additions);
+      const added = await createAdditionDraftFromSnapshots(
+        order,
+        diff.additions
+      );
       if (added) last = added;
     } catch (err) {
       console.error(
@@ -1523,7 +1626,7 @@ async function syncSalesInvoiceOnShopifyOrderUpdate(
     }
   }
 
-  if (diff.removals.length > 0 && main?.id) {
+  if (diff.removals.length > 0 && main?.id && !refundsHandleRemovals) {
     try {
       const credited = await createPartialCreditFromRemovals(
         order,
@@ -1538,11 +1641,6 @@ async function syncSalesInvoiceOnShopifyOrderUpdate(
         err instanceof Error ? err.message : err
       );
     }
-  } else if (diff.removals.length > 0 && !main?.id) {
-    console.info(
-      "[moneybird] removals zonder hoofdfactuur — geen credit",
-      shopifyOrderId
-    );
   }
 
   return last;
@@ -1612,7 +1710,8 @@ async function createOrUpdateDeltaCorrectionInvoice(params: {
         body: JSON.stringify({
           sales_invoice: {
             contact_id: contact.id,
-            reference: machineRef,
+            // Zichtbaar kenmerk verwijst naar hoofdfactuur.
+            reference: kenmerk,
             details_attributes: [...destroyOld, detail],
           },
         }),
@@ -1621,7 +1720,6 @@ async function createOrUpdateDeltaCorrectionInvoice(params: {
     console.info(
       "[moneybird] correctie-concept bijgewerkt",
       updated.id,
-      machineRef,
       kenmerk,
       `€${deltaIncl.toFixed(2)}`
     );
@@ -1635,6 +1733,7 @@ async function createOrUpdateDeltaCorrectionInvoice(params: {
       body: JSON.stringify({
         sales_invoice: {
           contact_id: contact.id,
+          // Eerst machine-ref voor race-dedupe, daarna kenmerk zetten.
           reference: machineRef,
           currency: "EUR",
           prices_are_incl_tax: false,
@@ -1646,15 +1745,34 @@ async function createOrUpdateDeltaCorrectionInvoice(params: {
 
   // Race: parallelle webhook kan net ook ge-POSTed hebben → ontdubbel op reference.
   const deduped = await dedupeDraftInvoicesByReference(machineRef, created);
+  let finalInv = deduped;
+  if (deduped?.id && String(deduped.reference ?? "") !== kenmerk) {
+    try {
+      finalInv = await moneybirdFetch<MoneybirdSalesInvoice>(
+        `/sales_invoices/${deduped.id}.json`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            sales_invoice: { reference: kenmerk },
+          }),
+        }
+      );
+    } catch (err) {
+      console.warn(
+        "[moneybird] correctie kenmerk zetten mislukt",
+        deduped.id,
+        err instanceof Error ? err.message : err
+      );
+    }
+  }
   console.info(
     "[moneybird] correctie-concept aangemaakt",
-    deduped.id ?? created.id,
-    machineRef,
+    finalInv.id ?? created.id,
     kenmerk,
     `€${deltaIncl.toFixed(2)}`,
     `(abs €${absIncl.toFixed(2)})`
   );
-  return deduped;
+  return finalInv;
 }
 
 /** Bij parallelle creates met dezelfde reference: houd de oudste concept, verwijder rest. */
@@ -1760,24 +1878,118 @@ async function createAdditionDraftFromSnapshots(
 }
 
 /**
+ * Credits voor Shopify refunds[] (gedeeltelijke terugbetaling zonder line-edit).
+ * Idempotent per refund-id: shopify:{orderId}:refund:{refundId}.
+ */
+export async function syncCreditsFromShopifyRefunds(
+  order: ShopifyOrder,
+  mainInvoice?: MoneybirdSalesInvoice | null
+): Promise<{ created: number; skipped: number }> {
+  const shopifyOrderId = String(order.id ?? "").trim();
+  if (!shopifyOrderId || !isMoneybirdConfigured()) {
+    return { created: 0, skipped: 0 };
+  }
+
+  const refunds = listShopifyRefundCredits(order);
+  if (refunds.length === 0) return { created: 0, skipped: 0 };
+
+  let main = mainInvoice?.id
+    ? mainInvoice
+    : await findShopifyMainInvoice(shopifyOrderId);
+  if (!main?.id) {
+    console.info(
+      "[moneybird] refunds — geen hoofdfactuur, skip credits",
+      shopifyOrderId
+    );
+    return { created: 0, skipped: refunds.length };
+  }
+  main = (await fetchSalesInvoiceById(main.id)) ?? main;
+
+  // Onbetaald concept: refund zonder verzonden factuur → liever hoofdfactuur bijwerken.
+  if (isDraftMoneybirdInvoice(main)) {
+    const payments = shopifyOrderPaymentAmounts(order);
+    if (payments.alBetaald < 0.01) {
+      console.info(
+        "[moneybird] refunds — onbetaald concept, geen aparte credit (hoofd bijwerken elders)",
+        shopifyOrderId
+      );
+      return { created: 0, skipped: refunds.length };
+    }
+  }
+
+  let created = 0;
+  let skipped = 0;
+  for (const refund of refunds) {
+    const reference = shopifyRefundCreditReference(
+      shopifyOrderId,
+      refund.refundId
+    );
+    try {
+      const existing = await findSalesInvoiceByReference(reference);
+      if (existing?.id) {
+        skipped += 1;
+        continue;
+      }
+      const credited = await createPartialCreditFromRemovals(
+        order,
+        main,
+        refund.snapshots,
+        reference
+      );
+      if (credited?.id) created += 1;
+      else skipped += 1;
+    } catch (err) {
+      console.error(
+        "[moneybird] refund-credit mislukt",
+        shopifyOrderId,
+        refund.refundId,
+        err instanceof Error ? err.message : err
+      );
+    }
+  }
+
+  if (created > 0 || skipped > 0) {
+    console.info(
+      "[moneybird] refunds verwerkt",
+      shopifyOrderId,
+      `created=${created}`,
+      `skipped=${skipped}`
+    );
+  }
+  return { created, skipped };
+}
+
+/**
  * Deelcredit: duplicate_creditinvoice van hoofdfactuur, daarna alleen removal-regels.
  * Blijft concept (niet auto-verzenden).
+ * @param referenceOverride vaste kenmerk (bv. shopify:{id}:refund:{refundId}).
  */
 async function createPartialCreditFromRemovals(
   order: ShopifyOrder,
   mainInvoice: MoneybirdSalesInvoice,
-  removals: ShopifyLineSnapshot[]
+  removals: ShopifyLineSnapshot[],
+  referenceOverride?: string | null
 ): Promise<MoneybirdSalesInvoice | null> {
   const shopifyOrderId = String(order.id ?? "").trim();
   const mainId = String(mainInvoice.id ?? "").trim();
   if (!shopifyOrderId || !mainId || removals.length === 0) return null;
 
-  const reference = shopifyCreditReference(shopifyOrderId, removals);
-  const existing = await findSalesInvoiceByReference(reference);
+  const machineRef =
+    String(referenceOverride ?? "").trim() ||
+    shopifyCreditReference(shopifyOrderId, removals);
+  // Zichtbaar kenmerk: zelfde stijl als betaald-concept correcties.
+  const suffix = machineRef.includes(":refund:")
+    ? machineRef.split(":refund:").pop() || machineRef
+    : machineRef.split(":").slice(-1)[0] || machineRef;
+  const kenmerk = correctionKenmerkWithSuffix(mainInvoice, suffix);
+
+  const existing =
+    (await findSalesInvoiceByReference(machineRef)) ??
+    (await findSalesInvoiceByReference(kenmerk));
   if (existing?.id) {
     console.info(
       "[moneybird] credit-factuur bestaat al",
-      reference,
+      existing.reference ?? kenmerk,
       existing.id
     );
     return existing;
@@ -1785,7 +1997,7 @@ async function createPartialCreditFromRemovals(
 
   const details = await buildInvoiceDetailsFromLineSnapshots(order, removals);
   if (!details) {
-    console.warn("[moneybird] credit — geen removal-regels", reference);
+    console.warn("[moneybird] credit — geen removal-regels", kenmerk);
     return null;
   }
 
@@ -1825,7 +2037,7 @@ async function createPartialCreditFromRemovals(
       method: "PATCH",
       body: JSON.stringify({
         sales_invoice: {
-          reference,
+          reference: kenmerk,
           details_attributes: [...destroyOld, ...creditDetails],
         },
       }),
@@ -1835,8 +2047,9 @@ async function createPartialCreditFromRemovals(
   console.info(
     "[moneybird] credit-conceptfactuur aangemaakt",
     updated.id ?? full.id,
-    reference,
-    `van hoofdfactuur ${mainId}`
+    kenmerk,
+    `van hoofdfactuur ${mainId}`,
+    `(machine ${machineRef})`
   );
   return updated;
 }
@@ -1871,11 +2084,12 @@ export async function creditSalesInvoiceForShopifyOrderFullRefund(
 
   const full = (await fetchSalesInvoiceById(existing.id)) ?? existing;
   const wasPaid = Boolean(opts?.wasPaid);
-  const isDraft = isDraftMoneybirdInvoice(full);
 
-  // Onbetaald concept: weghalen. Betaald concept blijft staan + credit hieronder.
-  if (isDraft && !wasPaid) {
-    const del = await deleteSalesInvoiceForShopifyOrderId(id);
+  // Onbetaald (concept of verzonden): factuur weghalen i.p.v. credit.
+  if (!wasPaid && canDeleteUnpaidShopifyMainInvoice(full, true)) {
+    const del = await deleteSalesInvoiceForShopifyOrderId(id, {
+      allowUnpaidSent: true,
+    });
     return {
       credited: false,
       deleted: del.deleted,
@@ -1885,12 +2099,15 @@ export async function creditSalesInvoiceForShopifyOrderFullRefund(
     };
   }
 
-  const creditRef = shopifyFullCreditReference(id);
-  const existingCredit = await findSalesInvoiceByReference(creditRef);
+  const machineCreditRef = shopifyFullCreditReference(id);
+  const kenmerk = correctionKenmerkForMainInvoice(full);
+  const existingCredit =
+    (await findSalesInvoiceByReference(machineCreditRef)) ??
+    (await findSalesInvoiceByReference(kenmerk));
   if (existingCredit?.id) {
     console.info(
       "[moneybird] full credit bestaat al",
-      creditRef,
+      existingCredit.reference ?? kenmerk,
       existingCredit.id
     );
     return {
@@ -1922,7 +2139,7 @@ export async function creditSalesInvoiceForShopifyOrderFullRefund(
       {
         method: "PATCH",
         body: JSON.stringify({
-          sales_invoice: { reference: creditRef },
+          sales_invoice: { reference: kenmerk },
         }),
       }
     );
@@ -1930,7 +2147,7 @@ export async function creditSalesInvoiceForShopifyOrderFullRefund(
     console.info(
       "[moneybird] full credit-concept aangemaakt",
       updated.id ?? duplicated.id,
-      creditRef,
+      kenmerk,
       `van ${full.id}`,
       wasPaid ? "(betaalde order)" : "(niet-concept)"
     );
@@ -1947,11 +2164,12 @@ export async function creditSalesInvoiceForShopifyOrderFullRefund(
 }
 
 /**
- * Verwijder Moneybird-conceptfactuur voor een Shopify-order.
- * Alleen state=draft — verstuurde/open facturen blijven staan.
+ * Verwijder Moneybird-hoofdfactuur voor een Shopify-order.
+ * Standaard alleen draft; met allowUnpaidSent ook onbetaalde verzonden facturen.
  */
 export async function deleteSalesInvoiceForShopifyOrderId(
-  shopifyOrderId: string
+  shopifyOrderId: string,
+  opts?: { allowUnpaidSent?: boolean }
 ): Promise<{ deleted: boolean; invoiceId?: string; skipped?: string; error?: string }> {
   if (!isMoneybirdConfigured()) {
     return { deleted: false, error: "moneybird_not_configured" };
@@ -1965,15 +2183,24 @@ export async function deleteSalesInvoiceForShopifyOrderId(
   }
 
   const full = (await fetchSalesInvoiceById(existing.id)) ?? existing;
-  if (!isDraftMoneybirdInvoice(full)) {
+  const allowUnpaidSent = Boolean(opts?.allowUnpaidSent);
+  const okToDelete = isDraftMoneybirdInvoice(full)
+    ? true
+    : allowUnpaidSent && canDeleteUnpaidShopifyMainInvoice(full, true);
+
+  if (!okToDelete) {
     console.info(
-      "[moneybird] factuur niet verwijderd — geen concept meer",
+      "[moneybird] factuur niet verwijderd",
       full.id,
       full.state ?? "?",
       "voor",
       full.reference ?? id
     );
-    return { deleted: false, invoiceId: full.id, skipped: `state_${full.state ?? "unknown"}` };
+    return {
+      deleted: false,
+      invoiceId: full.id,
+      skipped: `state_${full.state ?? "unknown"}`,
+    };
   }
 
   try {
@@ -1981,15 +2208,16 @@ export async function deleteSalesInvoiceForShopifyOrderId(
       method: "DELETE",
     });
     console.info(
-      "[moneybird] conceptfactuur verwijderd",
+      "[moneybird] factuur verwijderd",
       full.id,
+      full.state ?? "?",
       "voor",
       full.reference ?? id
     );
     return { deleted: true, invoiceId: full.id };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error("[moneybird] conceptfactuur verwijderen mislukt", full.id, msg);
+    console.error("[moneybird] factuur verwijderen mislukt", full.id, msg);
     return { deleted: false, invoiceId: full.id, error: msg };
   }
 }

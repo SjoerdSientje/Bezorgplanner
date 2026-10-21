@@ -254,6 +254,29 @@ export async function shopifyAdminGraphql<T>(
   return body.data;
 }
 
+/** Volledige Shopify-order (incl. refunds) via Admin REST. */
+export async function fetchShopifyOrderById(
+  shopifyOrderId: string
+): Promise<import("@/lib/shopify-order").ShopifyOrder | null> {
+  const id = String(shopifyOrderId ?? "").trim();
+  if (!/^\d+$/.test(id)) return null;
+  if (!getShopifyAdminConfig()) return null;
+  try {
+    const data = await shopifyAdminJson<{
+      order?: import("@/lib/shopify-order").ShopifyOrder;
+    }>(`/orders/${id}.json`);
+    return data.order ?? null;
+  } catch (err) {
+    if (err instanceof ShopifyAdminError && err.status === 404) return null;
+    console.error(
+      "[shopify-admin] order ophalen mislukt",
+      id,
+      err instanceof Error ? err.message : err
+    );
+    return null;
+  }
+}
+
 /** Één Shopify-product ophalen (volledig, voor voorraad-group_key e.d.). */
 export async function fetchShopifyProductById(
   productId: number
