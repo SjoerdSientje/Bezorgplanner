@@ -78,6 +78,7 @@ export default function MpOrdersClient() {
   const [orders, setOrders] = useState<MpOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [paused, setPaused] = useState(false);
+  const [nameSearch, setNameSearch] = useState("");
 
   const fetchOrders = useCallback(async () => {
     setLoading(true);
@@ -96,12 +97,16 @@ export default function MpOrdersClient() {
   useEffect(() => { fetchOrders(); }, [fetchOrders]);
 
   const sortedOrders = useMemo(() => {
-    return [...orders].sort((a, b) => {
+    const q = nameSearch.trim().toLowerCase();
+    const filtered = q
+      ? orders.filter((o) => (o.naam ?? "").toLowerCase().includes(q))
+      : orders;
+    return [...filtered].sort((a, b) => {
       const aTime = a.datum ? new Date(`${a.datum}T00:00:00`).getTime() : 0;
       const bTime = b.datum ? new Date(`${b.datum}T00:00:00`).getTime() : 0;
       return bTime - aTime;
     });
-  }, [orders]);
+  }, [orders, nameSearch]);
 
   const tableRows = useMemo(
     () => sortedOrders.map((o) => HEADERS.map((h) => cel(o, h))),
@@ -164,14 +169,39 @@ export default function MpOrdersClient() {
               </Link>
               <h1 className="text-xl font-semibold text-koopje-black sm:text-2xl">MP orders</h1>
             </div>
-            <button
-              type="button"
-              onClick={fetchOrders}
-              disabled={loading}
-              className="rounded-xl border border-koopje-black/20 bg-white px-4 py-2 text-sm font-medium text-koopje-black transition hover:bg-koopje-black/5 disabled:opacity-50"
-            >
-              {loading ? "Laden…" : "Verversen"}
-            </button>
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="relative min-w-[12rem] flex-1 sm:w-64 sm:flex-none">
+                <svg
+                  className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-koopje-black/40"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                  aria-hidden
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                  />
+                </svg>
+                <input
+                  type="search"
+                  value={nameSearch}
+                  onChange={(e) => setNameSearch(e.target.value)}
+                  placeholder="Zoek op naam…"
+                  className="w-full rounded-xl border border-koopje-black/20 bg-white py-2 pl-9 pr-3 text-sm text-koopje-black placeholder:text-koopje-black/40"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={fetchOrders}
+                disabled={loading}
+                className="rounded-xl border border-koopje-black/20 bg-white px-4 py-2 text-sm font-medium text-koopje-black transition hover:bg-koopje-black/5 disabled:opacity-50"
+              >
+                {loading ? "Laden…" : "Verversen"}
+              </button>
+            </div>
           </div>
 
           {loading ? (
@@ -180,11 +210,13 @@ export default function MpOrdersClient() {
             <p className="text-sm text-koopje-black/60">Deze pagina is momenteel niet beschikbaar.</p>
           ) : orders.length === 0 ? (
             <p className="text-sm text-koopje-black/60">Geen MP orders gevonden.</p>
+          ) : sortedOrders.length === 0 ? (
+            <p className="text-sm text-koopje-black/60">Geen orders gevonden voor deze naam.</p>
           ) : (
             <EditableSheetTable
               headers={HEADERS}
               initialData={tableRows}
-              dataRowCount={orders.length}
+              dataRowCount={sortedOrders.length}
               cellRenderers={cellRenderers}
             />
           )}

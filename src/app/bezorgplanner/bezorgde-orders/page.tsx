@@ -46,6 +46,7 @@ export default function BezorgdeOrdersPage() {
 
   const [orders, setOrders] = useState<BezorgdeOrder[]>([]);
   const [loading, setLoading] = useState(true);
+  const [nameSearch, setNameSearch] = useState("");
 
   const formatAfgerondDatum = (iso: string | null): string => {
     if (!iso) return "";
@@ -74,12 +75,16 @@ export default function BezorgdeOrdersPage() {
   }, [fetchOrders]);
 
   const sortedOrders = useMemo(() => {
-    return [...orders].sort((a, b) => {
+    const q = nameSearch.trim().toLowerCase();
+    const filtered = q
+      ? orders.filter((o) => (o.naam ?? "").toLowerCase().includes(q))
+      : orders;
+    return [...filtered].sort((a, b) => {
       const aTime = a.afgerond_at ? new Date(a.afgerond_at).getTime() : 0;
       const bTime = b.afgerond_at ? new Date(b.afgerond_at).getTime() : 0;
       return bTime - aTime;
     });
-  }, [orders]);
+  }, [orders, nameSearch]);
 
   const tableRows = useMemo(() => {
     return sortedOrders.map((o) => [
@@ -138,19 +143,44 @@ export default function BezorgdeOrdersPage() {
       <Header />
       <main className="min-h-[calc(100vh-4rem)] bg-white">
         <div className="mx-auto max-w-[1600px] px-4 py-8 sm:px-6 sm:py-12">
-          <div className="mb-6 flex items-center gap-4">
-            <Link
-              href="/afgeronde-orders"
-              className="text-koopje-black/60 transition hover:text-koopje-black"
-              aria-label="Terug"
-            >
-              <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+          <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <Link
+                href="/afgeronde-orders"
+                className="text-koopje-black/60 transition hover:text-koopje-black"
+                aria-label="Terug"
+              >
+                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+              </Link>
+              <h1 className="text-xl font-semibold text-koopje-black sm:text-2xl">
+                Bezorgde orders
+              </h1>
+            </div>
+            <div className="relative min-w-[12rem] w-full sm:w-64">
+              <svg
+                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-koopje-black/40"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+                aria-hidden
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                />
               </svg>
-            </Link>
-            <h1 className="text-xl font-semibold text-koopje-black sm:text-2xl">
-              Bezorgde orders
-            </h1>
+              <input
+                type="search"
+                value={nameSearch}
+                onChange={(e) => setNameSearch(e.target.value)}
+                placeholder="Zoek op naam…"
+                className="w-full rounded-xl border border-koopje-black/20 bg-white py-2 pl-9 pr-3 text-sm text-koopje-black placeholder:text-koopje-black/40"
+              />
+            </div>
           </div>
 
           <p className="mb-4 text-sm text-koopje-black/60">
@@ -159,11 +189,15 @@ export default function BezorgdeOrdersPage() {
 
           {loading ? (
             <p className="text-sm text-koopje-black/60">Laden…</p>
+          ) : orders.length === 0 ? (
+            <p className="text-sm text-koopje-black/60">Geen bezorgde orders gevonden.</p>
+          ) : sortedOrders.length === 0 ? (
+            <p className="text-sm text-koopje-black/60">Geen orders gevonden voor deze naam.</p>
           ) : (
             <EditableSheetTable
               headers={BEZORGDE_ORDERS_HEADERS}
               initialData={tableRows}
-              dataRowCount={orders.length}
+              dataRowCount={sortedOrders.length}
               cellRenderers={cellRenderers}
             />
           )}
