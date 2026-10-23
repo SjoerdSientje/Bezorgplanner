@@ -307,9 +307,11 @@ export default function ReparatieNieuwPage() {
           producten_nog_niet_bekend:
             vrijeTekstModus && soort === "reparatie_deur",
           producten_vrije_tekst:
-            vrijeTekstModus && soort === "reparatie_deur"
+            soort === "reparatie_ophalen"
               ? vrijeTekst.trim()
-              : undefined,
+              : vrijeTekstModus && soort === "reparatie_deur"
+                ? vrijeTekst.trim()
+                : undefined,
           fiets_ook_opgehaald:
             soort === "reparatie_terugbrengen" && fietsOokOpgehaald,
           naam,
@@ -421,9 +423,29 @@ export default function ReparatieNieuwPage() {
             )}
 
             {soort === "reparatie_ophalen" && (
-              <p className="rounded-lg bg-stone-50 px-3 py-2 text-sm text-koopje-black/60">
-                Ophalen-orders krijgen geen factuur.
-              </p>
+              <div className="space-y-3">
+                <p className="rounded-lg bg-stone-50 px-3 py-2 text-sm text-koopje-black/60">
+                  Ophalen-orders krijgen geen factuur.
+                </p>
+                <label className="block text-sm">
+                  Productenkolom
+                  <div className="mt-1 flex overflow-hidden rounded-xl border border-koopje-black/20 focus-within:ring-2 focus-within:ring-koopje-orange/40">
+                    <span className="shrink-0 select-none border-r border-koopje-black/10 bg-stone-50 px-3 py-2.5 text-sm text-koopje-black/70">
+                      Ophalen:
+                    </span>
+                    <input
+                      className="min-w-0 flex-1 px-3 py-2.5 text-sm outline-none"
+                      value={vrijeTekst}
+                      onChange={(e) =>
+                        setVrijeTekst(
+                          e.target.value.replace(/^ophalen:\s*/i, "")
+                        )
+                      }
+                      placeholder="optioneel, bijv. kapotte band"
+                    />
+                  </div>
+                </label>
+              </div>
             )}
 
             <label className="block text-sm">

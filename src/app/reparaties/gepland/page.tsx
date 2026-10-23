@@ -295,7 +295,8 @@ export default function ReparatiesGeplandPage() {
       producten_nog_niet_bekend:
         soort === "reparatie_deur" && Boolean(o.producten_nog_niet_bekend),
       producten_vrije_tekst:
-        soort === "reparatie_deur" && Boolean(o.producten_nog_niet_bekend)
+        soort === "reparatie_ophalen" ||
+        (soort === "reparatie_deur" && Boolean(o.producten_nog_niet_bekend))
           ? stripReparatieProductenPrefix(o.producten, soort)
           : "",
       fiets_ook_opgehaald:
@@ -454,9 +455,11 @@ export default function ReparatiesGeplandPage() {
           producten_nog_niet_bekend:
             edit.soort === "reparatie_deur" && edit.producten_nog_niet_bekend,
           producten_vrije_tekst:
-            edit.soort === "reparatie_deur" && edit.producten_nog_niet_bekend
+            edit.soort === "reparatie_ophalen"
               ? edit.producten_vrije_tekst.trim()
-              : undefined,
+              : edit.soort === "reparatie_deur" && edit.producten_nog_niet_bekend
+                ? edit.producten_vrije_tekst.trim()
+                : undefined,
           fiets_ook_opgehaald:
             edit.soort === "reparatie_terugbrengen" && edit.fiets_ook_opgehaald,
           regels: payloadRegels,
@@ -577,7 +580,9 @@ export default function ReparatiesGeplandPage() {
                               ? edit.producten_nog_niet_bekend
                               : false,
                           producten_vrije_tekst:
-                            soort === "reparatie_deur"
+                            soort === "reparatie_ophalen" ||
+                            (soort === "reparatie_deur" &&
+                              edit.producten_nog_niet_bekend)
                               ? edit.producten_vrije_tekst
                               : "",
                           fiets_ook_opgehaald:
@@ -617,9 +622,33 @@ export default function ReparatiesGeplandPage() {
                     </label>
                   )}
                   {edit.soort === "reparatie_ophalen" && (
-                    <p className="rounded-lg bg-stone-50 px-3 py-2 text-xs text-koopje-black/60">
-                      Ophalen-orders krijgen geen factuur.
-                    </p>
+                    <div className="space-y-2">
+                      <p className="rounded-lg bg-stone-50 px-3 py-2 text-xs text-koopje-black/60">
+                        Ophalen-orders krijgen geen factuur.
+                      </p>
+                      <label className="block text-sm">
+                        Productenkolom
+                        <div className="mt-1 flex overflow-hidden rounded border border-koopje-black/20 focus-within:ring-2 focus-within:ring-koopje-orange/40">
+                          <span className="shrink-0 select-none border-r border-koopje-black/10 bg-stone-50 px-2 py-2 text-sm text-koopje-black/70">
+                            Ophalen:
+                          </span>
+                          <input
+                            className="min-w-0 flex-1 px-2 py-2 text-sm outline-none"
+                            value={edit.producten_vrije_tekst}
+                            onChange={(e) =>
+                              setEdit({
+                                ...edit,
+                                producten_vrije_tekst: e.target.value.replace(
+                                  /^ophalen:\s*/i,
+                                  ""
+                                ),
+                              })
+                            }
+                            placeholder="optioneel, bijv. kapotte band"
+                          />
+                        </div>
+                      </label>
+                    </div>
                   )}
                   <label className="block">
                     Naam

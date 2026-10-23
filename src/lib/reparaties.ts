@@ -132,8 +132,16 @@ export function buildReparatieProductenKolom(params: {
   }>;
 }): string {
   const prefix = reparatieSoortProductenPrefix(params.soort);
+  const vrij = String(params.vrijeTekst ?? "")
+    .trim()
+    .replace(new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*`, "i"), "");
+
+  // Ophalen: suffix op dezelfde regel ("Ophalen: …"), geen Shopify-regels.
+  if (params.soort === "reparatie_ophalen") {
+    return vrij ? `${prefix} ${vrij}` : prefix;
+  }
+
   const lines: string[] = [prefix];
-  const vrij = String(params.vrijeTekst ?? "").trim();
   if (vrij) {
     lines.push(vrij);
     return lines.join("\n");
@@ -158,7 +166,7 @@ export function stripReparatieProductenPrefix(
   const raw = String(producten ?? "");
   const prefix = reparatieSoortProductenPrefix(soort);
   if (raw.startsWith(prefix)) {
-    return raw.slice(prefix.length).replace(/^\n+/, "").trim();
+    return raw.slice(prefix.length).replace(/^[\s\n]+/, "").trim();
   }
   return raw.trim();
 }

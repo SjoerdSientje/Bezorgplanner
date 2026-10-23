@@ -355,10 +355,14 @@ export async function POST(request: NextRequest) {
     const totaal = sumLineItemsIncl(lineItems);
     const producten = buildReparatieProductenKolom({
       soort,
-      vrijeTekst: productenNogNietBekend ? vrijeTekst : null,
-      regels: productenNogNietBekend
-        ? []
-        : stripVoorrijFromRegels(expanded),
+      vrijeTekst:
+        productenNogNietBekend || soort === "reparatie_ophalen"
+          ? vrijeTekst
+          : null,
+      regels:
+        productenNogNietBekend || soort === "reparatie_ophalen"
+          ? []
+          : stripVoorrijFromRegels(expanded),
     });
     const lineItemsJson = buildReparatieLineItemsJson(lineItems);
 
@@ -743,10 +747,14 @@ export async function PATCH(request: NextRequest) {
     const totaal = sumLineItemsIncl(lineItems);
     const producten = buildReparatieProductenKolom({
       soort,
-      vrijeTekst: productenNogNietBekend ? vrijeTekst : null,
-      regels: productenNogNietBekend
-        ? []
-        : stripVoorrijFromRegels(expanded),
+      vrijeTekst:
+        productenNogNietBekend || soort === "reparatie_ophalen"
+          ? vrijeTekst
+          : null,
+      regels:
+        productenNogNietBekend || soort === "reparatie_ophalen"
+          ? []
+          : stripVoorrijFromRegels(expanded),
     });
     const e164 = parsePhoneE164(telefoon);
     const mapsUrl = volledigAdres
