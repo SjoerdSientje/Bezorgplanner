@@ -30,6 +30,7 @@ import {
   deductInventoryForReparatieOrder,
   reparatieLineItemsForInventoryDeduction,
 } from "@/lib/inventory";
+import { sendReparatieOrderBevestiging } from "@/lib/whatsapp";
 
 export const dynamic = "force-dynamic";
 
@@ -565,8 +566,31 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Bevestigingsappje (alleen reparatie, niet MP). Falen blokkeert aanmaken niet.
+    let whatsappBevestiging: Awaited<
+      ReturnType<typeof sendReparatieOrderBevestiging>
+    > | null = null;
+    try {
+      whatsappBevestiging = await sendReparatieOrderBevestiging({
+        ownerEmail,
+        naam,
+        telefoonE164: e164 || null,
+        telefoonNummer: telefoon || null,
+        soort,
+      });
+      if (!whatsappBevestiging.ok && !whatsappBevestiging.skipped) {
+        console.error(
+          "[reparaties] bevestigingsappje mislukt:",
+          whatsappBevestiging.error
+        );
+      }
+    } catch (waErr) {
+      console.error("[reparaties] bevestigingsappje:", waErr);
+    }
+
     return NextResponse.json({
       order: { ...order, moneybird_invoice_id: moneybirdInvoiceId },
+      whatsappBevestiging,
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Aanmaken mislukt.";

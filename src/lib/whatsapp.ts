@@ -519,6 +519,68 @@ export const INVENTORY_ALERT_TEMPLATE_LOW = "voorraad_laag_3";
 export const INVENTORY_ALERT_TEMPLATE_OUT = "voorraad_uitverkocht";
 export const INVENTORY_ALERT_TEMPLATE_BIKE_RESTOCK = "voorraad_fiets_aangevuld";
 
+/** Bevestiging bij aanmaken reparatie-order (niet voor MP). */
+export const REPARATIE_ORDER_BEVESTIGING_TEMPLATE = "reparatie_order_bevestiging";
+
+const REPARATIE_ORDER_TYPE_LABEL: Record<string, string> = {
+  reparatie_deur: "reparatie aan huis",
+  reparatie_ophalen: "ophaal-order",
+  reparatie_terugbrengen: "terugbreng-order",
+};
+
+export function reparatieOrderTypeLabel(soort: string | null | undefined): string | null {
+  const key = String(soort ?? "").trim().toLowerCase();
+  return REPARATIE_ORDER_TYPE_LABEL[key] ?? null;
+}
+
+/**
+ * Bevestigingsappje direct na aanmaken van een reparatie-order.
+ * Skip stil als er geen telefoon/ordertype is of als account-gate blokkeert.
+ */
+export async function sendReparatieOrderBevestiging(params: {
+  ownerEmail?: string | null;
+  naam?: string | null;
+  telefoonE164?: string | null;
+  telefoonNummer?: string | null;
+  soort: string;
+}): Promise<SendWhatsAppResult> {
+  const ordertype = reparatieOrderTypeLabel(params.soort);
+  if (!ordertype) {
+    return { ok: false, skipped: true, error: "Geen reparatie-ordertype." };
+  }
+
+  const order: WhatsAppOrderInput = {
+    naam: params.naam,
+    telefoon_e164: params.telefoonE164,
+    telefoon_nummer: params.telefoonNummer,
+    type: params.soort,
+  };
+  const gate = maySendWhatsAppForOwner(params.ownerEmail ?? null, order);
+  if (!gate.ok) {
+    return { ok: false, skipped: true, error: gate.error };
+  }
+
+  const to = normalizePhone(params.telefoonE164 || params.telefoonNummer);
+  if (!to) {
+    return { ok: false, skipped: true, error: "Geen telefoonnummer." };
+  }
+
+  const naam = String(params.naam ?? "").trim() || "klant";
+  const templateName =
+    env("WHATSAPP_REPARATIE_BEVESTIGING_TEMPLATE") ||
+    REPARATIE_ORDER_BEVESTIGING_TEMPLATE;
+
+  return sendWhatsAppTemplate({
+    to,
+    templateName,
+    languageCode: env("WHATSAPP_REPARATIE_BEVESTIGING_LANGUAGE") || "nl",
+    bodyNamedVariables: {
+      naam: naam.slice(0, 200),
+      ordertype,
+    },
+  });
+}
+
 /** @deprecated gebruik INVENTORY_ALERT_TEMPLATE_LOW / _OUT */
 export const INVENTORY_ALERT_TEMPLATE_DEFAULT = INVENTORY_ALERT_TEMPLATE_LOW;
 
