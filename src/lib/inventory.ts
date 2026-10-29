@@ -2461,8 +2461,9 @@ function moneybirdInvoiceOwnerEmail(): string {
 
 /**
  * Voorraadaftrek voor een Moneybird-factuur (aanroepen na verzenden, niet bij concept).
- * Shopify-reference: commit reserveringen (typisch ≥ €490 handmatig verzonden).
- * Idempotent op invoice-id.
+ * Shopify-orders: altijd via source=shopify (+ optioneel factuurregels als fallback).
+ * Nooit een tweede aftrek onder source=moneybird voor dezelfde Shopify-order.
+ * Niet-Shopify facturen: idempotent op invoice-id.
  */
 export async function deductInventoryForMoneybirdInvoice(
   supabase: SupabaseClient,
@@ -2481,6 +2482,13 @@ export async function deductInventoryForMoneybirdInvoice(
     supabase,
     invoice
   );
+
+  const lineItems = await enrichMoneybirdLineItemsForInventory(
+    supabase,
+    ownerEmail,
+    moneybirdDetailsToLineItems(invoice.details)
+  );
+
   if (shopifyOrderId) {
     const { commitShopifyReservationsFromMoneybirdInvoice } = await import(
       "@/lib/inventory-reservations"
@@ -2489,7 +2497,8 @@ export async function deductInventoryForMoneybirdInvoice(
       supabase,
       shopifyOrderId,
       invoiceId,
-      orderReference || String(shopifyOrderId)
+      orderReference || `shopify:${shopifyOrderId}`,
+      lineItems.length > 0 ? lineItems : undefined
     );
     if (result.committed) {
       return { deducted: true };
@@ -2497,14 +2506,17 @@ export async function deductInventoryForMoneybirdInvoice(
     if (result.skippedReason === "shopify_already_deducted") {
       return { deducted: false, skippedReason: "shopify_already_deducted" };
     }
-    // Geen reserveringen: val terug op factuurregels hieronder.
+    // Geen reserveringen én geen matchbare factuurregels: wel markeren zodat
+    // latere webhooks niet alsnog via moneybird-lines dubbel aftrekken.
+    await markOrderDeducted(supabase, ownerEmail, "shopify", shopifyOrderId);
+    await markOrderDeducted(supabase, ownerEmail, "moneybird", invoiceId);
+    return {
+      deducted: false,
+      skippedReason: result.skippedReason ?? "nothing_to_commit",
+    };
   }
 
-  const lineItems = await enrichMoneybirdLineItemsForInventory(
-    supabase,
-    ownerEmail,
-    moneybirdDetailsToLineItems(invoice.details)
-  );
+  // Alleen niet-Shopify Moneybird-facturen (losse/reparatie e.d.).
   if (lineItems.length === 0) {
     return { deducted: false, skippedReason: "no_line_items" };
   }

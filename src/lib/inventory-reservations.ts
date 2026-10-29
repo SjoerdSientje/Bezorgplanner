@@ -734,12 +734,14 @@ export async function commitInventoryForMpOrder(
 /**
  * Moneybird factuur verzonden voor Shopify-order (≥490 of zonder eerdere commit):
  * commit reserveringen i.p.v. losse factuurregels waar mogelijk.
+ * Altijd onder source=shopify (nooit moneybird-line fallthrough).
  */
 export async function commitShopifyReservationsFromMoneybirdInvoice(
   supabase: SupabaseClient,
   shopifyOrderId: string,
   invoiceId: string,
-  orderReference: string
+  orderReference: string,
+  lineItemsFallback?: LineItemForDeduction[]
 ): Promise<{ committed: boolean; skippedReason?: string }> {
   const ownerEmail = moneybirdInvoiceOwnerEmail();
 
@@ -756,11 +758,23 @@ export async function commitShopifyReservationsFromMoneybirdInvoice(
     source: "shopify",
     externalOrderId: shopifyOrderId,
     orderReference,
+    lineItemsFallback,
   });
 
   if (result.committed) {
     await markOrderDeducted(supabase, ownerEmail, "moneybird", invoiceId);
+    return result;
   }
+
+  // Race: andere flow markeerde shopify tussen check en commit → geen 2e aftrek.
+  if (result.skippedReason === "already_deducted") {
+    await markOrderDeducted(supabase, ownerEmail, "moneybird", invoiceId);
+    await clearReservationsForOrder(supabase, ownerEmail, "shopify", shopifyOrderId, {
+      skipAlerts: true,
+    });
+    return { committed: false, skippedReason: "shopify_already_deducted" };
+  }
+
   return result;
 }
 
