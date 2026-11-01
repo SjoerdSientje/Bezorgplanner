@@ -175,7 +175,11 @@ async function fetchKlarnaPaymentId(orderId) {
   const candidates = [];
   for (const tx of txs) {
     const gateway = String(tx.gateway ?? "").toLowerCase();
-    if (!gateway.includes("klarna")) continue;
+    const isKlarna = gateway.includes("klarna");
+    const isPay =
+      !gateway.includes("paypal") &&
+      (gateway.includes("pay.") || gateway.includes("paynl") || gateway === "pay");
+    if (!isKlarna && !isPay) continue;
     const status = String(tx.status ?? "").toLowerCase();
     if (status && status !== "success" && status !== "pending") continue;
     const kind = String(tx.kind ?? "").toLowerCase();

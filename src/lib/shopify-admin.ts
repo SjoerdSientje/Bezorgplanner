@@ -645,25 +645,43 @@ function isMollieGateway(gateway: string): boolean {
   return g.includes("mollie");
 }
 
-export type ShopifyKlarnaPayment = {
+/**
+ * Shopify Payment ID voor clearing-gateways (Klarna, PAY.).
+ * Staat in Klarna/Pay. clearing als merchant_reference — niet het Shopify order-id.
+ */
+export type ShopifyClearingPayment = {
   transactionId: string;
-  /**
-   * Shopify Payment ID (gateway “Payment ID”) — staat in Klarna clearing
-   * als merchant_reference, niet het Shopify order-id.
-   */
   paymentId: string;
   amount: number;
   processedAt: string | null;
   gateway: string;
 };
 
+/** @deprecated gebruik ShopifyClearingPayment */
+export type ShopifyKlarnaPayment = ShopifyClearingPayment;
+
 function isKlarnaGateway(gateway: string): boolean {
   const g = gateway.toLowerCase();
   return g.includes("klarna");
 }
 
-/** Haal Shopify Payment ID uit Klarna-transactie (receipt.payment_id e.d.). */
-function extractKlarnaShopifyPaymentId(tx: Record<string, unknown>): string | null {
+/**
+ * PAY. (pay.nl) in Shopify, bv. "PAY. - in3", "PAY. - SprayPay".
+ * Expliciet geen PayPal.
+ */
+export function isPayGateway(gateway: string): boolean {
+  const g = gateway.toLowerCase().trim();
+  if (!g || g.includes("paypal")) return false;
+  return g.includes("pay.") || g.includes("paynl") || g === "pay";
+}
+
+/** Gateways waarbij Moneybird-kenmerk = Shopify Payment ID moet zijn. */
+export function isClearingPaymentIdGateway(gateway: string): boolean {
+  return isKlarnaGateway(gateway) || isPayGateway(gateway);
+}
+
+/** Haal Shopify Payment ID uit Klarna/PAY.-transactie (receipt.payment_id e.d.). */
+function extractClearingShopifyPaymentId(tx: Record<string, unknown>): string | null {
   const receipt =
     tx.receipt && typeof tx.receipt === "object"
       ? (tx.receipt as Record<string, unknown>)
@@ -673,7 +691,7 @@ function extractKlarnaShopifyPaymentId(tx: Record<string, unknown>): string | nu
       ? (tx.payment_details as Record<string, unknown>)
       : null;
 
-  // Shopify Admin toont bij Klarna “Payment ID” → meestal receipt.payment_id.
+  // Shopify Admin “Payment ID” → meestal receipt.payment_id / tx.payment_id.
   const preferred = [
     receipt?.payment_id,
     receipt?.paymentId,
@@ -693,7 +711,7 @@ function extractKlarnaShopifyPaymentId(tx: Record<string, unknown>): string | nu
   for (const s of blobs) {
     const t = s.trim();
     if (!t || /^tr_/i.test(t) || /^shopify:/i.test(t)) continue;
-    // Typische Shopify/Klarna payment ids: UUID of lange hex/base64-achtig.
+    // Typische Shopify/Klarna/PAY. payment ids: UUID of lange hex/base64-achtig.
     if (
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(t) ||
       /^[0-9a-f]{16,}$/i.test(t) ||
@@ -706,11 +724,12 @@ function extractKlarnaShopifyPaymentId(tx: Record<string, unknown>): string | nu
 }
 
 /**
- * Zoek succesvolle Klarna-betaling + Shopify Payment ID op een order.
+ * Zoek succesvolle Klarna- of PAY.-betaling + Shopify Payment ID op een order.
+ * (Voor Moneybird-kenmerk / clearing-koppeling.)
  */
-export async function fetchShopifyOrderKlarnaPayment(
+export async function fetchShopifyOrderClearingPayment(
   shopifyOrderId: string
-): Promise<ShopifyKlarnaPayment | null> {
+): Promise<ShopifyClearingPayment | null> {
   const id = String(shopifyOrderId ?? "").trim();
   if (!/^\d+$/.test(id)) return null;
   if (!getShopifyAdminConfig()) return null;
@@ -721,17 +740,17 @@ export async function fetchShopifyOrderKlarnaPayment(
     }>(`/orders/${id}/transactions.json`);
 
     const txs = Array.isArray(data.transactions) ? data.transactions : [];
-    const candidates: ShopifyKlarnaPayment[] = [];
+    const candidates: ShopifyClearingPayment[] = [];
 
     for (const tx of txs) {
       const gateway = String(tx.gateway ?? "");
-      if (!isKlarnaGateway(gateway)) continue;
+      if (!isClearingPaymentIdGateway(gateway)) continue;
       const status = String(tx.status ?? "").toLowerCase();
       if (status && status !== "success" && status !== "pending") continue;
       const kind = String(tx.kind ?? "").toLowerCase();
       if (kind && !["sale", "capture", "authorization"].includes(kind)) continue;
 
-      const paymentId = extractKlarnaShopifyPaymentId(tx);
+      const paymentId = extractClearingShopifyPaymentId(tx);
       if (!paymentId) continue;
 
       const amountRaw =
@@ -754,12 +773,19 @@ export async function fetchShopifyOrderKlarnaPayment(
     return candidates[0]!;
   } catch (err) {
     console.error(
-      "[shopify-admin] Klarna-transactie ophalen mislukt",
+      "[shopify-admin] Klarna/PAY. payment-id ophalen mislukt",
       id,
       err instanceof Error ? err.message : err
     );
     return null;
   }
+}
+
+/** @deprecated gebruik fetchShopifyOrderClearingPayment */
+export async function fetchShopifyOrderKlarnaPayment(
+  shopifyOrderId: string
+): Promise<ShopifyKlarnaPayment | null> {
+  return fetchShopifyOrderClearingPayment(shopifyOrderId);
 }
 
 /**

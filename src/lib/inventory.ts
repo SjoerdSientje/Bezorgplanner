@@ -2351,7 +2351,7 @@ function parseShopifyOrderIdFromInvoiceReference(
   return m?.[1] ?? null;
 }
 
-/** Klarna-hoofdfactuur heeft payment-id als kenmerk → order-id via lock. */
+/** Klarna/PAY.-hoofdfactuur heeft payment-id als kenmerk → order-id via lock. */
 async function resolveShopifyOrderIdForInventoryDeduct(
   supabase: SupabaseClient,
   invoice: MoneybirdInvoiceInput

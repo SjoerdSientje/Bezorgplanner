@@ -19,7 +19,7 @@ import {
   shopifyOrderPaymentAmounts,
 } from "@/lib/shopify-order";
 import {
-  fetchShopifyOrderKlarnaPayment,
+  fetchShopifyOrderClearingPayment,
   fetchShopifyOrderMolliePayment,
   isShopifyProductActive,
   markShopifyOrderAsPaid,
@@ -130,14 +130,14 @@ export type MoneybirdSalesInvoice = {
   price_total?: string | number | null;
 };
 
-/** Machine-leesbare Shopify-koppeling op factuur.reference (niet-Klarna). */
+/** Machine-leesbare Shopify-koppeling op factuur.reference (niet-Klarna/PAY.). */
 export function shopifyReferenceForOrderId(shopifyOrderId: string): string {
   return `shopify:${shopifyOrderId}`;
 }
 
 /**
  * Kenmerk (reference) voor hoofdfactuur:
- * - Klarna → Shopify Payment ID (staat zo in Klarna clearing)
+ * - Klarna / PAY. (pay.nl) → Shopify Payment ID (zo in clearing)
  * - overig → shopify:{orderId}
  */
 export async function resolveShopifyMainInvoiceReference(
@@ -146,11 +146,11 @@ export async function resolveShopifyMainInvoiceReference(
   const id = String(shopifyOrderId ?? "").trim();
   if (!id) return shopifyReferenceForOrderId(id);
   try {
-    const klarna = await fetchShopifyOrderKlarnaPayment(id);
-    if (klarna?.paymentId) return klarna.paymentId;
+    const clearing = await fetchShopifyOrderClearingPayment(id);
+    if (clearing?.paymentId) return clearing.paymentId;
   } catch (err) {
     console.warn(
-      "[moneybird] Klarna payment-id ophalen mislukt, fallback shopify:id",
+      "[moneybird] Klarna/PAY. payment-id ophalen mislukt, fallback shopify:id",
       id,
       err instanceof Error ? err.message : err
     );
@@ -216,7 +216,7 @@ function isShopifyDerivedInvoiceReference(
 
 /**
  * Shopify order-id bij een Moneybird-hoofdfactuur.
- * Klassiek via `shopify:{id}`; Klarna via lock op moneybird_invoice_id.
+ * Klassiek via `shopify:{id}`; Klarna/PAY. via lock op moneybird_invoice_id.
  */
 export async function resolveShopifyOrderIdFromMoneybirdMainInvoice(
   supabase: SupabaseClient,
@@ -239,7 +239,7 @@ export async function resolveShopifyOrderIdFromMoneybirdMainInvoice(
 }
 
 /**
- * Zoek hoofdfactuur: shopify:{id} → lock.invoice_id → Klarna payment-id als kenmerk.
+ * Zoek hoofdfactuur: shopify:{id} → lock.invoice_id → Klarna/PAY. payment-id als kenmerk.
  */
 async function findShopifyMainInvoice(
   shopifyOrderId: string,
@@ -270,9 +270,9 @@ async function findShopifyMainInvoice(
   }
 
   try {
-    const klarna = await fetchShopifyOrderKlarnaPayment(orderId);
-    if (klarna?.paymentId) {
-      const byPay = await findSalesInvoiceByReference(klarna.paymentId);
+    const clearing = await fetchShopifyOrderClearingPayment(orderId);
+    if (clearing?.paymentId) {
+      const byPay = await findSalesInvoiceByReference(clearing.paymentId);
       if (byPay?.id) return byPay;
     }
   } catch {
@@ -299,10 +299,10 @@ async function findShopifyMainInvoiceWithRetry(
 }
 
 /**
- * Zet/upgrade kenmerk naar Klarna Shopify Payment ID wanneer beschikbaar.
- * Non-Klarna blijft shopify:{orderId}.
+ * Zet/upgrade kenmerk naar Shopify Payment ID voor Klarna of PAY. (pay.nl).
+ * Overige gateways blijven shopify:{orderId}.
  */
-export async function ensureKlarnaPaymentIdAsInvoiceReference(
+export async function ensureClearingPaymentIdAsInvoiceReference(
   supabase: SupabaseClient,
   shopifyOrderId: string,
   invoice?: MoneybirdSalesInvoice | null
@@ -310,8 +310,8 @@ export async function ensureKlarnaPaymentIdAsInvoiceReference(
   const orderId = String(shopifyOrderId ?? "").trim();
   if (!orderId) return invoice ?? null;
 
-  const klarna = await fetchShopifyOrderKlarnaPayment(orderId);
-  if (!klarna?.paymentId) return invoice ?? null;
+  const clearing = await fetchShopifyOrderClearingPayment(orderId);
+  if (!clearing?.paymentId) return invoice ?? null;
 
   let main = invoice?.id
     ? invoice
@@ -320,7 +320,7 @@ export async function ensureKlarnaPaymentIdAsInvoiceReference(
 
   const full = (await fetchSalesInvoiceById(main.id)) ?? main;
   const current = String(full.reference ?? "").trim();
-  if (current === klarna.paymentId) return full;
+  if (current === clearing.paymentId) return full;
   if (isShopifyDerivedInvoiceReference(current)) return full;
 
   const updated = await moneybirdFetch<MoneybirdSalesInvoice>(
@@ -328,20 +328,34 @@ export async function ensureKlarnaPaymentIdAsInvoiceReference(
     {
       method: "PATCH",
       body: JSON.stringify({
-        sales_invoice: { reference: klarna.paymentId },
+        sales_invoice: { reference: clearing.paymentId },
       }),
     }
   );
   console.info(
-    "[moneybird] kenmerk → Klarna payment-id",
+    "[moneybird] kenmerk → clearing payment-id",
+    clearing.gateway,
     full.id,
     current || "(leeg)",
     "→",
-    klarna.paymentId,
+    clearing.paymentId,
     "order",
     orderId
   );
   return updated;
+}
+
+/** @deprecated gebruik ensureClearingPaymentIdAsInvoiceReference */
+export async function ensureKlarnaPaymentIdAsInvoiceReference(
+  supabase: SupabaseClient,
+  shopifyOrderId: string,
+  invoice?: MoneybirdSalesInvoice | null
+): Promise<MoneybirdSalesInvoice | null> {
+  return ensureClearingPaymentIdAsInvoiceReference(
+    supabase,
+    shopifyOrderId,
+    invoice
+  );
 }
 
 /** Volledige factuur ophalen (incl. details) — o.a. als webhook-entity incomplete is. */
@@ -1383,20 +1397,20 @@ export async function syncSalesInvoiceFromShopifyOrder(
     );
   }
 
-  // Klarna: kenmerk upgraden naar Shopify Payment ID zodra beschikbaar.
+  // Klarna / PAY.: kenmerk upgraden naar Shopify Payment ID zodra beschikbaar.
   try {
     const shopifyOrderId = String(order.id ?? "").trim();
     if (shopifyOrderId) {
-      const withKlarnaRef = await ensureKlarnaPaymentIdAsInvoiceReference(
+      const withClearingRef = await ensureClearingPaymentIdAsInvoiceReference(
         supabase,
         shopifyOrderId,
         invoice
       );
-      if (withKlarnaRef) invoice = withKlarnaRef;
+      if (withClearingRef) invoice = withClearingRef;
     }
   } catch (err) {
     console.error(
-      "[moneybird] Klarna kenmerk sync mislukt (webhook gaat door):",
+      "[moneybird] Klarna/PAY. kenmerk sync mislukt (webhook gaat door):",
       err instanceof Error ? err.message : err
     );
   }
@@ -2224,7 +2238,7 @@ export async function deleteSalesInvoiceForShopifyOrderId(
 
 /**
  * Maakt een sales invoice in Moneybird voor een Shopify-order.
- * Kenmerk: Klarna → Shopify Payment ID; anders shopify:{id}.
+ * Kenmerk: Klarna/PAY. → Shopify Payment ID; anders shopify:{id}.
  * Koppeling blijft via moneybird_shopify_invoice_locks.
  *
  * Altijd als concept. Auto-mail gebeurt apart bij fulfillment_status=fulfilled
