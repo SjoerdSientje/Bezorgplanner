@@ -195,6 +195,22 @@ export function isShowroomShippingOrder(order: ShopifyOrder): boolean {
   });
 }
 
+/**
+ * Ritjes-ordernummer: showroom-afhaal krijgt `#AFH` + Shopify-nummer (bijv. #6348 → #AFH6348).
+ * Overige Shopify-orders behouden `order.name` (bijv. #6348).
+ */
+export function shopifyRitjesOrderNummer(order: ShopifyOrder): string | null {
+  const raw = String(order.name ?? "").trim();
+  if (!raw) return null;
+  if (!isShowroomShippingOrder(order)) return raw;
+
+  // Al gecodeerd als #AFH… → behouden.
+  if (/^#AFH/i.test(raw)) return `#AFH${raw.replace(/^#AFH/i, "")}`;
+  const digits = raw.replace(/^#/, "").trim();
+  if (!digits) return "#AFH";
+  return `#AFH${digits}`;
+}
+
 /** Pakketjes-wachtrij: orders met totaal onder dit bedrag (excl. €0 speciale service). */
 export const PAKKETJES_MAX_PRIJS = 450;
 
@@ -1291,7 +1307,7 @@ export function mapShopifyOrderToRitjesRow(
     source: "shopify",
     type: getOrderType(order),
     status: "ritjes_vandaag",
-    order_nummer: order.name ?? null,
+    order_nummer: shopifyRitjesOrderNummer(order),
     naam: [order.customer?.first_name, order.customer?.last_name].filter(Boolean).join(" ") || null,
     adres_url: buildAdresUrl(volledigAdres) || null,
     bel_link: buildBelLink(telefoon, firstName) || null,
