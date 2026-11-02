@@ -181,7 +181,11 @@ function isFietsShopifyLineItem(item: ShopifyLineItem): boolean {
 
 const SHIPPING_EXCLUDE_MATCH = "koopjefatbike showroom";
 
-/** Shipping line = showroom-afhalen → niet naar Ritjes / pakketjes. */
+/**
+ * Shipping line = showroom-afhalen (Shopify title/code bevat "koopjefatbike showroom").
+ * Deze orders horen wél in Ritjes (≥ €450 / service); alleen pakketjes slaat ze over
+ * (geen verzending nodig).
+ */
 export function isShowroomShippingOrder(order: ShopifyOrder): boolean {
   const shippingLines = order.shipping_lines ?? [];
   return shippingLines.some((line) => {
@@ -320,7 +324,7 @@ export function extractPakketjesLineItems(order: ShopifyOrder): { name: string; 
 /** Order komt alleen in Ritjes voor vandaag als hij door dit filter gaat */
 export function passesRitjesFilter(order: ShopifyOrder): boolean {
   if (order.cancelled_at) return false;
-  if (isShowroomShippingOrder(order)) return false;
+  // Showroom-afhalen mag wél in Ritjes (zelfde bedrag-/service-regels als bezorging).
 
   const totalPrice = shopifyOrderCurrentTotal(order);
   const tags = (order.tags ?? "").toLowerCase();
