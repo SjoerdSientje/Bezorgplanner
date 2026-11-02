@@ -3,7 +3,7 @@
  * @see https://developer.moneybird.com/
  */
 
-import { createHmac, timingSafeEqual } from "crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
   ShopifyLineItem,
@@ -451,6 +451,156 @@ async function storeMoneybirdShopifyInvoiceId(
     .from("moneybird_shopify_invoice_locks")
     .update({ moneybird_invoice_id: moneybirdInvoiceId })
     .eq("shopify_order_id", shopifyOrderId);
+}
+
+const UPDATE_LEASE_MS = 45_000;
+const UPDATE_LEASE_WAIT_MS = 2_000;
+const UPDATE_LEASE_ATTEMPTS = 20;
+
+/**
+ * Lease zodat parallelle Shopify-webhooks niet tegelijk factuurregels PATCHen.
+ * Zonder lease: twee destroy+replace PATCHes → dubbele regels (Moneybird append).
+ */
+async function acquireShopifyInvoiceUpdateLease(
+  supabase: SupabaseClient,
+  shopifyOrderId: string
+): Promise<{ token: string } | null> {
+  const orderId = String(shopifyOrderId ?? "").trim();
+  if (!orderId) return null;
+
+  // Zorg dat er een lock-rij is (ook als create elders al klaar was).
+  await supabase.from("moneybird_shopify_invoice_locks").upsert(
+    { shopify_order_id: orderId },
+    { onConflict: "shopify_order_id", ignoreDuplicates: true }
+  );
+
+  for (let attempt = 0; attempt < UPDATE_LEASE_ATTEMPTS; attempt++) {
+    const token = randomUUID();
+    const until = new Date(Date.now() + UPDATE_LEASE_MS).toISOString();
+    const nowIso = new Date().toISOString();
+
+    const { data, error } = await supabase
+      .from("moneybird_shopify_invoice_locks")
+      .update({
+        update_lease_token: token,
+        update_lease_until: until,
+      })
+      .eq("shopify_order_id", orderId)
+      .or(`update_lease_until.is.null,update_lease_until.lt."${nowIso}"`)
+      .select("shopify_order_id")
+      .maybeSingle();
+
+    if (error) {
+      // Kolommen nog niet gemigreerd → geen lease, caller doet wel verify/repair.
+      if (
+        /update_lease_until|update_lease_token|schema cache/i.test(
+          error.message
+        )
+      ) {
+        console.warn(
+          "[moneybird] update-lease kolommen ontbreken — alleen verify/repair actief"
+        );
+        return { token: `nomig:${token}` };
+      }
+      console.error("[moneybird] update-lease claim mislukt:", error.message);
+      return { token: `fallback:${token}` };
+    }
+
+    if (data?.shopify_order_id) return { token };
+
+    await new Promise((r) => setTimeout(r, UPDATE_LEASE_WAIT_MS));
+  }
+
+  console.warn(
+    "[moneybird] update-lease timeout — ga door met verify/repair",
+    orderId
+  );
+  return { token: `timeout:${randomUUID()}` };
+}
+
+async function releaseShopifyInvoiceUpdateLease(
+  supabase: SupabaseClient,
+  shopifyOrderId: string,
+  token: string
+): Promise<void> {
+  const orderId = String(shopifyOrderId ?? "").trim();
+  if (!orderId || !token || token.startsWith("nomig:") || token.startsWith("fallback:") || token.startsWith("timeout:")) {
+    return;
+  }
+  await supabase
+    .from("moneybird_shopify_invoice_locks")
+    .update({ update_lease_token: null, update_lease_until: null })
+    .eq("shopify_order_id", orderId)
+    .eq("update_lease_token", token);
+}
+
+/** True als er roughly ≥2× zoveel regels staan als gewenst (klassieke race-dubbeling). */
+function invoiceDetailsLookDuplicated(
+  existing: MoneybirdSalesInvoiceDetail[] | null | undefined,
+  desired: MoneybirdInvoiceDetailPayload[]
+): boolean {
+  const actual = (existing ?? []).filter((d) =>
+    String(d.description ?? "").trim()
+  );
+  const want = desired.length;
+  if (want <= 0) return false;
+  if (actual.length >= want * 2) return true;
+  return false;
+}
+
+/**
+ * Vervang alle factuurregels atomisch t.o.v. de huidige GET.
+ * Na PATCH: controleer op verdubbeling (race) en herstel één keer.
+ */
+async function replaceMoneybirdInvoiceDetails(params: {
+  invoiceId: string;
+  contactId?: string;
+  reference?: string;
+  details: MoneybirdInvoiceDetailPayload[];
+}): Promise<MoneybirdSalesInvoice> {
+  const invoiceId = String(params.invoiceId ?? "").trim();
+  const details = params.details;
+
+  const patchOnce = async (from: MoneybirdSalesInvoice) => {
+    const destroyOld = (from.details ?? [])
+      .filter((d) => d.id)
+      .map((d) => ({ id: d.id, _destroy: "1" as const }));
+    const salesInvoice: Record<string, unknown> = {
+      details_attributes: [...destroyOld, ...details],
+    };
+    if (params.contactId) salesInvoice.contact_id = params.contactId;
+    if (params.reference != null) salesInvoice.reference = params.reference;
+    return moneybirdFetch<MoneybirdSalesInvoice>(
+      `/sales_invoices/${invoiceId}.json`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ sales_invoice: salesInvoice }),
+      }
+    );
+  };
+
+  const freshBefore =
+    (await fetchSalesInvoiceById(invoiceId)) ??
+    ({ id: invoiceId, details: [] } as MoneybirdSalesInvoice);
+  let updated = await patchOnce(freshBefore);
+
+  const after = (await fetchSalesInvoiceById(invoiceId)) ?? updated;
+  const tooMany =
+    invoiceDetailsLookDuplicated(after.details, details) ||
+    ((after.details?.length ?? 0) > details.length &&
+      !invoiceDetailsUnchanged(after.details, details));
+
+  if (tooMany) {
+    console.warn(
+      "[moneybird] dubbele/teveel factuurregels na PATCH — herstel",
+      invoiceId,
+      `had=${after.details?.length ?? 0}`,
+      `want=${details.length}`
+    );
+    updated = await patchOnce(after);
+  }
+
+  return updated;
 }
 
 /**
@@ -1111,12 +1261,17 @@ function shopifyCorrectionReference(shopifyOrderId: string): string {
  * orders/updated: bestaande hoofdfactuur bijwerken — nooit een nieuwe aanmaken.
  * Concept altijd; verzonden alleen als Shopify-order onbetaald is (geen auto-herzenden).
  * Alleen PATCH als regels/contact echt wijzigen.
+ * Parallelle webhooks worden geserialiseerd via update-lease + post-PATCH verify.
  * @param lockTotalIncl als gezet: nieuwe producten, maar prijzen geschaald naar dit totaal (betaalde concept).
  * @param shopifyUnpaid Shopify al_betaald &lt; €0,01 — nodig om open factuur te mogen patchen.
  */
 export async function updateDraftSalesInvoiceFromShopifyOrder(
   order: ShopifyOrder,
-  opts?: { lockTotalIncl?: number | null; shopifyUnpaid?: boolean }
+  opts?: {
+    lockTotalIncl?: number | null;
+    shopifyUnpaid?: boolean;
+    supabase?: SupabaseClient | null;
+  }
 ): Promise<MoneybirdSalesInvoice | null> {
   if (!isMoneybirdConfigured()) {
     console.warn("[moneybird] niet geconfigureerd — factuur-update overgeslagen.");
@@ -1147,78 +1302,91 @@ export async function updateDraftSalesInvoiceFromShopifyOrder(
     return null;
   }
 
-  const existing = await findShopifyMainInvoice(shopifyOrderId);
-  if (!existing?.id) {
-    console.info(
-      "[moneybird] order update — geen bestaande factuur, geen nieuwe create",
-      shopifyOrderId
-    );
-    return null;
-  }
+  const supabase =
+    opts?.supabase ??
+    (process.env.NEXT_PUBLIC_SUPABASE_URL ? createServerSupabaseClient() : null);
 
-  const full = await moneybirdFetch<MoneybirdSalesInvoice>(
-    `/sales_invoices/${existing.id}.json`
-  );
+  const lease = supabase
+    ? await acquireShopifyInvoiceUpdateLease(supabase, shopifyOrderId)
+    : null;
 
-  if (!canUpdateShopifyMainInvoiceInPlace(full, unpaid)) {
-    console.info(
-      "[moneybird] order update — factuur niet in-place bewerkbaar, skip",
-      full.id,
-      full.state ?? "?",
-      unpaid ? "shopify_unpaid" : "shopify_paid"
-    );
-    return full;
-  }
-
-  let details = await buildInvoiceDetailsFromShopifyOrder(order);
-  if (!details) {
-    console.warn("[moneybird] order update — geen factuurregels", shopifyOrderId);
-    return null;
-  }
-  if (lockTotal != null && lockTotal >= 0.01) {
-    details = scaleInvoiceDetailsToTargetIncl(details, lockTotal);
-  }
-
-  const contact = await findOrCreateContactForShopifyOrder(order);
-  const contactUnchanged =
-    String(full.contact_id ?? "") === String(contact.id ?? "");
-  if (contactUnchanged && invoiceDetailsUnchanged(full.details, details)) {
-    console.info(
-      "[moneybird] order update — factuur al in sync, skip",
-      full.id,
-      order.name ?? shopifyOrderId
-    );
-    return full;
-  }
-
-  const destroyOld = (full.details ?? [])
-    .filter((d) => d.id)
-    .map((d) => ({ id: d.id, _destroy: "1" }));
-
-  const updated = await moneybirdFetch<MoneybirdSalesInvoice>(
-    `/sales_invoices/${full.id}.json`,
-    {
-      method: "PATCH",
-      body: JSON.stringify({
-        sales_invoice: {
-          contact_id: contact.id,
-          details_attributes: [...destroyOld, ...details],
-        },
-      }),
+  try {
+    const existing = await findShopifyMainInvoice(shopifyOrderId, supabase);
+    if (!existing?.id) {
+      console.info(
+        "[moneybird] order update — geen bestaande factuur, geen nieuwe create",
+        shopifyOrderId
+      );
+      return null;
     }
-  );
 
-  const wasDraft = isDraftMoneybirdInvoice(full);
-  console.info(
-    wasDraft
-      ? "[moneybird] conceptfactuur bijgewerkt"
-      : "[moneybird] verzonden factuur bijgewerkt (geen auto-herzenden)",
-    updated.id,
-    "voor Shopify",
-    order.name ?? shopifyOrderId,
-    full.state ?? "?"
-  );
-  return updated;
+    // Verse GET onder lease — destroy-lijst mag niet stale zijn t.o.v. parallelle PATCH.
+    const full =
+      (await fetchSalesInvoiceById(existing.id)) ??
+      (await moneybirdFetch<MoneybirdSalesInvoice>(
+        `/sales_invoices/${existing.id}.json`
+      ));
+
+    if (!canUpdateShopifyMainInvoiceInPlace(full, unpaid)) {
+      console.info(
+        "[moneybird] order update — factuur niet in-place bewerkbaar, skip",
+        full.id,
+        full.state ?? "?",
+        unpaid ? "shopify_unpaid" : "shopify_paid"
+      );
+      return full;
+    }
+
+    let details = await buildInvoiceDetailsFromShopifyOrder(order);
+    if (!details) {
+      console.warn(
+        "[moneybird] order update — geen factuurregels",
+        shopifyOrderId
+      );
+      return null;
+    }
+    if (lockTotal != null && lockTotal >= 0.01) {
+      details = scaleInvoiceDetailsToTargetIncl(details, lockTotal);
+    }
+
+    const contact = await findOrCreateContactForShopifyOrder(order);
+    const contactUnchanged =
+      String(full.contact_id ?? "") === String(contact.id ?? "");
+    if (contactUnchanged && invoiceDetailsUnchanged(full.details, details)) {
+      console.info(
+        "[moneybird] order update — factuur al in sync, skip",
+        full.id,
+        order.name ?? shopifyOrderId
+      );
+      return full;
+    }
+
+    const updated = await replaceMoneybirdInvoiceDetails({
+      invoiceId: full.id!,
+      contactId: contact.id,
+      details,
+    });
+
+    const wasDraft = isDraftMoneybirdInvoice(full);
+    console.info(
+      wasDraft
+        ? "[moneybird] conceptfactuur bijgewerkt"
+        : "[moneybird] verzonden factuur bijgewerkt (geen auto-herzenden)",
+      updated.id,
+      "voor Shopify",
+      order.name ?? shopifyOrderId,
+      full.state ?? "?"
+    );
+    return updated;
+  } finally {
+    if (supabase && lease?.token) {
+      await releaseShopifyInvoiceUpdateLease(
+        supabase,
+        shopifyOrderId,
+        lease.token
+      );
+    }
+  }
 }
 
 /**
@@ -1247,7 +1415,7 @@ export async function registerMolliePaymentOnShopifyInvoice(
     return { registered: false, skipped: "no_mollie_payment" };
   }
 
-  // Altijd hoofdfactuur (shopify:{id} of Klarna payment-id) — geen correctie/add.
+  // Altijd hoofdfactuur (shopify:{id} of Klarna/PAY. payment-id) — geen correctie/add.
   let invoice = await findShopifyMainInvoice(orderId);
   if (!invoice?.id) {
     const invId = String(invoiceId ?? "").trim();
@@ -1500,6 +1668,7 @@ async function syncSalesInvoiceOnShopifyOrderUpdate(
     }
     return updateDraftSalesInvoiceFromShopifyOrder(order, {
       shopifyUnpaid: true,
+      supabase,
     });
   }
 
@@ -1557,6 +1726,7 @@ async function syncSalesInvoiceOnShopifyOrderUpdate(
       );
       return updateDraftSalesInvoiceFromShopifyOrder(order, {
         shopifyUnpaid: false,
+        supabase,
       });
     }
 
@@ -1571,6 +1741,7 @@ async function syncSalesInvoiceOnShopifyOrderUpdate(
     const updatedMain = await updateDraftSalesInvoiceFromShopifyOrder(order, {
       lockTotalIncl: baselineTotal,
       shopifyUnpaid: false,
+      supabase,
     });
     const mainForCorr = updatedMain ?? main;
 
@@ -2724,23 +2895,12 @@ export async function upsertReparatieSalesInvoice(params: {
     }
 
     // Oude regels vernietigen + nieuwe zetten (PATCH zonder _destroy voegt toe).
-    const destroyOld = (full.details ?? [])
-      .filter((d) => d.id)
-      .map((d) => ({ id: d.id, _destroy: "1" as const }));
-
-    const updated = await moneybirdFetch<MoneybirdSalesInvoice>(
-      `/sales_invoices/${full.id}.json`,
-      {
-        method: "PATCH",
-        body: JSON.stringify({
-          sales_invoice: {
-            contact_id: contact.id,
-            reference,
-            details_attributes: [...destroyOld, ...details],
-          },
-        }),
-      }
-    );
+    const updated = await replaceMoneybirdInvoiceDetails({
+      invoiceId: full.id,
+      contactId: contact.id,
+      reference,
+      details,
+    });
     console.info("[moneybird] reparatie conceptfactuur bijgewerkt", updated.id, reference);
     return updated;
   }
@@ -2793,7 +2953,7 @@ export async function deleteReparatieSalesInvoice(params: {
 
 /**
  * Moneybird-hoofdfactuur betaald → Shopify-order + ritjes-rijen als betaald markeren.
- * Hoofdfactuur via `shopify:{id}` of Klarna payment-id (+ lock). Geen add/credit.
+ * Hoofdfactuur via `shopify:{id}` of Klarna/PAY. payment-id (+ lock). Geen add/credit.
  */
 export async function markOrdersPaidFromMoneybirdShopifyInvoice(
   supabase: SupabaseClient,
