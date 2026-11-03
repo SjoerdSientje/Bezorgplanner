@@ -287,6 +287,7 @@ export async function POST(request: NextRequest) {
     );
 
     const vrijeTekst = String(body.producten_vrije_tekst ?? "").trim();
+    const productenKolomTekst = String(body.producten_kolom_tekst ?? "").trim();
 
     let voorrijKm: number | null = null;
     let voorrijBedrag: number | null = null;
@@ -359,7 +360,7 @@ export async function POST(request: NextRequest) {
       vrijeTekst:
         productenNogNietBekend || soort === "reparatie_ophalen"
           ? vrijeTekst
-          : null,
+          : productenKolomTekst || null,
       regels:
         productenNogNietBekend || soort === "reparatie_ophalen"
           ? []
@@ -692,6 +693,10 @@ export async function PATCH(request: NextRequest) {
       body.producten_vrije_tekst != null
         ? String(body.producten_vrije_tekst).trim()
         : "";
+    const productenKolomTekst =
+      body.producten_kolom_tekst != null
+        ? String(body.producten_kolom_tekst).trim()
+        : "";
 
     let voorrijKm = existing.voorrij_km != null ? Number(existing.voorrij_km) : null;
     let voorrijBedrag =
@@ -774,7 +779,7 @@ export async function PATCH(request: NextRequest) {
       vrijeTekst:
         productenNogNietBekend || soort === "reparatie_ophalen"
           ? vrijeTekst
-          : null,
+          : productenKolomTekst || null,
       regels:
         productenNogNietBekend || soort === "reparatie_ophalen"
           ? []

@@ -216,12 +216,26 @@ export function expandReparatieRegelsFromInput(
       const s = standaardById.get(String(r.standaard_id));
       if (!s) continue;
       const baseOnderdelen = normalizeStandaardOnderdelen(s);
+      const inputOnderdelen = parseOnderdelenInput(r.onderdelen);
       const hasPrijsOverride =
         r.onderdeel_prijs_incl != null &&
         Number.isFinite(Number(r.onderdeel_prijs_incl));
-      const onderdelen = hasPrijsOverride
-        ? applyOnderdelenPrijsOverride(baseOnderdelen, Number(r.onderdeel_prijs_incl))
-        : baseOnderdelen.map((o) => ({ ...o }));
+      const onderdelen =
+        inputOnderdelen.length > 0
+          ? inputOnderdelen.map((o, i) => ({
+              naam: o.naam,
+              prijs_incl: o.prijs_incl,
+              shopify_product_id:
+                o.shopify_product_id ?? baseOnderdelen[i]?.shopify_product_id ?? null,
+              shopify_variant_id:
+                o.shopify_variant_id ?? baseOnderdelen[i]?.shopify_variant_id ?? null,
+            }))
+          : hasPrijsOverride
+            ? applyOnderdelenPrijsOverride(
+                baseOnderdelen,
+                Number(r.onderdeel_prijs_incl)
+              )
+            : baseOnderdelen.map((o) => ({ ...o }));
       const legacy = legacyFieldsFromOnderdelen(onderdelen);
       const hasUrenOverride =
         r.arbeid_uren != null && Number.isFinite(Number(r.arbeid_uren));
@@ -240,13 +254,27 @@ export function expandReparatieRegelsFromInput(
         kolom_tekst: String(r.kolom_tekst ?? "").trim() || null,
       });
     } else if (r.kind === "custom") {
+      const inputOnderdelen = parseOnderdelenInput(r.onderdelen);
+      const onderdelen =
+        inputOnderdelen.length > 0
+          ? inputOnderdelen
+          : [
+              {
+                naam: String(r.onderdeel_naam ?? r.naam ?? "").trim() || "Reparatie",
+                prijs_incl: Math.max(0, Number(r.onderdeel_prijs_incl) || 0),
+                shopify_product_id: r.shopify_product_id ?? null,
+                shopify_variant_id: r.shopify_variant_id ?? null,
+              },
+            ];
+      const legacy = legacyFieldsFromOnderdelen(onderdelen);
       expanded.push({
         kind: "custom",
-        naam: String(r.naam ?? "").trim() || "Reparatie",
-        onderdeel_naam: String(r.onderdeel_naam ?? r.naam ?? "").trim(),
-        onderdeel_prijs_incl: Math.max(0, Number(r.onderdeel_prijs_incl) || 0),
-        shopify_product_id: r.shopify_product_id ?? null,
-        shopify_variant_id: r.shopify_variant_id ?? null,
+        naam: String(r.naam ?? legacy.onderdeel_naam ?? "").trim() || "Reparatie",
+        onderdeel_naam: legacy.onderdeel_naam,
+        onderdeel_prijs_incl: legacy.onderdeel_prijs_incl,
+        shopify_product_id: legacy.shopify_product_id,
+        shopify_variant_id: legacy.shopify_variant_id,
+        onderdelen,
         arbeid_uren: Math.max(0, Number(r.arbeid_uren) || 0),
         kolom_tekst: String(r.kolom_tekst ?? "").trim() || null,
       });
@@ -404,18 +432,21 @@ export function buildReparatieShopifyLineItems(regels: ReparatieRegelInput[]): S
         variant_id: o.shopify_variant_id ?? undefined,
       });
     }
+  }
 
-    const uren = Number(r.arbeid_uren ?? 0);
-    const arbeid = arbeidPrijsIncl(uren);
-    if (arbeid >= 0.01) {
-      const label = String(r.naam ?? "").trim() || "reparatie";
-      out.push({
-        name: `Arbeidskosten ${label}`,
-        price: arbeid,
-        quantity: 1,
-        properties: [{ name: "Uren", value: String(uren) }],
-      });
-    }
+  // Alle arbeidsuren op één factuurregel (niet per standaardreparatie/product).
+  const totalUren = regels
+    .filter((r) => r.kind !== "voorrijkosten")
+    .reduce((sum, r) => sum + Math.max(0, Number(r.arbeid_uren ?? 0) || 0), 0);
+  const arbeid = arbeidPrijsIncl(totalUren);
+  if (arbeid >= 0.01) {
+    const urenLabel = Math.round(totalUren * 10000) / 10000;
+    out.push({
+      name: "Arbeidskosten",
+      price: arbeid,
+      quantity: 1,
+      properties: [{ name: "Uren", value: String(urenLabel) }],
+    });
   }
 
   return out;
