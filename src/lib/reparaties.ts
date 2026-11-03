@@ -435,17 +435,17 @@ export function buildReparatieShopifyLineItems(regels: ReparatieRegelInput[]): S
   }
 
   // Alle arbeidsuren op één factuurregel (niet per standaardreparatie/product).
+  // Geen uren-vermelding op de factuur — alleen bedrag.
   const totalUren = regels
     .filter((r) => r.kind !== "voorrijkosten")
     .reduce((sum, r) => sum + Math.max(0, Number(r.arbeid_uren ?? 0) || 0), 0);
   const arbeid = arbeidPrijsIncl(totalUren);
   if (arbeid >= 0.01) {
-    const urenLabel = Math.round(totalUren * 10000) / 10000;
     out.push({
       name: "Arbeidskosten",
       price: arbeid,
       quantity: 1,
-      properties: [{ name: "Uren", value: String(urenLabel) }],
+      properties: [],
     });
   }
 
