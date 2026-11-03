@@ -121,7 +121,7 @@ export function reparatieSoortProductenPrefix(soort: ReparatieSoort): string {
   }
 }
 
-/** Bouw productenkolom: altijd prefix, daarna vrije tekst of per-regel kolomtekst. */
+/** Bouw productenkolom: altijd `Prefix: titel1, titel2` op één regel. */
 export function buildReparatieProductenKolom(params: {
   soort: ReparatieSoort;
   vrijeTekst?: string | null;
@@ -132,30 +132,35 @@ export function buildReparatieProductenKolom(params: {
   }>;
 }): string {
   const prefix = reparatieSoortProductenPrefix(params.soort);
-  const vrij = String(params.vrijeTekst ?? "")
-    .trim()
-    .replace(new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*`, "i"), "");
+  const prefixRe = new RegExp(
+    `^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*`,
+    "i"
+  );
+  const vrij = String(params.vrijeTekst ?? "").trim().replace(prefixRe, "");
 
-  // Ophalen: suffix op dezelfde regel ("Ophalen: …"), geen Shopify-regels.
-  if (params.soort === "reparatie_ophalen") {
-    return vrij ? `${prefix} ${vrij}` : prefix;
-  }
-
-  const lines: string[] = [prefix];
+  // Vrije tekst (ophalen / producten nog niet bekend) → "Prefix: tekst".
   if (vrij) {
-    lines.push(vrij);
-    return lines.join("\n");
+    return `${prefix} ${vrij}`;
   }
+
+  // Standaardreparaties + Shopify/custom: titels komma-gescheiden achter de prefix.
+  // Voorbeeld: "Reparatie aan huis: Binnen + buitenband Kenda (20x4), Ketting"
+  const titles: string[] = [];
   for (const r of params.regels ?? []) {
     const custom = String(r.kolom_tekst ?? "").trim();
     if (custom) {
-      lines.push(custom);
+      titles.push(custom);
       continue;
     }
     const fallback = String(r.naam || r.onderdeel_naam || "").trim();
-    if (fallback) lines.push(fallback);
+    if (fallback) titles.push(fallback);
   }
-  return lines.join("\n");
+
+  if (params.soort === "reparatie_ophalen") {
+    return titles.length ? `${prefix} ${titles.join(", ")}` : prefix;
+  }
+
+  return titles.length ? `${prefix} ${titles.join(", ")}` : prefix;
 }
 
 /** Haal prefix weg om vrije tekst / rest terug te krijgen bij bewerken. */
