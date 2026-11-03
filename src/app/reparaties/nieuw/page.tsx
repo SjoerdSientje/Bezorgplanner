@@ -740,97 +740,128 @@ export default function ReparatieNieuwPage() {
                       <p className="text-xs text-red-600">{standaardError}</p>
                     )}
 
-                    <div className="overflow-hidden rounded-xl border border-koopje-black/15 bg-white shadow-sm">
-                      <div className="border-b border-koopje-black/10 bg-stone-50 px-4 py-2 text-xs font-medium uppercase tracking-wide text-koopje-black/50">
-                        Simulatiefactuur
+                    <div className="overflow-hidden rounded-xl border border-koopje-black/15 bg-white">
+                      <div className="grid grid-cols-[1fr_auto] gap-3 border-b border-koopje-black/10 bg-stone-50 px-4 py-2 text-xs font-medium text-koopje-black/45">
+                        <span>Omschrijving</span>
+                        <span className="w-24 text-right">Bedrag</span>
                       </div>
                       <ul className="divide-y divide-stone-100">
                         {regels.length === 0 && (
                           <li className="px-4 py-6 text-center text-sm text-koopje-black/40">
-                            Voeg een standaardreparatie of Shopify-product toe
+                            Nog geen factuurregels — voeg een product toe
                           </li>
                         )}
-                        {regels.map((r) => (
-                          <li key={r.key} className="space-y-2 px-4 py-3">
-                            <div className="flex items-start justify-between gap-2">
-                              <p className="text-xs font-medium text-koopje-black/50">
-                                {r.mode === "standaard"
-                                  ? r.naam || "Standaardreparatie"
-                                  : "Shopify-product"}
-                              </p>
+
+                        {regels.flatMap((r) => {
+                          if (r.mode === "custom" && !r.onderdelen[0]?.naam) {
+                            return [
+                              <li key={r.key} className="space-y-2 px-4 py-3">
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="min-w-0 flex-1">
+                                    <ProductAutocomplete
+                                      label="Product zoeken"
+                                      value=""
+                                      searchSource="shopify"
+                                      productKind="extra"
+                                      onChange={(title, prijs, meta) => {
+                                        const oKey = r.onderdelen[0]?.key;
+                                        if (!oKey) return;
+                                        patchOnderdeel(r.key, oKey, {
+                                          naam: title,
+                                          ...(prijs != null
+                                            ? { prijs_incl: prijs }
+                                            : {}),
+                                          ...(meta !== undefined
+                                            ? {
+                                                shopify_product_id:
+                                                  meta.shopify_product_id ?? null,
+                                                shopify_variant_id:
+                                                  meta.shopify_variant_id ?? null,
+                                              }
+                                            : {}),
+                                        });
+                                        setRegels((prev) =>
+                                          patchRegel(prev, r.key, {
+                                            naam: title || "Reparatie",
+                                          })
+                                        );
+                                      }}
+                                    />
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className="mt-6 text-xs text-red-600 hover:underline"
+                                    onClick={() => removeRegel(r.key)}
+                                  >
+                                    ×
+                                  </button>
+                                </div>
+                              </li>,
+                            ];
+                          }
+
+                          return r.onderdelen.map((o) => (
+                            <li
+                              key={`${r.key}-${o.key}`}
+                              className="grid grid-cols-[1fr_auto_auto] items-center gap-2 px-4 py-2.5 text-sm"
+                            >
+                              <span className="min-w-0 text-koopje-black">
+                                {o.naam || "—"}
+                              </span>
+                              <label className="flex w-24 items-center justify-end gap-1 tabular-nums text-koopje-black">
+                                <span className="text-koopje-black/40">€</span>
+                                <input
+                                  type="text"
+                                  inputMode="decimal"
+                                  className="w-16 border-0 bg-transparent p-0 text-right text-sm outline-none focus:ring-0"
+                                  value={o.prijs_incl}
+                                  onChange={(e) =>
+                                    patchOnderdeel(r.key, o.key, {
+                                      prijs_incl: e.target.value,
+                                    })
+                                  }
+                                  aria-label={`Prijs ${o.naam}`}
+                                />
+                              </label>
                               <button
                                 type="button"
-                                className="text-xs text-red-600 hover:underline"
-                                onClick={() => removeRegel(r.key)}
-                              >
-                                Verwijderen
-                              </button>
-                            </div>
-                            {r.mode === "custom" && !r.onderdelen[0]?.naam ? (
-                              <ProductAutocomplete
-                                label="Product zoeken"
-                                value={r.onderdelen[0]?.naam ?? ""}
-                                searchSource="shopify"
-                                productKind="extra"
-                                onChange={(title, prijs, meta) => {
-                                  const oKey = r.onderdelen[0]?.key;
-                                  if (!oKey) return;
-                                  patchOnderdeel(r.key, oKey, {
-                                    naam: title,
-                                    ...(prijs != null ? { prijs_incl: prijs } : {}),
-                                    ...(meta !== undefined
-                                      ? {
-                                          shopify_product_id:
-                                            meta.shopify_product_id ?? null,
-                                          shopify_variant_id:
-                                            meta.shopify_variant_id ?? null,
-                                        }
-                                      : {}),
-                                  });
+                                className="text-koopje-black/30 hover:text-red-600"
+                                title="Regel verwijderen"
+                                onClick={() => {
+                                  if (r.onderdelen.length <= 1) {
+                                    removeRegel(r.key);
+                                    return;
+                                  }
                                   setRegels((prev) =>
-                                    patchRegel(prev, r.key, {
-                                      naam: title || "Reparatie",
-                                    })
+                                    prev.map((x) =>
+                                      x.key !== r.key
+                                        ? x
+                                        : {
+                                            ...x,
+                                            onderdelen: x.onderdelen.filter(
+                                              (oo) => oo.key !== o.key
+                                            ),
+                                          }
+                                    )
                                   );
                                 }}
-                              />
-                            ) : (
-                              r.onderdelen.map((o) => (
-                                <div
-                                  key={o.key}
-                                  className="flex items-center gap-3 text-sm"
-                                >
-                                  <span className="min-w-0 flex-1 text-koopje-black">
-                                    {o.naam || "—"}
-                                  </span>
-                                  <label className="flex items-center gap-1 text-xs text-koopje-black/50">
-                                    €
-                                    <input
-                                      type="text"
-                                      inputMode="decimal"
-                                      className="w-20 rounded border border-koopje-black/15 px-2 py-1 text-sm text-koopje-black"
-                                      value={o.prijs_incl}
-                                      onChange={(e) =>
-                                        patchOnderdeel(r.key, o.key, {
-                                          prijs_incl: e.target.value,
-                                        })
-                                      }
-                                      aria-label={`Prijs ${o.naam}`}
-                                    />
-                                  </label>
-                                </div>
-                              ))
-                            )}
-                          </li>
-                        ))}
+                              >
+                                ×
+                              </button>
+                            </li>
+                          ));
+                        })}
 
                         {(regels.length > 0 || arbeidUrenTotaal > 0) && (
-                          <li className="space-y-2 bg-stone-50/60 px-4 py-3">
-                            <div className="flex items-center justify-between gap-3 text-sm">
-                              <span className="font-medium text-koopje-black">
+                          <li className="space-y-2 px-4 py-2.5">
+                            <div className="grid grid-cols-[1fr_auto] items-center gap-2 text-sm">
+                              <span className="text-koopje-black">
                                 Arbeidskosten
+                                {arbeidUrenTotaal > 0
+                                  ? ` (${arbeidUrenTotaalStr} uur)`
+                                  : ""}
                               </span>
-                              <span className="tabular-nums text-koopje-black">
+                              <span className="w-24 text-right tabular-nums text-koopje-black">
                                 €{arbeidPrijsIncl(arbeidUrenTotaal).toFixed(2)}
                               </span>
                             </div>
@@ -842,35 +873,90 @@ export default function ReparatieNieuwPage() {
                           </li>
                         )}
 
-                        <li className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
-                          <div>
-                            <p className="font-medium text-koopje-black">
-                              Voorrijkosten
-                            </p>
-                            {voorrijLoading && (
-                              <p className="text-xs text-koopje-black/40">
-                                Berekenen…
-                              </p>
-                            )}
-                          </div>
-                          <label className="flex items-center gap-1 text-xs text-koopje-black/50">
-                            €
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              className="w-24 rounded border border-koopje-black/15 px-2 py-1 text-sm font-medium text-koopje-black"
-                              value={voorrijBedragStr}
-                              onChange={(e) => {
-                                setVoorrijManual(true);
-                                setVoorrijBedragStr(e.target.value);
-                              }}
-                              aria-label="Voorrijkosten"
-                            />
-                          </label>
-                        </li>
+                        {soort === "reparatie_terugbrengen" &&
+                        fietsOokOpgehaald ? (
+                          <>
+                            <li className="grid grid-cols-[1fr_auto] items-center gap-2 px-4 py-2.5 text-sm">
+                              <span className="text-koopje-black">
+                                Voorrijkosten ophalen
+                              </span>
+                              <span className="w-24 text-right tabular-nums text-koopje-black">
+                                €
+                                {(
+                                  Math.round(
+                                    ((voorrijTotaalParsed ?? 0) / 2) * 100
+                                  ) / 100
+                                ).toFixed(2)}
+                              </span>
+                            </li>
+                            <li className="grid grid-cols-[1fr_auto_auto] items-center gap-2 px-4 py-2.5 text-sm">
+                              <span className="text-koopje-black">
+                                Voorrijkosten terugbrengen
+                              </span>
+                              <label className="flex w-24 items-center justify-end gap-1 tabular-nums text-koopje-black">
+                                <span className="text-koopje-black/40">€</span>
+                                <input
+                                  type="text"
+                                  inputMode="decimal"
+                                  className="w-16 border-0 bg-transparent p-0 text-right text-sm outline-none"
+                                  value={
+                                    voorrijTotaalParsed != null
+                                      ? (
+                                          Math.round(
+                                            (voorrijTotaalParsed / 2) * 100
+                                          ) / 100
+                                        ).toFixed(2)
+                                      : voorrijBedragStr
+                                  }
+                                  onChange={(e) => {
+                                    setVoorrijManual(true);
+                                    const half =
+                                      parseFloat(
+                                        e.target.value.replace(",", ".")
+                                      ) || 0;
+                                    setVoorrijBedragStr(
+                                      (Math.round(half * 2 * 100) / 100).toFixed(
+                                        2
+                                      )
+                                    );
+                                  }}
+                                  aria-label="Voorrijkosten per rit"
+                                />
+                              </label>
+                              <span className="w-4" />
+                            </li>
+                          </>
+                        ) : (
+                          <li className="grid grid-cols-[1fr_auto] items-center gap-2 px-4 py-2.5 text-sm">
+                            <div>
+                              <span className="text-koopje-black">
+                                Voorrijkosten
+                              </span>
+                              {voorrijLoading && (
+                                <span className="ml-2 text-xs text-koopje-black/40">
+                                  berekenen…
+                                </span>
+                              )}
+                            </div>
+                            <label className="flex w-24 items-center justify-end gap-1 tabular-nums text-koopje-black">
+                              <span className="text-koopje-black/40">€</span>
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                className="w-16 border-0 bg-transparent p-0 text-right text-sm outline-none"
+                                value={voorrijBedragStr}
+                                onChange={(e) => {
+                                  setVoorrijManual(true);
+                                  setVoorrijBedragStr(e.target.value);
+                                }}
+                                aria-label="Voorrijkosten"
+                              />
+                            </label>
+                          </li>
+                        )}
                       </ul>
-                      <div className="flex items-center justify-between border-t border-koopje-black/10 bg-stone-50 px-4 py-3 text-sm font-semibold text-koopje-black">
-                        <span>Totaal</span>
+                      <div className="flex items-center justify-between border-t border-koopje-black/15 px-4 py-3 text-sm font-semibold text-koopje-black">
+                        <span>Totaal incl. btw</span>
                         <span className="tabular-nums">€{totaal.toFixed(2)}</span>
                       </div>
                     </div>
