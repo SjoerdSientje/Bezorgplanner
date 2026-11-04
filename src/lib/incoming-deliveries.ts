@@ -298,7 +298,9 @@ export async function receiveIncomingDelivery(
   if (bikeRestocks.length > 0) {
     try {
       const { notifyInventoryBikeRestockAlert } = await import("@/lib/whatsapp");
-      const wa = await notifyInventoryBikeRestockAlert(bikeRestocks);
+      const wa = await notifyInventoryBikeRestockAlert(bikeRestocks, {
+        ownerEmail: params.ownerEmail,
+      });
       if (!wa.ok) {
         console.warn("[incoming-deliveries] fiets-aanvul WhatsApp mislukt:", wa.error);
       }

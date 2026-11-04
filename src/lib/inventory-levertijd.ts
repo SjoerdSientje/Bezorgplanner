@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { mayPushInventoryMetafieldsToShopify } from "@/lib/account";
 import { getAmsterdamCalendarDate } from "@/lib/planning-date";
 import { shopifyAdminFetch, shopifyAdminJson } from "@/lib/shopify-admin";
 
@@ -488,33 +489,35 @@ export async function stampRestockDatumOnSellableRecovery(
     return { stamped: false, restockDatum: null };
   }
 
-  try {
-    const { getInventoryLinkedShopifyProducts } = await import("@/lib/inventory");
-    const links = await getInventoryLinkedShopifyProducts(
-      supabase,
-      ownerEmail,
-      params.productId
-    );
-    const ids = links.map((l) => l.shopifyProductId);
-    const head = Number(data.shopify_product_id ?? params.shopifyProductId ?? 0);
-    if (ids.length === 0 && Number.isFinite(head) && head > 0) ids.push(head);
+  if (mayPushInventoryMetafieldsToShopify(ownerEmail)) {
+    try {
+      const { getInventoryLinkedShopifyProducts } = await import("@/lib/inventory");
+      const links = await getInventoryLinkedShopifyProducts(
+        supabase,
+        ownerEmail,
+        params.productId
+      );
+      const ids = links.map((l) => l.shopifyProductId);
+      const head = Number(data.shopify_product_id ?? params.shopifyProductId ?? 0);
+      if (ids.length === 0 && Number.isFinite(head) && head > 0) ids.push(head);
 
-    if (ids.length > 0) {
-      await pushInventoryLevertijdMetafieldsToShopifyProducts(ids, {
-        levertijd:
-          data.levertijd == null
-            ? params.levertijd == null
-              ? null
-              : String(params.levertijd)
-            : String(data.levertijd),
-        restockDatum: today,
-      });
+      if (ids.length > 0) {
+        await pushInventoryLevertijdMetafieldsToShopifyProducts(ids, {
+          levertijd:
+            data.levertijd == null
+              ? params.levertijd == null
+                ? null
+                : String(params.levertijd)
+              : String(data.levertijd),
+          restockDatum: today,
+        });
+      }
+    } catch (err) {
+      console.warn(
+        "[inventory-levertijd] Shopify stamp restock on recovery failed:",
+        err instanceof Error ? err.message : err
+      );
     }
-  } catch (err) {
-    console.warn(
-      "[inventory-levertijd] Shopify stamp restock on recovery failed:",
-      err instanceof Error ? err.message : err
-    );
   }
 
   return { stamped: true, restockDatum: today };

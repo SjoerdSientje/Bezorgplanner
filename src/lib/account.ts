@@ -23,8 +23,14 @@ export function getInventoryScanOwnerEmail(): string {
   return normalizeEmail("info@koopjefatbike.nl");
 }
 
-/** Voorraad scan/zoeken: altijd het gedeelde scan-account, ongeacht login. */
-export function getInventoryOwnerEmail(_request: NextRequest): string {
+/**
+ * Voorraad in de ingelogde app: altijd het account van de sessie.
+ * Zo blijven malyar@ en info@ gescheiden (stock, opmerkingen, drempels, pending).
+ * Winkel-QR-scan/zoeken moet expliciet `getInventoryScanOwnerEmail()` gebruiken.
+ */
+export function getInventoryOwnerEmail(request: NextRequest): string {
+  const email = getAccountEmailFromRequest(request);
+  if (email) return email;
   return getInventoryScanOwnerEmail();
 }
 
@@ -35,6 +41,27 @@ export function allAccountEmails(): string[] {
 /** Shopify-import voor dit account alleen als de order-notitie dit bevat (case-insensitive). */
 const MALYAR_ACCOUNT = "malyar@aiventive.nl";
 const MALYAR_NOTE_REQUIRED_SUBSTRING = "malyar";
+
+/** Alleen dit nummer mag WhatsApp ontvangen als het verzoek vanaf het malyar-account komt. */
+export const MALYAR_WHATSAPP_ALLOWED_RECIPIENT = "31627182453";
+
+export function isMalyarAccount(email: string | null | undefined): boolean {
+  return normalizeEmail(email ?? "") === normalizeEmail(MALYAR_ACCOUNT);
+}
+
+/** Testaccount mag Shopify-metafields (levertijd/restock) niet aanpassen. */
+export function mayPushInventoryMetafieldsToShopify(
+  ownerEmail: string | null | undefined
+): boolean {
+  return !isMalyarAccount(ownerEmail);
+}
+
+/** Testaccount mag geen Moneybird-conceptfacturen aanmaken/bijwerken. */
+export function mayCreateMoneybirdInvoicesForOwner(
+  ownerEmail: string | null | undefined
+): boolean {
+  return !isMalyarAccount(ownerEmail);
+}
 
 /** Testorders: "malyar" ergens in de Shopify order note (case-insensitive). */
 export function isMalyarTestOrderNote(orderNote: string | null | undefined): boolean {
@@ -49,7 +76,7 @@ export function shopifyWebhookOrderAppliesToOwner(
   ownerEmail: string,
   orderNote: string | null | undefined
 ): boolean {
-  const isMalyarOwner = normalizeEmail(ownerEmail) === normalizeEmail(MALYAR_ACCOUNT);
+  const isMalyarOwner = isMalyarAccount(ownerEmail);
   const isMalyarNote = isMalyarTestOrderNote(orderNote);
   if (isMalyarNote) return isMalyarOwner;
   return !isMalyarOwner;
@@ -66,9 +93,6 @@ function normalizePhoneDigitsForCompare(raw: string | null | undefined): string 
   return cleaned;
 }
 
-/** Alleen dit nummer mag WhatsApp ontvangen als het verzoek vanaf het malyar-account komt. */
-const MALYAR_WHATSAPP_ALLOWED_RECIPIENT = "31627182453";
-
 export type WhatsAppOwnerGateResult = { ok: true } | { ok: false; error: string };
 
 /**
@@ -79,7 +103,7 @@ export function maySendWhatsAppForOwner(
   ownerEmail: string | null | undefined,
   order: { telefoon_e164?: string | null; telefoon_nummer?: string | null }
 ): WhatsAppOwnerGateResult {
-  if (!ownerEmail || normalizeEmail(ownerEmail) !== normalizeEmail(MALYAR_ACCOUNT)) {
+  if (!isMalyarAccount(ownerEmail)) {
     return { ok: true };
   }
   const to = normalizePhoneDigitsForCompare(order.telefoon_e164 || order.telefoon_nummer || "");

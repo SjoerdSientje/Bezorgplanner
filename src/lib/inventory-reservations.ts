@@ -116,6 +116,8 @@ export async function maybeNotifySellableStockAlert(params: {
   afterSellable: number;
   /** Drempel voor het "laag"-appje; default LOW_STOCK_THRESHOLD. Beïnvloedt niet het uitverkocht-appje. */
   threshold?: number | null;
+  /** Bepaalt alert-ontvanger (malyar@ → testnummer). */
+  ownerEmail?: string | null;
 }): Promise<void> {
   const before = params.beforeSellable;
   const after = params.afterSellable;
@@ -138,6 +140,7 @@ export async function maybeNotifySellableStockAlert(params: {
       productTitle: params.productTitle || "Product",
       stockAfter: after <= 0 ? 0 : after,
       threshold,
+      ownerEmail: params.ownerEmail,
     });
     if (!wa.ok) {
       console.warn("[inventory-reservations] voorraad-alert WhatsApp mislukt:", wa.error);
@@ -173,6 +176,7 @@ async function alertSellableForProduct(
     beforeSellable,
     afterSellable,
     threshold: product.low_stock_threshold as number | null,
+    ownerEmail,
   });
 
   if (beforeSellable <= 0 && afterSellable > 0) {

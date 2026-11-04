@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getInventoryOwnerEmail } from "@/lib/account";
+import { getInventoryScanOwnerEmail } from "@/lib/account";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { applyInventoryMutation, resolveCanonicalInventoryProductId } from "@/lib/inventory";
 
@@ -12,7 +12,8 @@ type ScanItem = {
 
 export async function POST(request: NextRequest) {
   try {
-    const ownerEmail = getInventoryOwnerEmail(request);
+    // Winkel-QR: altijd productie-voorraad (info@), nooit testaccount.
+    const ownerEmail = getInventoryScanOwnerEmail();
     const body = await request.json().catch(() => ({}));
 
     const direction = body.direction as "inkomend" | "uitgaand";

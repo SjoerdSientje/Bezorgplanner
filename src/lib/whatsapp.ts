@@ -1,4 +1,8 @@
-import { maySendWhatsAppForOwner } from "@/lib/account";
+import {
+  isMalyarAccount,
+  MALYAR_WHATSAPP_ALLOWED_RECIPIENT,
+  maySendWhatsAppForOwner,
+} from "@/lib/account";
 
 export type WhatsAppEvent = "planning_goedgekeurd" | "stuur_appjes" | "afronden";
 
@@ -811,13 +815,20 @@ export async function createInventoryAlertTemplate() {
 /**
  * Appje bij voorraad laag (drempel) of 0 met de juiste Meta-template.
  */
+function inventoryAlertRecipient(ownerEmail?: string | null): string {
+  if (isMalyarAccount(ownerEmail)) return MALYAR_WHATSAPP_ALLOWED_RECIPIENT;
+  return env("WHATSAPP_VOORRAAD_ALERT_TO") || INVENTORY_ALERT_PHONE_DEFAULT;
+}
+
 export async function notifyInventoryStockAlert(params: {
   productTitle: string;
   stockAfter: number;
   /** Drempel voor "laag"-tekst; default 3. */
   threshold?: number;
+  /** Voorraad-eigenaar: malyar@ → testnummer, anders productie-alert. */
+  ownerEmail?: string | null;
 }): Promise<SendWhatsAppResult> {
-  const to = env("WHATSAPP_VOORRAAD_ALERT_TO") || INVENTORY_ALERT_PHONE_DEFAULT;
+  const to = inventoryAlertRecipient(params.ownerEmail);
   const title = String(params.productTitle ?? "").trim() || "Product";
   const stock = Math.max(0, Math.floor(params.stockAfter));
   const threshold =
@@ -873,14 +884,15 @@ export function formatBikeRestockList(lines: BikeRestockLine[]): string {
  * Meerdere regels → één bericht (bv. bij afronden inkomende levering).
  */
 export async function notifyInventoryBikeRestockAlert(
-  lines: BikeRestockLine[]
+  lines: BikeRestockLine[],
+  options?: { ownerEmail?: string | null }
 ): Promise<SendWhatsAppResult> {
   const fietsenlijst = formatBikeRestockList(lines).trim();
   if (!fietsenlijst) {
     return { ok: false, error: "Geen fiets-aanvullingen om te melden." };
   }
 
-  const to = env("WHATSAPP_VOORRAAD_ALERT_TO") || INVENTORY_ALERT_PHONE_DEFAULT;
+  const to = inventoryAlertRecipient(options?.ownerEmail);
   const text = `Jo megahead, de voorraad van de volgende bikas is aangevuld: ${fietsenlijst}. Check voorraadbeheer.`;
   const templateName =
     env("WHATSAPP_VOORRAAD_BIKE_RESTOCK_TEMPLATE") || INVENTORY_ALERT_TEMPLATE_BIKE_RESTOCK;

@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { requireAccountEmail } from "@/lib/account";
+import {
+  mayCreateMoneybirdInvoicesForOwner,
+  requireAccountEmail,
+} from "@/lib/account";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { defaultMeenemenInPlanning } from "@/lib/planning-date";
 import {
@@ -432,7 +435,9 @@ export async function POST(request: NextRequest) {
     if (error) throw new Error(error.message);
 
     let moneybirdInvoiceId: string | null = null;
+    const allowMoneybird = mayCreateMoneybirdInvoicesForOwner(ownerEmail);
     if (
+      allowMoneybird &&
       soort !== "reparatie_ophalen" &&
       betaalwijze === "factuur" &&
       !productenNogNietBekend
@@ -510,7 +515,7 @@ export async function POST(request: NextRequest) {
         console.error("[reparaties] inventory deduct (terugbrengen):", invErr);
       }
 
-      if (betaalwijze === "factuur") {
+      if (allowMoneybird && betaalwijze === "factuur") {
         if (!moneybirdInvoiceId) {
           return NextResponse.json(
             {
@@ -839,9 +844,12 @@ export async function PATCH(request: NextRequest) {
     if (error) throw new Error(error.message);
 
     let moneybirdInvoiceId = existing.moneybird_invoice_id as string | null;
+    const allowMoneybird = mayCreateMoneybirdInvoicesForOwner(ownerEmail);
 
     // Terugbrengen: bij bewerken geen nieuwe factuur maken/verzenden (handmatig).
-    if (soort === "reparatie_terugbrengen") {
+    if (!allowMoneybird) {
+      moneybirdInvoiceId = null;
+    } else if (soort === "reparatie_terugbrengen") {
       moneybirdInvoiceId = existing.moneybird_invoice_id as string | null;
     } else if (
       soort === "reparatie_ophalen" ||

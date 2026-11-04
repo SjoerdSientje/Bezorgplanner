@@ -1590,6 +1590,7 @@ export async function applyInventoryMutation(
         threshold: effectiveLowStockThreshold(
           (product as { low_stock_threshold?: number | null }).low_stock_threshold
         ),
+        ownerEmail: params.ownerEmail,
       });
     }
   } catch (e) {
@@ -1607,7 +1608,9 @@ export async function applyInventoryMutation(
     if (!params.skipBikeRestockAlert) {
       try {
         const { notifyInventoryBikeRestockAlert } = await import("@/lib/whatsapp");
-        const wa = await notifyInventoryBikeRestockAlert([bikeRestock]);
+        const wa = await notifyInventoryBikeRestockAlert([bikeRestock], {
+          ownerEmail: params.ownerEmail,
+        });
         if (!wa.ok) {
           console.warn("[inventory] fiets-aanvul WhatsApp mislukt:", wa.error);
         }

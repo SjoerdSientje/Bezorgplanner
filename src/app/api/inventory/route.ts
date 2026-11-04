@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getInventoryOwnerEmail, requireAccountEmail } from "@/lib/account";
+import {
+  getInventoryOwnerEmail,
+  mayPushInventoryMetafieldsToShopify,
+  requireAccountEmail,
+} from "@/lib/account";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import {
   getInventoryStats,
@@ -195,7 +199,9 @@ export async function PATCH(request: NextRequest) {
       detail?: string;
     } | null = null;
 
-    const shouldPushShopify = "levertijd" in updates || "restock_datum" in updates;
+    const shouldPushShopify =
+      ("levertijd" in updates || "restock_datum" in updates) &&
+      mayPushInventoryMetafieldsToShopify(ownerEmail);
 
     if (shouldPushShopify) {
       try {
@@ -247,6 +253,18 @@ export async function PATCH(request: NextRequest) {
                 : "Shopify-update mislukt",
         };
       }
+    }
+
+    if (
+      shopifyPush == null &&
+      ("levertijd" in updates || "restock_datum" in updates) &&
+      !mayPushInventoryMetafieldsToShopify(ownerEmail)
+    ) {
+      shopifyPush = {
+        ok: true,
+        updated: 0,
+        detail: "testaccount_geen_shopify_push",
+      };
     }
 
     return NextResponse.json({ ok: true, product: data, shopifyPush });

@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { sendWhatsAppByEvent } from "@/lib/whatsapp";
-import { requireAccountEmail } from "@/lib/account";
+import {
+  mayCreateMoneybirdInvoicesForOwner,
+  requireAccountEmail,
+} from "@/lib/account";
 import { verwerkGarantiebewijs } from "@/lib/garantiebewijs";
 import { promoteRitjesVoorMorgen } from "@/lib/planning-promote";
 import { inferCompletedStatus } from "@/lib/order-completion";
@@ -114,7 +117,10 @@ export async function POST(request: NextRequest) {
       const { deleteReparatieSalesInvoice } = await import("@/lib/moneybird");
 
       // Conceptfactuur verwijderen als de order niet op contant stond.
-      if (String(order.reparatie_betaalwijze ?? "") !== "contant") {
+      if (
+        mayCreateMoneybirdInvoicesForOwner(ownerEmail) &&
+        String(order.reparatie_betaalwijze ?? "") !== "contant"
+      ) {
         try {
           await deleteReparatieSalesInvoice({
             orderId,
@@ -226,7 +232,7 @@ export async function POST(request: NextRequest) {
         .eq("id", orderId)
         .eq("owner_email", ownerEmail);
 
-      if (reparatieWilFactuur) {
+      if (reparatieWilFactuur && mayCreateMoneybirdInvoicesForOwner(ownerEmail)) {
         try {
           const inv = await upsertReparatieSalesInvoice({
             orderId,
@@ -282,16 +288,25 @@ export async function POST(request: NextRequest) {
             { status: 500 }
           );
         }
+      } else if (reparatieWilFactuur && !mayCreateMoneybirdInvoicesForOwner(ownerEmail)) {
+        reparatieInvoiceId = null;
+        await supabase
+          .from("orders")
+          .update({ moneybird_invoice_id: null })
+          .eq("id", orderId)
+          .eq("owner_email", ownerEmail);
       } else {
         // Geen factuur: concept verwijderen als die er nog was.
-        try {
-          const { deleteReparatieSalesInvoice } = await import("@/lib/moneybird");
-          await deleteReparatieSalesInvoice({
-            orderId,
-            invoiceId: reparatieInvoiceId,
-          });
-        } catch (delErr) {
-          console.error("[api/afronden] reparatie moneybird delete (geen factuur):", delErr);
+        if (mayCreateMoneybirdInvoicesForOwner(ownerEmail)) {
+          try {
+            const { deleteReparatieSalesInvoice } = await import("@/lib/moneybird");
+            await deleteReparatieSalesInvoice({
+              orderId,
+              invoiceId: reparatieInvoiceId,
+            });
+          } catch (delErr) {
+            console.error("[api/afronden] reparatie moneybird delete (geen factuur):", delErr);
+          }
         }
         reparatieInvoiceId = null;
         await supabase
@@ -306,7 +321,7 @@ export async function POST(request: NextRequest) {
     // (niet bij omzetting naar ophalen). Terugbrengen: factuur/voorraad al bij aanmaken.
     let reparatieFactuurError: string | null = null;
     if (order.type === "reparatie_deur" && !convertedToOphalen) {
-      if (reparatieWilFactuur) {
+      if (reparatieWilFactuur && mayCreateMoneybirdInvoicesForOwner(ownerEmail)) {
         if (!reparatieInvoiceId) {
           return NextResponse.json(
             { error: "Geen Moneybird-factuur-id — kan factuur niet versturen." },

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getInventoryOwnerEmail } from "@/lib/account";
+import { getInventoryScanOwnerEmail } from "@/lib/account";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { searchProductsForInventory } from "@/lib/inventory";
 import { ShopifyAdminError } from "@/lib/shopify-admin";
@@ -8,7 +8,8 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
   try {
-    const ownerEmail = getInventoryOwnerEmail(request);
+    // Winkel-QR zoeken: altijd productie-voorraad (info@).
+    const ownerEmail = getInventoryScanOwnerEmail();
     const q = request.nextUrl.searchParams.get("q") ?? "";
 
     if (q.trim().length < 2) {
