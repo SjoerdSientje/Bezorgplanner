@@ -586,13 +586,13 @@ export async function rebuildPartsInventoryFromShopifyCollections(
     shopify_variant_ids?: number[] | null;
   }) =>
     JSON.stringify(
-      [
-        ...new Set(
+      Array.from(
+        new Set(
           [Number(row.shopify_variant_id), ...(row.shopify_variant_ids ?? [])]
             .map(Number)
             .filter((n) => Number.isFinite(n) && n > 0)
-        ),
-      ].sort((a, b) => a - b)
+        )
+      ).sort((a, b) => a - b)
     );
   const partsVariantKeyByShopify = new Map<number, string>();
   for (const row of variantRowsRaw ?? []) {
