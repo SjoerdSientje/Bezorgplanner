@@ -573,16 +573,23 @@ export async function rebuildPartsInventoryFromShopifyCollections(
     if (Number.isFinite(pid) && pid > 0) partsByShopify.add(pid);
     partsByTitle.add(normalizePartsTitle(row.title));
   }
+  // Legacy wezen naast parts:-regels: niet alleen product:…, ook oude
+  // fiets-keys (…|kleur:… / …|motorkabel:…) met hetzelfde Shopify-product.
   const legacyOrphanIds = afterRows
     .filter((row) => {
       const gk = String(row.group_key ?? "");
       if (gk.startsWith("parts:")) return false;
-      if (!gk.startsWith("product:")) return false;
       const cat = String(row.category ?? "");
-      if (cat !== "onderdeel" && cat !== "accessoire") return false;
+      if (cat !== "onderdeel" && cat !== "accessoire" && cat !== "overig") {
+        return false;
+      }
       const pid = Number(row.shopify_product_id);
       if (Number.isFinite(pid) && pid > 0 && partsByShopify.has(pid)) return true;
-      return partsByTitle.has(normalizePartsTitle(row.title));
+      // product:-rijen ook op genormaliseerde titel matchen.
+      if (gk.startsWith("product:") && partsByTitle.has(normalizePartsTitle(row.title))) {
+        return true;
+      }
+      return false;
     })
     .map((row) => row.id);
 
