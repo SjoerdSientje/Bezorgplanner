@@ -1,5 +1,7 @@
 /**
- * Voeg voorraadregels samen die hetzelfde Shopify-product (head shopify_product_id) delen.
+ * Voeg voorraadregels samen die hetzelfde Shopify-product én dezelfde
+ * variant-set hebben (echte duplicaten). Rood/zwart-kabel op één product
+ * zijn GEEN duplicaten — die hebben verschillende variant-ids.
  *
  * Stock: som van alle >0 (of 0 als alles 0). Survivor: bij voorkeur parts:-regel.
  *
@@ -134,17 +136,22 @@ async function main() {
   if (error) throw new Error(error.message);
   const rows = (rowsRaw ?? []) as Row[];
 
-  const byPid = new Map<number, Row[]>();
+  // Groepeer op product-id + exacte variant-set (niet alleen product-id).
+  const bySig = new Map<string, { pid: number; g: Row[] }>();
   for (const r of rows) {
     const pid = Number(r.shopify_product_id);
     if (!Number.isFinite(pid) || pid <= 0) continue;
-    if (!byPid.has(pid)) byPid.set(pid, []);
-    byPid.get(pid)!.push(r);
+    const variants = unionNums([
+      r.shopify_variant_id,
+      ...(r.shopify_variant_ids ?? []),
+    ]);
+    if (variants.length === 0) continue;
+    const sig = `${pid}::${JSON.stringify(variants)}`;
+    if (!bySig.has(sig)) bySig.set(sig, { pid, g: [] });
+    bySig.get(sig)!.g.push(r);
   }
 
-  const groups = [...byPid.entries()]
-    .filter(([, g]) => g.length > 1)
-    .map(([pid, g]) => ({ pid, g }));
+  const groups = [...bySig.values()].filter(({ g }) => g.length > 1);
 
   console.log(
     JSON.stringify(

@@ -573,8 +573,35 @@ export async function rebuildPartsInventoryFromShopifyCollections(
     if (Number.isFinite(pid) && pid > 0) partsByShopify.add(pid);
     partsByTitle.add(normalizePartsTitle(row.title));
   }
-  // Legacy wezen naast parts:-regels: niet alleen product:…, ook oude
-  // fiets-keys (…|kleur:… / …|motorkabel:…) met hetzelfde Shopify-product.
+  // Legacy wezen naast parts:-regels.
+  // Alleen product:… of …|kleur:… (en dan alleen als variant-set exact gelijk is
+  // aan de parts:-rij). Nooit …|motorkabel:… wissen — dat zijn echte variant-splits
+  // (rood/zwart) op hetzelfde Shopify-product.
+  const { data: variantRowsRaw } = await supabase
+    .from("inventory_products")
+    .select("id, group_key, shopify_product_id, shopify_variant_id, shopify_variant_ids")
+    .eq("owner_email", ownerEmail);
+  const variantKey = (row: {
+    shopify_variant_id?: number | null;
+    shopify_variant_ids?: number[] | null;
+  }) =>
+    JSON.stringify(
+      [
+        ...new Set(
+          [Number(row.shopify_variant_id), ...(row.shopify_variant_ids ?? [])]
+            .map(Number)
+            .filter((n) => Number.isFinite(n) && n > 0)
+        ),
+      ].sort((a, b) => a - b)
+    );
+  const partsVariantKeyByShopify = new Map<number, string>();
+  for (const row of variantRowsRaw ?? []) {
+    if (!String(row.group_key ?? "").startsWith("parts:")) continue;
+    const pid = Number(row.shopify_product_id);
+    if (!Number.isFinite(pid) || pid <= 0) continue;
+    partsVariantKeyByShopify.set(pid, variantKey(row));
+  }
+
   const legacyOrphanIds = afterRows
     .filter((row) => {
       const gk = String(row.group_key ?? "");
@@ -584,11 +611,22 @@ export async function rebuildPartsInventoryFromShopifyCollections(
         return false;
       }
       const pid = Number(row.shopify_product_id);
-      if (Number.isFinite(pid) && pid > 0 && partsByShopify.has(pid)) return true;
-      // product:-rijen ook op genormaliseerde titel matchen.
-      if (gk.startsWith("product:") && partsByTitle.has(normalizePartsTitle(row.title))) {
-        return true;
+      const full = (variantRowsRaw ?? []).find((r) => r.id === row.id);
+      const sameVariants =
+        Number.isFinite(pid) &&
+        pid > 0 &&
+        partsVariantKeyByShopify.has(pid) &&
+        full != null &&
+        partsVariantKeyByShopify.get(pid) === variantKey(full);
+
+      if (gk.startsWith("product:")) {
+        if (Number.isFinite(pid) && pid > 0 && partsByShopify.has(pid) && sameVariants) {
+          return true;
+        }
+        return partsByTitle.has(normalizePartsTitle(row.title));
       }
+      // Oude kleur-suffix wezen (zadel — Zwart): alleen wissen bij exact dezelfde variants.
+      if (gk.includes("|kleur:") && sameVariants) return true;
       return false;
     })
     .map((row) => row.id);
