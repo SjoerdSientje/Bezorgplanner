@@ -97,12 +97,29 @@ export async function PATCH(request: NextRequest) {
     }
 
     const updates: {
+      title?: string;
       levertijd?: string | null;
       restock_datum?: string | null;
       opmerking?: string | null;
       low_stock_threshold?: number | null;
     } = {};
 
+    if ("title" in body) {
+      const v = body.title == null ? "" : String(body.title).trim();
+      if (!v) {
+        return NextResponse.json(
+          { error: "Titel mag niet leeg zijn." },
+          { status: 400 }
+        );
+      }
+      if (v.length > 300) {
+        return NextResponse.json(
+          { error: "Titel mag maximaal 300 tekens zijn." },
+          { status: 400 }
+        );
+      }
+      updates.title = v;
+    }
     if ("levertijd" in body) {
       const v = body.levertijd == null ? "" : String(body.levertijd).trim();
       updates.levertijd = v || null;

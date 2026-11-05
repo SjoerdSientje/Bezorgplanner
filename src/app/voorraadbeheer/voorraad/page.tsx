@@ -163,6 +163,7 @@ export default function VoorraadbeheerPage() {
   const [mutationType, setMutationType] = useState<MutationType>("inkomend");
   const [quantity, setQuantity] = useState("0");
   const [note, setNote] = useState("");
+  const [editTitle, setEditTitle] = useState("");
   const [editLevertijd, setEditLevertijd] = useState("");
   const [editRestockDatum, setEditRestockDatum] = useState("");
   const [editOpmerking, setEditOpmerking] = useState("");
@@ -413,6 +414,7 @@ export default function VoorraadbeheerPage() {
 
   const openEditModal = (product: InventoryProductRow) => {
     setEditProduct(product);
+    setEditTitle(product.title ?? "");
     setEditLevertijd(product.levertijd ?? "");
     setEditRestockDatum(
       product.restock_datum ? String(product.restock_datum).slice(0, 10) : ""
@@ -563,8 +565,12 @@ export default function VoorraadbeheerPage() {
               return n;
             })();
 
+      const title = editTitle.trim();
+      if (!title) throw new Error("Titel mag niet leeg zijn.");
+
       const payload: Record<string, unknown> = {
         productId: product.id,
+        title,
         levertijd: editLevertijd,
         opmerking: editOpmerking,
         low_stock_threshold: thresholdPayload,
@@ -584,6 +590,7 @@ export default function VoorraadbeheerPage() {
       const updated = data.product as InventoryProductRow;
       setProducts((prev) => prev.map((p) => (p.id === updated.id ? { ...p, ...updated } : p)));
       if (editProduct?.id === updated.id) setEditProduct({ ...editProduct, ...updated });
+      setEditTitle(updated.title ?? "");
       setEditRestockDatum(
         updated.restock_datum ? String(updated.restock_datum).slice(0, 10) : ""
       );
@@ -632,8 +639,11 @@ export default function VoorraadbeheerPage() {
               }
               return n;
             })();
+      const title = editTitle.trim();
+      if (!title) throw new Error("Titel mag niet leeg zijn.");
       const metaPayload: Record<string, unknown> = {
         productId: product.id,
+        title,
         levertijd: editLevertijd,
         opmerking: editOpmerking,
         low_stock_threshold: thresholdPayload,
@@ -936,6 +946,19 @@ export default function VoorraadbeheerPage() {
     <div className="mt-3 space-y-3 rounded-xl border border-stone-100 bg-stone-50/80 p-3">
       <p className="text-xs font-medium uppercase tracking-wide text-stone-400">Productinfo</p>
       <div>
+        <label className="block text-xs font-medium text-stone-500">Titel</label>
+        <input
+          type="text"
+          value={editTitle}
+          onChange={(e) => setEditTitle(e.target.value)}
+          placeholder="Naam van de voorraadregel"
+          className="mt-1 w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm"
+        />
+        <p className="mt-1 text-xs text-stone-400">
+          Alleen de naam in voorraadbeheer — Shopify-producttitels blijven ongewijzigd.
+        </p>
+      </div>
+      <div>
         <label className="block text-xs font-medium text-stone-500">
           Levertijd{" "}
           <span className="font-normal normal-case text-stone-400">
@@ -1017,7 +1040,7 @@ export default function VoorraadbeheerPage() {
 
   const mutationForm = (product: InventoryProductRow, onSubmit: () => void) => (
     <>
-      <p className="mt-1 text-sm text-stone-600">{product.title}</p>
+      <p className="mt-1 text-sm text-stone-600">{editTitle.trim() || product.title}</p>
       <p className="mt-1 text-sm">
         Huidige voorraad:{" "}
         <span className={stockClass(product.stock_quantity, effectiveLowStockThreshold(product.low_stock_threshold))}>{product.stock_quantity}</span>
