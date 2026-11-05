@@ -44,12 +44,12 @@ type Row = {
 function unionNums(...lists: Array<Iterable<number | null | undefined>>): number[] {
   const s = new Set<number>();
   for (const list of lists) {
-    for (const v of list) {
+    for (const v of Array.from(list)) {
       const n = Number(v);
       if (Number.isFinite(n) && n > 0) s.add(n);
     }
   }
-  return [...s].sort((a, b) => a - b);
+  return Array.from(s).sort((a, b) => a - b);
 }
 
 function pickSurvivor(group: Row[]): Row {
@@ -151,7 +151,7 @@ async function main() {
     bySig.get(sig)!.g.push(r);
   }
 
-  const groups = [...bySig.values()].filter(({ g }) => g.length > 1);
+  const groups = Array.from(bySig.values()).filter(({ g }) => g.length > 1);
 
   console.log(
     JSON.stringify(
@@ -205,11 +205,11 @@ async function main() {
     const variants = unionNums(
       ...g.map((r) => [r.shopify_variant_id, ...(r.shopify_variant_ids ?? [])])
     );
-    const moneybird = [
-      ...new Set(
-        g.flatMap((r) => (r.moneybird_product_ids ?? []).map(String)).filter(Boolean)
-      ),
-    ];
+    const moneybird = Array.from(
+      new Set(
+        g.flatMap((r: Row) => (r.moneybird_product_ids ?? []).map(String)).filter(Boolean)
+      )
+    );
 
     // Meta: voorkeur survivor, anders eerste niet-lege uit de groep.
     const pickMeta = <T>(fn: (r: Row) => T | null | undefined): T | null => {
