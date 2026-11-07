@@ -3,6 +3,8 @@
  * @see https://shopify.dev/docs/apps/build/dev-dashboard/get-api-access-tokens
  */
 
+import { matchesSearchQuery } from "@/lib/search-match";
+
 const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION?.trim() || "2025-01";
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
@@ -435,19 +437,12 @@ export async function searchShopifyProducts(
 
   if (products.length > 0) return products;
 
-  // Fallback: bredere zoekactie — alle woorden moeten ergens in titel/tags/vendor staan.
+  // Fallback: soepeler matchen (spaties/streepjes/woordvolgorde/1 typo; modelcodes begrensd).
   const all = await fetchAllShopifyProducts({ maxPages: 5, status: options?.status ?? "active" });
-  const tokens = q
-    .toLowerCase()
-    .split(/[\s/|,+\-–—]+/)
-    .map((t) => t.trim())
-    .filter((t) => t.length >= 2);
   return all
-    .filter((p) => {
-      const hay = `${p.title} ${p.product_type} ${p.tags} ${p.vendor}`.toLowerCase();
-      if (tokens.length > 0) return tokens.every((t) => hay.includes(t));
-      return hay.includes(q.toLowerCase());
-    })
+    .filter((p) =>
+      matchesSearchQuery(`${p.title} ${p.product_type} ${p.tags} ${p.vendor}`, q)
+    )
     .slice(0, limit);
 }
 

@@ -13,6 +13,7 @@ import {
   type InventorySource,
 } from "@/lib/inventory";
 import { getAmsterdamCalendarDate } from "@/lib/planning-date";
+import { matchesSearchQuery } from "@/lib/search-match";
 
 type Stats = {
   totalProducts: number;
@@ -125,10 +126,10 @@ function linkRoleLabel(role: LinkedShopifyProduct["role"]): string {
 }
 
 function matchesInventorySearch(product: InventoryProductRow, query: string): boolean {
-  const q = query.trim().toLowerCase();
+  const q = query.trim();
   if (!q) return true;
-  const hay = `${product.title} ${product.model_name ?? ""} ${product.color_name ?? ""} ${product.category} ${product.levertijd ?? ""} ${product.restock_datum ?? ""} ${product.opmerking ?? ""}`.toLowerCase();
-  return hay.includes(q);
+  const hay = `${product.title} ${product.model_name ?? ""} ${product.color_name ?? ""} ${product.category} ${product.levertijd ?? ""} ${product.restock_datum ?? ""} ${product.opmerking ?? ""}`;
+  return matchesSearchQuery(hay, q);
 }
 
 export default function VoorraadbeheerPage() {

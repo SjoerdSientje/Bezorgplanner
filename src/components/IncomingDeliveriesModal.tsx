@@ -5,6 +5,7 @@ import type {
   IncomingDeliveryItemRow,
   IncomingDeliveryRow,
 } from "@/app/api/inventory/incoming-deliveries/route";
+import { matchesSearchQuery } from "@/lib/search-match";
 
 type Props = {
   open: boolean;
@@ -157,16 +158,15 @@ export default function IncomingDeliveriesModal({ open, onClose, onStockChanged 
   );
 
   const searchHits = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = search.trim();
     if (q.length < 2) return [];
     return inventory
       .filter((p) => !selectedIds.has(p.id))
       .filter((p) => {
         const hay = [p.title, p.variant_title, p.model_name, p.color_name, p.category]
           .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-        return hay.includes(q);
+          .join(" ");
+        return matchesSearchQuery(hay, q);
       })
       .slice(0, 12);
   }, [inventory, search, selectedIds]);
@@ -184,9 +184,8 @@ export default function IncomingDeliveriesModal({ open, onClose, onStockChanged 
   };
 
   const matchesListFilter = useCallback((row: IncomingDeliveryRow, qRaw: string) => {
-    const q = qRaw.trim().toLowerCase();
+    const q = qRaw.trim();
     if (!q) return true;
-    const tokens = q.split(/\s+/).filter(Boolean);
     const hay = [
       row.leverancier,
       row.expected_delivery,
@@ -199,9 +198,8 @@ export default function IncomingDeliveriesModal({ open, onClose, onStockChanged 
       ]),
     ]
       .filter(Boolean)
-      .join(" ")
-      .toLowerCase();
-    return tokens.every((t) => hay.includes(t));
+      .join(" ");
+    return matchesSearchQuery(hay, q);
   }, []);
 
   const filteredPending = useMemo(

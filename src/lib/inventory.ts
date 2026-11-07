@@ -38,6 +38,7 @@ import {
   isShopifyProductLinkedToInventory,
 } from "@/lib/inventory-pending";
 import { isOrderMarkedCompleted } from "@/lib/order-completion";
+import { scoreSearchMatch } from "@/lib/search-match";
 
 export type InventoryCategory = "fiets" | "onderdeel" | "accessoire" | "overig";
 export type InventorySource =
@@ -2648,27 +2649,37 @@ export async function searchProductsForInventory(
   const q = query.trim();
   if (q.length < 2) return [];
 
-  // Alleen lokale voorraadregels — geen live Shopify, geen auto-aanmaak.
+  // Alleen lokale voorraadregels — filter in JS (spaties/streepjes/typos/woordvolgorde).
   const { data: localRows } = await supabase
     .from("inventory_products")
-    .select("id, title, stock_quantity, group_key, shopify_product_id, shopify_variant_id, image_url")
+    .select(
+      "id, title, stock_quantity, group_key, shopify_product_id, shopify_variant_id, image_url, model_name, color_name, category"
+    )
     .eq("owner_email", ownerEmail)
-    .ilike("title", `%${q}%`)
     .order("title", { ascending: true })
-    .limit(50);
+    .limit(800);
+
+  const matched = (localRows ?? [])
+    .map((row) => {
+      const hay = `${row.title} ${row.model_name ?? ""} ${row.color_name ?? ""} ${row.category ?? ""}`;
+      const score = scoreSearchMatch(hay, q);
+      return { row, score };
+    })
+    .filter((x) => x.score >= 0)
+    .sort((a, b) => {
+      const aParts = String(a.row.group_key ?? "").startsWith("parts:") ? 0 : 1;
+      const bParts = String(b.row.group_key ?? "").startsWith("parts:") ? 0 : 1;
+      if (aParts !== bParts) return aParts - bParts;
+      if (b.score !== a.score) return b.score - a.score;
+      return String(a.row.title).localeCompare(String(b.row.title), "nl");
+    });
 
   const results: ShopifySearchResult[] = [];
   const seenGroupKeys = new Set<string>();
   const seenShopifyProductIds = new Set<number>();
   const seenInventoryIds = new Set<string>();
 
-  const sortedLocal = [...(localRows ?? [])].sort((a, b) => {
-    const aParts = String(a.group_key ?? "").startsWith("parts:") ? 0 : 1;
-    const bParts = String(b.group_key ?? "").startsWith("parts:") ? 0 : 1;
-    return aParts - bParts;
-  });
-
-  for (const row of sortedLocal) {
+  for (const { row } of matched) {
     const id = row.id as string;
     if (seenInventoryIds.has(id)) continue;
     const groupKey = String(row.group_key ?? "");

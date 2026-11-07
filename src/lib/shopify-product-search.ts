@@ -5,6 +5,11 @@ import {
   type ShopifyAdminProduct,
   type ShopifyAdminProductVariant,
 } from "@/lib/shopify-admin";
+import {
+  matchesSearchQuery,
+  scoreSearchMatch,
+  tokenizeSearchQuery,
+} from "@/lib/search-match";
 
 export type ShopifyProductSearchResult = {
   shopify_product_id: number;
@@ -32,21 +37,7 @@ function productImageUrl(product: ShopifyAdminProduct): string | null {
   return product.image?.src?.trim() || null;
 }
 
-/** Splits zoekterm in losse woorden (spaties, slashes, komma's, enz.). */
-export function tokenizeSearchQuery(query: string): string[] {
-  return query
-    .toLowerCase()
-    .split(/[\s/|,+\-–—]+/)
-    .map((t) => t.trim())
-    .filter((t) => t.length >= 2);
-}
-
-/** Alle tokens moeten ergens in de haystack voorkomen (volgorde maakt niet uit). */
-export function matchesAllSearchTokens(haystack: string, tokens: string[]): boolean {
-  if (tokens.length === 0) return false;
-  const hay = haystack.toLowerCase();
-  return tokens.every((t) => hay.includes(t));
-}
+export { tokenizeSearchQuery, matchesSearchQuery as matchesAllSearchTokens };
 
 function productHaystack(product: ShopifyAdminProduct): string {
   return `${product.title} ${product.product_type} ${product.tags} ${product.vendor}`;
@@ -63,20 +54,10 @@ function uniqueSearchTerms(query: string, tokens: string[]): string[] {
   };
   add(query);
   for (const token of tokens) add(token);
-  return terms.slice(0, 4);
-}
-
-function scoreLineItemTitle(title: string, tokens: string[]): number {
-  const hay = title.toLowerCase();
-  let score = 0;
-  for (const t of tokens) {
-    const idx = hay.indexOf(t);
-    if (idx < 0) return -1;
-    score += 120 - Math.min(idx, 119);
-  }
-  if (hay.startsWith(tokens[0] ?? "")) score += 40;
-  score -= title.length / 200;
-  return score;
+  // Ook compacte vorm voor Shopify title= API ("gt2000" vs "GT-2000")
+  const compact = query.replace(/[^a-zA-Z0-9]+/g, "");
+  if (compact.length >= 2) add(compact);
+  return terms.slice(0, 5);
 }
 
 async function collectProductsForTokens(
@@ -94,7 +75,7 @@ async function collectProductsForTokens(
   if (productMap.size < 8) {
     const all = await fetchAllShopifyProducts({ maxPages: 5, status: "active" });
     for (const p of all) {
-      if (matchesAllSearchTokens(productHaystack(p), tokens)) {
+      if (matchesSearchQuery(productHaystack(p), query)) {
         productMap.set(p.id, p);
       }
     }
@@ -106,7 +87,6 @@ async function collectProductsForTokens(
 /**
  * Live Shopify-producten voor orderformulieren (MP e.d.).
  * Geen voorraadgroepering — elke actieve variant is een aparte suggestie.
- * Zoekt op losse woorden: "V8 basic" matcht "OUXI V8 … Mat-zwart Basic".
  *
  * `kind`:
  * - fiets → alleen actieve producten in collectie "alle-fatbikes"
@@ -139,7 +119,7 @@ export async function searchShopifyProductsForOrderForm(
     const imageUrl = productImageUrl(product);
     for (const variant of product.variants ?? []) {
       const title = buildShopifyLineItemTitle(product, variant);
-      if (!matchesAllSearchTokens(title, tokens)) continue;
+      if (!matchesSearchQuery(title, q)) continue;
       results.push({
         shopify_product_id: product.id,
         shopify_variant_id: variant.id,
@@ -151,8 +131,8 @@ export async function searchShopifyProductsForOrderForm(
   }
 
   results.sort((a, b) => {
-    const sb = scoreLineItemTitle(b.title, tokens);
-    const sa = scoreLineItemTitle(a.title, tokens);
+    const sb = scoreSearchMatch(b.title, q);
+    const sa = scoreSearchMatch(a.title, q);
     if (sb !== sa) return sb - sa;
     return a.title.localeCompare(b.title, "nl");
   });
