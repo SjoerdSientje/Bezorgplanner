@@ -892,7 +892,8 @@ async function buildInvoiceDetailsInternal(
         ? { ...li, quantity: qty, current_quantity: qty }
         : li;
     const unitIncl = lineItemUnitPriceIncl(synthetic);
-    if (unitIncl < 0.01) return;
+    // €0-regels wél meenemen (naleveren/garantie) — negatief nooit.
+    if (!(unitIncl >= 0) || !Number.isFinite(unitIncl)) return;
     const amount = Math.max(1, qty);
     const productId = await moneybirdProductIdForShopifyProduct(li.product_id);
     const { taxRateId, vatMultiplier } = resolveInvoiceTaxForTitle(description);
@@ -1007,12 +1008,7 @@ async function buildInvoiceDetailsInternal(
     }
   }
 
-  const detailsTotalExcl = details.reduce(
-    (sum, d) => sum + (parseFloat(d.price) || 0) * (parseFloat(d.amount) || 0),
-    0
-  );
-  if (detailsTotalExcl < 0.01 && targetIncl < 0.01) return null;
-
+  // €0-orders (naleveren/garantie) mogen een conceptfactuur met €0-regels houden.
   return details;
 }
 
@@ -1290,18 +1286,6 @@ export async function updateDraftSalesInvoiceFromShopifyOrder(
       ? Boolean(opts.shopifyUnpaid)
       : shopifyOrderPaymentAmounts(order).alBetaald < 0.01;
 
-  if (
-    lockTotal == null &&
-    isZeroInvoiceTotal(shopifyOrderBillableTotalIncl(order))
-  ) {
-    console.info(
-      "[moneybird] order update totaal €0 — geen factuurwijziging",
-      shopifyOrderId,
-      order.name ?? ""
-    );
-    return null;
-  }
-
   const supabase =
     opts?.supabase ??
     (process.env.NEXT_PUBLIC_SUPABASE_URL ? createServerSupabaseClient() : null);
@@ -1338,12 +1322,19 @@ export async function updateDraftSalesInvoiceFromShopifyOrder(
     }
 
     let details = await buildInvoiceDetailsFromShopifyOrder(order);
-    if (!details) {
-      console.warn(
-        "[moneybird] order update — geen factuurregels",
-        shopifyOrderId
-      );
-      return null;
+    if (!details || details.length === 0) {
+      const orderName = String(order.name ?? shopifyOrderId).trim();
+      const ledgerAccountId = process.env.MONEYBIRD_LEDGER_ACCOUNT_ID!.trim();
+      const { taxRateId } = resolveInvoiceTaxForTitle(orderName || "Order");
+      details = [
+        {
+          description: `${orderName || "Order"} (€0)`,
+          price: "0.00",
+          amount: "1",
+          tax_rate_id: taxRateId,
+          ledger_account_id: ledgerAccountId,
+        },
+      ];
     }
     if (lockTotal != null && lockTotal >= 0.01) {
       details = scaleInvoiceDetailsToTargetIncl(details, lockTotal);
@@ -2412,8 +2403,8 @@ export async function deleteSalesInvoiceForShopifyOrderId(
  * Kenmerk: Klarna/PAY. → Shopify Payment ID; anders shopify:{id}.
  * Koppeling blijft via moneybird_shopify_invoice_locks.
  *
- * Altijd als concept. Auto-mail gebeurt apart bij fulfillment_status=fulfilled
- * én totaal < €490. Totaal €0: geen factuur.
+ * Altijd als concept (ook €0 / naleveren / garantie — voor overzicht).
+ * Auto-mail gebeurt apart bij fulfillment_status=fulfilled én 0 < totaal < €490.
  */
 export async function createSalesInvoiceFromShopifyOrder(
   supabase: SupabaseClient,
@@ -2426,17 +2417,6 @@ export async function createSalesInvoiceFromShopifyOrder(
 
   const shopifyOrderId = String(order.id ?? "").trim();
   if (!shopifyOrderId) return null;
-
-  const totalIncl = shopifyOrderBillableTotalIncl(order);
-  if (isZeroInvoiceTotal(totalIncl)) {
-    console.info(
-      "[moneybird] order totaal €0 — geen factuur",
-      shopifyOrderId,
-      order.name ?? "",
-      `(berekend: €${totalIncl.toFixed(2)})`
-    );
-    return null;
-  }
 
   const reference = await resolveShopifyMainInvoiceReference(shopifyOrderId);
   let lock = await acquireMoneybirdShopifyInvoiceLock(supabase, shopifyOrderId);
@@ -2527,10 +2507,25 @@ export async function createSalesInvoiceFromShopifyOrder(
     const contact = await findOrCreateContactForShopifyOrder(order);
     const orderName = String(order.name ?? shopifyOrderId).trim();
 
-    const details = await buildInvoiceDetailsFromShopifyOrder(order);
-    if (!details) {
-      console.warn("[moneybird] geen factuurregels voor order", shopifyOrderId);
-      return null;
+    let details = await buildInvoiceDetailsFromShopifyOrder(order);
+    // Lege order / geen geprijsde regels: toch €0-concept voor overzicht (naleveren/garantie).
+    if (!details || details.length === 0) {
+      const ledgerAccountId = process.env.MONEYBIRD_LEDGER_ACCOUNT_ID!.trim();
+      const { taxRateId } = resolveInvoiceTaxForTitle(orderName || "Order");
+      details = [
+        {
+          description: `${orderName || "Order"} (€0)`,
+          price: "0.00",
+          amount: "1",
+          tax_rate_id: taxRateId,
+          ledger_account_id: ledgerAccountId,
+        },
+      ];
+      console.info(
+        "[moneybird] order zonder factuurregels — €0-conceptregel",
+        shopifyOrderId,
+        orderName
+      );
     }
 
     const payload = {
@@ -2548,6 +2543,7 @@ export async function createSalesInvoiceFromShopifyOrder(
       body: JSON.stringify(payload),
     });
 
+    const totalIncl = shopifyOrderBillableTotalIncl(order);
     console.info(
       "[moneybird] draft factuur aangemaakt",
       created.id,

@@ -189,12 +189,17 @@ export default function VoorraadbeheerPage() {
     reservations: Array<{
       reservationId: string;
       quantity: number;
+      source: "shopify" | "marktplaats" | "reparatie";
+      externalOrderId: string;
       orderNummer: string | null;
       customerName: string | null;
       customerPhone: string | null;
       voorkeursdatum: string | null;
     }>;
   } | null>(null);
+  const [reservationCommitKey, setReservationCommitKey] = useState<string | null>(
+    null
+  );
 
   const load = useCallback(async (runSync = false) => {
     if (runSync) setSyncing(true);
@@ -276,12 +281,74 @@ export default function VoorraadbeheerPage() {
         sellableQuantity: Number(
           data.sellableQuantity ?? sellableOf(product)
         ),
-        reservations: Array.isArray(data.reservations) ? data.reservations : [],
+        reservations: Array.isArray(data.reservations)
+          ? data.reservations.map(
+              (r: {
+                reservationId?: string;
+                quantity?: number;
+                source?: string;
+                externalOrderId?: string;
+                orderNummer?: string | null;
+                customerName?: string | null;
+                customerPhone?: string | null;
+                voorkeursdatum?: string | null;
+              }) => ({
+                reservationId: String(r.reservationId ?? ""),
+                quantity: Number(r.quantity ?? 0),
+                source: (r.source === "marktplaats" || r.source === "reparatie"
+                  ? r.source
+                  : "shopify") as "shopify" | "marktplaats" | "reparatie",
+                externalOrderId: String(r.externalOrderId ?? ""),
+                orderNummer: r.orderNummer ?? null,
+                customerName: r.customerName ?? null,
+                customerPhone: r.customerPhone ?? null,
+                voorkeursdatum: r.voorkeursdatum ?? null,
+              })
+            )
+          : [],
       });
     } catch (e) {
       setStockDetailError(e instanceof Error ? e.message : "Laden mislukt");
     } finally {
       setStockDetailLoading(false);
+    }
+  };
+
+  const commitReservation = async (r: {
+    source: "shopify" | "marktplaats" | "reparatie";
+    externalOrderId: string;
+    orderNummer: string | null;
+  }) => {
+    if (!stockDetailId || !r.externalOrderId) return;
+    const key = `${r.source}:${r.externalOrderId}`;
+    setReservationCommitKey(key);
+    setStockDetailError(null);
+    try {
+      const res = await fetch("/api/inventory/reservations/commit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: r.source,
+          externalOrderId: r.externalOrderId,
+          orderReference: r.orderNummer || r.externalOrderId,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          typeof data?.error === "string" ? data.error : "Afronden mislukt"
+        );
+      }
+      const product = products.find((p) => p.id === stockDetailId);
+      if (product) await openStockDetail(product);
+      await load(false);
+      setMessage(
+        `Reservering ${r.orderNummer || r.externalOrderId} afgerond — voorraad afgeschreven.`
+      );
+    } catch (e) {
+      setStockDetailError(e instanceof Error ? e.message : "Afronden mislukt");
+    } finally {
+      setReservationCommitKey(null);
     }
   };
 
@@ -1636,7 +1703,10 @@ export default function VoorraadbeheerPage() {
                       Reserveringen ({stockDetail.reservations.length})
                     </h3>
                     <ul className="mt-2 space-y-2">
-                      {stockDetail.reservations.map((r) => (
+                      {stockDetail.reservations.map((r) => {
+                        const commitKey = `${r.source}:${r.externalOrderId}`;
+                        const committing = reservationCommitKey === commitKey;
+                        return (
                         <li
                           key={r.reservationId}
                           className="rounded-xl border border-stone-200 bg-white px-3 py-2.5 text-sm"
@@ -1654,8 +1724,19 @@ export default function VoorraadbeheerPage() {
                           <p className="mt-1 text-xs text-stone-400">
                             Voorkeursdatum: {r.voorkeursdatum || "—"}
                           </p>
+                          <div className="mt-2.5 flex justify-end">
+                            <button
+                              type="button"
+                              disabled={committing || Boolean(reservationCommitKey)}
+                              onClick={() => void commitReservation(r)}
+                              className="rounded-lg bg-koopje-orange px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                            >
+                              {committing ? "Afronden…" : "Afronden"}
+                            </button>
+                          </div>
                         </li>
-                      ))}
+                        );
+                      })}
                     </ul>
                   </div>
                 ) : (
