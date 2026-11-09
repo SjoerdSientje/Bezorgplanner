@@ -1436,12 +1436,19 @@ export async function registerMolliePaymentOnShopifyInvoice(
   }
 
   const invoiceTotal = parseMoneyAmount(full.price_total);
-  const price =
+  const unpaid = parseMoneyAmount(
+    (full as { total_unpaid?: string | number | null }).total_unpaid
+  );
+  let price =
     mollie.amount > 0.009
       ? mollie.amount
       : Number.isFinite(invoiceTotal) && invoiceTotal > 0
         ? invoiceTotal
         : 0;
+  // Nooit meer boeken dan openstaand (voorkomt 422 als er al iets op staat).
+  if (Number.isFinite(unpaid) && unpaid > 0.009) {
+    price = Math.min(price, unpaid);
+  }
   if (!(price > 0.009)) {
     return {
       registered: false,
@@ -1457,6 +1464,8 @@ export async function registerMolliePaymentOnShopifyInvoice(
     : paymentDateRaw.toISOString().slice(0, 10);
 
   try {
+    // Alleen transaction_identifier=tr_… — géén manual_payment_action.
+    // Moneybird Mollie-koppeling matcht uitbetalingen op die tr_.
     const created = await moneybirdFetch<MoneybirdPayment>(
       `/sales_invoices/${full.id}/payments.json`,
       {
@@ -1466,7 +1475,6 @@ export async function registerMolliePaymentOnShopifyInvoice(
             payment_date: paymentDate,
             price: price.toFixed(2),
             transaction_identifier: mollie.molliePaymentId,
-            manual_payment_action: "payment_without_proof",
           },
         }),
       }

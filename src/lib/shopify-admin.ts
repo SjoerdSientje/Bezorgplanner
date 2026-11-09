@@ -784,8 +784,12 @@ export async function fetchShopifyOrderKlarnaPayment(
 }
 
 /**
- * Zoek succesvolle Mollie-betaling op een Shopify-order (Admin API transactions).
- * Alleen Mollie-gateways; andere betaalmethoden → null.
+ * Zoek succesvolle Mollie-betaling op een Shopify-order.
+ *
+ * 1) Admin transactions: tr_… in receipt/authorization (oude/directe Mollie-flows)
+ * 2) Fallback: Mollie API (Shopify Mollie-app zet géén tr_ in transactions, alleen r…)
+ *
+ * Andere gateways → null.
  */
 export async function fetchShopifyOrderMolliePayment(
   shopifyOrderId: string
@@ -801,6 +805,12 @@ export async function fetchShopifyOrderMolliePayment(
 
     const txs = Array.isArray(data.transactions) ? data.transactions : [];
     const candidates: ShopifyMolliePayment[] = [];
+    let mollieGatewayTx: {
+      transactionId: string;
+      amount: number;
+      processedAt: string | null;
+      gateway: string;
+    } | null = null;
 
     for (const tx of txs) {
       const gateway = String(tx.gateway ?? "");
@@ -810,27 +820,89 @@ export async function fetchShopifyOrderMolliePayment(
       const kind = String(tx.kind ?? "").toLowerCase();
       if (kind && !["sale", "capture"].includes(kind)) continue;
 
-      const molliePaymentId = extractMollieTrFromTransaction(tx);
-      if (!molliePaymentId) continue;
-
       const amountRaw =
         typeof tx.amount === "number"
           ? tx.amount
           : parseFloat(String(tx.amount ?? "0").replace(",", "."));
       const amount = Number.isFinite(amountRaw) ? amountRaw : 0;
+      const processedAt = tx.processed_at != null ? String(tx.processed_at) : null;
+      const transactionId = String(tx.id ?? "");
+
+      if (!mollieGatewayTx || amount > mollieGatewayTx.amount) {
+        mollieGatewayTx = { transactionId, amount, processedAt, gateway };
+      }
+
+      const molliePaymentId = extractMollieTrFromTransaction(tx);
+      if (!molliePaymentId) continue;
+
       candidates.push({
-        transactionId: String(tx.id ?? ""),
+        transactionId,
         molliePaymentId,
         amount,
-        processedAt: tx.processed_at != null ? String(tx.processed_at) : null,
+        processedAt,
         gateway,
       });
     }
 
-    if (candidates.length === 0) return null;
-    // Meest recente / grootste succesvolle capture/sale.
-    candidates.sort((a, b) => b.amount - a.amount);
-    return candidates[0]!;
+    if (candidates.length > 0) {
+      candidates.sort((a, b) => b.amount - a.amount);
+      return candidates[0]!;
+    }
+
+    // Shopify Mollie-app: gateway = "Mollie - iDeal" e.d., payment_id = r… (geen tr_).
+    // Moneybird heeft tr_ nodig → Mollie API-lookup op ordernaam/metadata.
+    if (!mollieGatewayTx) return null;
+
+    const { findMolliePaymentForShopifyOrder, isMollieApiConfigured } = await import(
+      "@/lib/mollie"
+    );
+    if (!isMollieApiConfigured()) {
+      console.warn(
+        "[shopify-admin] Mollie-order zonder tr_ in Shopify — zet MOLLIE_API_KEY om Moneybird te koppelen",
+        id,
+        mollieGatewayTx.gateway
+      );
+      return null;
+    }
+
+    let orderName: string | null = null;
+    try {
+      const orderData = await shopifyAdminJson<{
+        order?: { name?: string | null };
+      }>(`/orders/${id}.json?fields=id,name`);
+      orderName = orderData.order?.name != null ? String(orderData.order.name) : null;
+    } catch {
+      // match kan nog via metadata.shopify_order_id
+    }
+
+    const matched = await findMolliePaymentForShopifyOrder({
+      shopifyOrderId: id,
+      orderName,
+      amount: mollieGatewayTx.amount,
+      aroundIso: mollieGatewayTx.processedAt,
+    });
+    if (!matched) {
+      console.warn(
+        "[shopify-admin] Mollie API: geen tr_ gevonden voor Shopify-order",
+        id,
+        orderName
+      );
+      return null;
+    }
+
+    console.info(
+      "[shopify-admin] Mollie tr_ via API",
+      id,
+      orderName,
+      matched.molliePaymentId
+    );
+    return {
+      transactionId: mollieGatewayTx.transactionId,
+      molliePaymentId: matched.molliePaymentId,
+      amount: matched.amount > 0.009 ? matched.amount : mollieGatewayTx.amount,
+      processedAt: matched.paidAt || matched.createdAt || mollieGatewayTx.processedAt,
+      gateway: mollieGatewayTx.gateway,
+    };
   } catch (err) {
     console.error(
       "[shopify-admin] Mollie-transactie ophalen mislukt",
