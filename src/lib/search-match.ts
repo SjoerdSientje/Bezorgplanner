@@ -88,17 +88,33 @@ function adjacentJoins(tokens: string[]): string[] {
   return out;
 }
 
+function isLettersOnly(token: string): boolean {
+  return /^[a-z]+$/.test(token);
+}
+
 function tokenMatches(queryToken: string, hayToken: string): boolean {
   if (!queryToken || !hayToken) return false;
   if (hayToken === queryToken) return true;
 
   if (isModelCodeToken(queryToken) || isModelCodeToken(hayToken)) {
-    // Modelcodes: exact of 1 typfout — géén prefix (voorkomt gt20 ⊂ gt2000).
+    // Modelcodes: exact of 1 typfout — géén prefix/substring (voorkomt gt20 ⊂ gt2000).
     return fuzzyOk(queryToken, hayToken);
   }
 
-  // Alleen-letters / alleen-cijfers: prefix mag (typ-as-you-go).
+  // Prefix: typ-as-you-go ("achte" → achtervering).
   if (hayToken.startsWith(queryToken)) return true;
+
+  // Infix in letterwoorden vanaf 4 tekens ("vering" → achtervering).
+  // Geen korte substrings: die geven te veel ruis.
+  if (
+    isLettersOnly(queryToken) &&
+    isLettersOnly(hayToken) &&
+    queryToken.length >= 4 &&
+    hayToken.includes(queryToken)
+  ) {
+    return true;
+  }
+
   return fuzzyOk(queryToken, hayToken);
 }
 
@@ -177,6 +193,12 @@ export function scoreSearchMatch(haystack: string, query: string): number {
     if (exactIdx === 0) score += 90;
     else if (exactIdx > 0) score += 70;
     else if (hayTokens.some((h) => h.startsWith(qt) && !isModelCodeToken(qt))) score += 45;
+    else if (
+      isLettersOnly(qt) &&
+      qt.length >= 4 &&
+      hayTokens.some((h) => isLettersOnly(h) && h.includes(qt))
+    )
+      score += 35;
     else if (hayJoins.includes(qt)) score += 80;
     else score += 25; // fuzzy / join-fuzzy
   }
