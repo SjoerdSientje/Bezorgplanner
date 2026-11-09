@@ -1,7 +1,7 @@
 /**
- * Mollie Payments API — nodig omdat de Shopify Mollie-app géén tr_… in
- * order-transactions zet (alleen een Shopify payment-id r…).
- * Moneybird↔Mollie-aflettering vereist payment[transaction_identifier]=tr_…
+ * Mollie Payments API — primaire bron voor tr_… bij Moneybird-facturen.
+ * (Shopify Mollie-app zet geen tr_ in order-transactions, alleen een r…-id.)
+ * Moneybird↔Mollie-aflettering: payment[transaction_identifier]=tr_…
  */
 
 export type MolliePaymentMatch = {

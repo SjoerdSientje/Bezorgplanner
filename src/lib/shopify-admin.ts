@@ -592,8 +592,6 @@ export type ShopifyMolliePayment = {
   gateway: string;
 };
 
-const MOLLIE_TR_RE = /\b(tr_[A-Za-z0-9]+)\b/;
-
 function collectStringsDeep(value: unknown, out: string[], depth = 0): void {
   if (depth > 6 || value == null) return;
   if (typeof value === "string" || typeof value === "number") {
@@ -609,30 +607,6 @@ function collectStringsDeep(value: unknown, out: string[], depth = 0): void {
       collectStringsDeep(v, out, depth + 1);
     }
   }
-}
-
-function extractMollieTrFromTransaction(tx: Record<string, unknown>): string | null {
-  const direct = [
-    tx.authorization,
-    tx.payment_id,
-    (tx.receipt as Record<string, unknown> | null | undefined)?.payment_id,
-    (tx.receipt as Record<string, unknown> | null | undefined)?.id,
-    (tx.payment_details as Record<string, unknown> | null | undefined)?.payment_id,
-  ];
-  for (const raw of direct) {
-    const s = String(raw ?? "").trim();
-    const m = s.match(MOLLIE_TR_RE);
-    if (m) return m[1]!;
-  }
-  const blobs: string[] = [];
-  collectStringsDeep(tx.receipt, blobs);
-  collectStringsDeep(tx.payment_details, blobs);
-  collectStringsDeep(tx.receipt_json, blobs);
-  for (const s of blobs) {
-    const m = s.match(MOLLIE_TR_RE);
-    if (m) return m[1]!;
-  }
-  return null;
 }
 
 function isMollieGateway(gateway: string): boolean {
@@ -784,15 +758,14 @@ export async function fetchShopifyOrderKlarnaPayment(
 }
 
 /**
- * Zoek succesvolle Mollie-betaling op een Shopify-order.
+ * Mollie-betaling (tr_…) voor een Shopify-order.
  *
- * 1) Admin transactions: tr_… in receipt/authorization (oude/directe Mollie-flows)
- * 2) Fallback: Mollie API (Shopify Mollie-app zet géén tr_ in transactions, alleen r…)
- *
- * Andere gateways → null.
+ * Shopify wordt alleen gebruikt om te zien of de gateway Mollie is (+ bedrag/datum/ordernaam).
+ * De tr_ komt altijd uit de Mollie API (Shopify Mollie-app zet geen tr_ in transactions).
  */
 export async function fetchShopifyOrderMolliePayment(
-  shopifyOrderId: string
+  shopifyOrderId: string,
+  opts?: { orderName?: string | null }
 ): Promise<ShopifyMolliePayment | null> {
   const id = String(shopifyOrderId ?? "").trim();
   if (!/^\d+$/.test(id)) return null;
@@ -804,7 +777,6 @@ export async function fetchShopifyOrderMolliePayment(
     }>(`/orders/${id}/transactions.json`);
 
     const txs = Array.isArray(data.transactions) ? data.transactions : [];
-    const candidates: ShopifyMolliePayment[] = [];
     let mollieGatewayTx: {
       transactionId: string;
       amount: number;
@@ -831,26 +803,9 @@ export async function fetchShopifyOrderMolliePayment(
       if (!mollieGatewayTx || amount > mollieGatewayTx.amount) {
         mollieGatewayTx = { transactionId, amount, processedAt, gateway };
       }
-
-      const molliePaymentId = extractMollieTrFromTransaction(tx);
-      if (!molliePaymentId) continue;
-
-      candidates.push({
-        transactionId,
-        molliePaymentId,
-        amount,
-        processedAt,
-        gateway,
-      });
     }
 
-    if (candidates.length > 0) {
-      candidates.sort((a, b) => b.amount - a.amount);
-      return candidates[0]!;
-    }
-
-    // Shopify Mollie-app: gateway = "Mollie - iDeal" e.d., payment_id = r… (geen tr_).
-    // Moneybird heeft tr_ nodig → Mollie API-lookup op ordernaam/metadata.
+    // Geen Mollie-gateway → geen Mollie-koppeling nodig (Klarna/PAY./PayPal/etc.).
     if (!mollieGatewayTx) return null;
 
     const { findMolliePaymentForShopifyOrder, isMollieApiConfigured } = await import(
@@ -858,21 +813,25 @@ export async function fetchShopifyOrderMolliePayment(
     );
     if (!isMollieApiConfigured()) {
       console.warn(
-        "[shopify-admin] Mollie-order zonder tr_ in Shopify — zet MOLLIE_API_KEY om Moneybird te koppelen",
+        "[shopify-admin] Mollie-order — MOLLIE_API_KEY ontbreekt, kan tr_ niet ophalen",
         id,
         mollieGatewayTx.gateway
       );
       return null;
     }
 
-    let orderName: string | null = null;
-    try {
-      const orderData = await shopifyAdminJson<{
-        order?: { name?: string | null };
-      }>(`/orders/${id}.json?fields=id,name`);
-      orderName = orderData.order?.name != null ? String(orderData.order.name) : null;
-    } catch {
-      // match kan nog via metadata.shopify_order_id
+    let orderName =
+      opts?.orderName != null ? String(opts.orderName).trim() || null : null;
+    if (!orderName) {
+      try {
+        const orderData = await shopifyAdminJson<{
+          order?: { name?: string | null };
+        }>(`/orders/${id}.json?fields=id,name`);
+        orderName =
+          orderData.order?.name != null ? String(orderData.order.name) : null;
+      } catch {
+        // match kan nog via metadata.shopify_order_id
+      }
     }
 
     const matched = await findMolliePaymentForShopifyOrder({
@@ -883,7 +842,7 @@ export async function fetchShopifyOrderMolliePayment(
     });
     if (!matched) {
       console.warn(
-        "[shopify-admin] Mollie API: geen tr_ gevonden voor Shopify-order",
+        "[shopify-admin] Mollie API: geen tr_ voor Shopify-order",
         id,
         orderName
       );
@@ -891,7 +850,7 @@ export async function fetchShopifyOrderMolliePayment(
     }
 
     console.info(
-      "[shopify-admin] Mollie tr_ via API",
+      "[shopify-admin] Mollie tr_ opgehaald",
       id,
       orderName,
       matched.molliePaymentId
@@ -900,12 +859,13 @@ export async function fetchShopifyOrderMolliePayment(
       transactionId: mollieGatewayTx.transactionId,
       molliePaymentId: matched.molliePaymentId,
       amount: matched.amount > 0.009 ? matched.amount : mollieGatewayTx.amount,
-      processedAt: matched.paidAt || matched.createdAt || mollieGatewayTx.processedAt,
+      processedAt:
+        matched.paidAt || matched.createdAt || mollieGatewayTx.processedAt,
       gateway: mollieGatewayTx.gateway,
     };
   } catch (err) {
     console.error(
-      "[shopify-admin] Mollie-transactie ophalen mislukt",
+      "[shopify-admin] Mollie-betaling ophalen mislukt",
       id,
       err instanceof Error ? err.message : err
     );

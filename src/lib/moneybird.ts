@@ -1383,11 +1383,12 @@ export async function updateDraftSalesInvoiceFromShopifyOrder(
 /**
  * Registreer Mollie-betaling op Moneybird-factuur met transaction_identifier (tr_…).
  * Nodig zodat de officiële Moneybird↔Mollie-koppeling uitbetalingen kan afletteren.
- * Alleen als Shopify-order via Mollie is betaald; idempotent op dezelfde tr_.
+ * tr_ komt via Mollie API (directe route bij Mollie-gateway); idempotent op dezelfde tr_.
  */
 export async function registerMolliePaymentOnShopifyInvoice(
   shopifyOrderId: string,
-  invoiceId?: string | null
+  invoiceId?: string | null,
+  opts?: { orderName?: string | null }
 ): Promise<{
   registered: boolean;
   skipped?: string;
@@ -1401,7 +1402,9 @@ export async function registerMolliePaymentOnShopifyInvoice(
   const orderId = String(shopifyOrderId ?? "").trim();
   if (!orderId) return { registered: false, skipped: "missing_shopify_order_id" };
 
-  const mollie = await fetchShopifyOrderMolliePayment(orderId);
+  const mollie = await fetchShopifyOrderMolliePayment(orderId, {
+    orderName: opts?.orderName,
+  });
   if (!mollie?.molliePaymentId) {
     return { registered: false, skipped: "no_mollie_payment" };
   }
@@ -1582,11 +1585,13 @@ export async function syncSalesInvoiceFromShopifyOrder(
     );
   }
 
-  // Mollie tr_ altijd op de HOOFDfactuur, nooit op correctie/add/credit.
+  // Mollie tr_ op hoofdfactuur (direct via Mollie API bij Mollie-betaling).
   try {
     const shopifyOrderId = String(order.id ?? "").trim();
     if (shopifyOrderId) {
-      await registerMolliePaymentOnShopifyInvoice(shopifyOrderId);
+      await registerMolliePaymentOnShopifyInvoice(shopifyOrderId, invoice?.id, {
+        orderName: order.name ?? null,
+      });
     }
   } catch (err) {
     console.error(
@@ -2561,7 +2566,19 @@ export async function createSalesInvoiceFromShopifyOrder(
       Number.isFinite(totalIncl) ? `(totaal €${totalIncl.toFixed(2)})` : ""
     );
 
-    // Mollie tr_ / Klarna kenmerk gebeurt in syncSalesInvoiceFromShopifyOrder.
+    // Direct na concept: Mollie tr_ als betaling zetten (Moneybird↔Mollie-aflettering).
+    try {
+      await registerMolliePaymentOnShopifyInvoice(shopifyOrderId, created.id, {
+        orderName,
+      });
+    } catch (mollieErr) {
+      console.error(
+        "[moneybird] Mollie tr_ bij concept mislukt (later opnieuw bij sync/versturen):",
+        shopifyOrderId,
+        mollieErr instanceof Error ? mollieErr.message : mollieErr
+      );
+    }
+
     return created;
   } finally {
     if (created?.id) {
