@@ -256,6 +256,45 @@ export async function PATCH(
     }
 
     const supabase = createServerSupabaseClient();
+
+    // MP: als alleen het ordertotaal wijzigt (bijv. in ritjes-sheet), houd te_betalen
+    // in sync met totaal − al_betaald. Zonder dit blijft "Te betalen" op de oude
+    // fietsprijs hangen na productwijzigingen.
+    const totalChanging =
+      "bestelling_totaal_prijs" in updates && !("te_betalen" in updates);
+    const alBetaaldChanging =
+      "al_betaald" in updates && !("te_betalen" in updates);
+    if (totalChanging || alBetaaldChanging) {
+      const { data: current } = await supabase
+        .from("orders")
+        .select("source, bestelling_totaal_prijs, al_betaald, te_betalen")
+        .eq("owner_email", ownerEmail)
+        .eq("id", id)
+        .maybeSingle();
+      const isMp = String(current?.source ?? "").toLowerCase() === "mp";
+      if (isMp) {
+        const totaalRaw =
+          "bestelling_totaal_prijs" in updates
+            ? Number(updates.bestelling_totaal_prijs)
+            : Number(current?.bestelling_totaal_prijs);
+        const alRaw =
+          "al_betaald" in updates
+            ? Number(updates.al_betaald)
+            : Number(current?.al_betaald);
+        const totaal =
+          Number.isFinite(totaalRaw) && totaalRaw > 0
+            ? Math.round(totaalRaw * 100) / 100
+            : 0;
+        const alBetaald =
+          Number.isFinite(alRaw) && alRaw > 0 ? Math.round(alRaw * 100) / 100 : 0;
+        const teBetalen = Math.max(0, Math.round((totaal - alBetaald) * 100) / 100);
+        updates.te_betalen = teBetalen;
+        if (!("betaald" in updates)) {
+          updates.betaald = teBetalen < 0.01;
+        }
+      }
+    }
+
     const { error } = await supabase
       .from("orders")
       .update(updates)

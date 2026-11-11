@@ -138,7 +138,9 @@ export async function PATCH(request: NextRequest) {
 
     const { data: existing, error: fetchErr } = await supabase
       .from("orders")
-      .select("id, order_nummer, source, status, type, naam, telefoon_nummer, telefoon_e164")
+      .select(
+        "id, order_nummer, source, status, type, naam, telefoon_nummer, telefoon_e164, al_betaald, te_betalen, betaald"
+      )
       .eq("id", id)
       .eq("owner_email", ownerEmail)
       .maybeSingle();
@@ -172,7 +174,8 @@ export async function PATCH(request: NextRequest) {
     const telefoonRaw = (body.telefoonnummer ?? body.telefoon_nummer ?? "").trim();
     const { e164, belLink } = normalizeTelefoon(telefoonRaw);
 
-    const totaalPrijs = productenLijst.reduce((sum, p) => sum + parsePrijs(p.prijs), 0);
+    const totaalPrijs =
+      Math.round(productenLijst.reduce((sum, p) => sum + parsePrijs(p.prijs), 0) * 100) / 100;
     const producten = productenTekstFromMpLijst(productenLijst);
     const aantalFietsen = productenLijst.filter((p) => p.type === "fiets").length;
     const model = modelFromMpLijst(productenLijst);
@@ -184,6 +187,15 @@ export async function PATCH(request: NextRequest) {
       (body.datum_voorkeur ?? "").trim().toLowerCase() === "x"
         ? "vandaag"
         : (body.datum_voorkeur ?? "").trim() || null;
+
+    // Te betalen synct mee met nieuw totaal (anders blijft oude fietsprijs staan
+    // na toevoegen van extras, zoals Van Hezik: 1049 i.p.v. 1078,95).
+    const alBetaaldRaw = Number(existing.al_betaald);
+    const alBetaald =
+      Number.isFinite(alBetaaldRaw) && alBetaaldRaw > 0
+        ? Math.round(alBetaaldRaw * 100) / 100
+        : 0;
+    const teBetalen = Math.max(0, Math.round((totaalPrijs - alBetaald) * 100) / 100);
 
     const update = {
       naam,
@@ -198,6 +210,9 @@ export async function PATCH(request: NextRequest) {
       aantal_fietsen: aantalFietsen || null,
       model: model ?? null,
       line_items_json: lineItemsJson,
+      al_betaald: alBetaald,
+      te_betalen: teBetalen,
+      betaald: teBetalen < 0.01,
       bezorgtijd_voorkeur:
         (body.bezorgtijd_voorkeur ?? "").trim().toLowerCase() === "x"
           ? "geen"
@@ -341,10 +356,16 @@ export async function POST(request: NextRequest) {
       : [];
 
     const totaalPrijsUitProducten = productenLijst.length
-      ? productenLijst.reduce((sum, p) => sum + parsePrijs(p.prijs), 0)
+      ? Math.round(
+          productenLijst.reduce((sum, p) => sum + parsePrijs(p.prijs), 0) * 100
+        ) / 100
       : null;
-    const totaalPrijs = totaalPrijsUitProducten
-      ?? (body.totaal_prijs ? parseFloat(String(body.totaal_prijs)) : null);
+    const totaalPrijsRaw = totaalPrijsUitProducten
+      ?? (body.totaal_prijs ? parseFloat(String(body.totaal_prijs).replace(",", ".")) : null);
+    const totaalPrijs =
+      totaalPrijsRaw != null && Number.isFinite(totaalPrijsRaw)
+        ? Math.round(totaalPrijsRaw * 100) / 100
+        : null;
 
     const productenTekst = productenLijst.length
       ? productenTekstFromMpLijst(productenLijst)

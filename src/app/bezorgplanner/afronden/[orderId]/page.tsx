@@ -49,6 +49,8 @@ type OrderDetail = {
   reparatie_regels_json?: unknown;
   voorrij_bedrag?: number | null;
   bestelling_totaal_prijs?: number | null;
+  al_betaald?: number | null;
+  te_betalen?: number | null;
   naam?: string | null;
   email?: string | null;
   telefoon_nummer?: string | null;
@@ -292,6 +294,20 @@ export default function AfrondenVragenlijstPage({
       order.reparatie_betaalwijze === "contant" ? "contant" : "factuur"
     );
   }, [order?.id, order?.type, order?.reparatie_betaalwijze]);
+
+  // Prefill "Bedrag" met nog te betalen (voorkomt handmatig alleen fietsprijs invullen).
+  useEffect(() => {
+    if (!order) return;
+    const te =
+      order.te_betalen != null && Number.isFinite(Number(order.te_betalen))
+        ? Number(order.te_betalen)
+        : order.bestelling_totaal_prijs != null &&
+            Number.isFinite(Number(order.bestelling_totaal_prijs))
+          ? Number(order.bestelling_totaal_prijs)
+          : null;
+    if (te == null || te < 0.01) return;
+    setBetaalBedrag((prev) => (prev.trim() ? prev : String(Math.round(te * 100) / 100)));
+  }, [order?.id, order?.te_betalen, order?.bestelling_totaal_prijs]);
 
   // Prefill producten/arbeid voor reparatie aan huis.
   useEffect(() => {
@@ -859,6 +875,15 @@ export default function AfrondenVragenlijstPage({
                       className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm text-koopje-black outline-none focus:border-koopje-orange focus:ring-2 focus:ring-koopje-orange/20"
                       placeholder="Bijv. 850 of 849,95"
                     />
+                    {order.te_betalen != null && Number(order.te_betalen) >= 0.01 && (
+                      <p className="mt-1 text-xs text-stone-500">
+                        Nog te betalen volgens order: €
+                        {Number(order.te_betalen).toFixed(2)}
+                        {order.bestelling_totaal_prijs != null
+                          ? ` (totaal €${Number(order.bestelling_totaal_prijs).toFixed(2)})`
+                          : ""}
+                      </p>
+                    )}
                   </div>
                 )}
               </div>
