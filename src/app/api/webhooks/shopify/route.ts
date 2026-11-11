@@ -124,7 +124,18 @@ async function handleProductWebhook(
     handle: String(payload.handle ?? ""),
   };
 
-  const result = await syncInventoryProductFromShopify(supabase, ownerEmail, product);
+  const productEvent =
+    topic === "products/create"
+      ? ("create" as const)
+      : topic === "products/update"
+        ? ("update" as const)
+        : ("sync" as const);
+  const result = await syncInventoryProductFromShopify(
+    supabase,
+    ownerEmail,
+    product,
+    { event: productEvent }
+  );
 
   let moneybird: Record<string, unknown> = { skipped: true };
   if (isMoneybirdConfigured()) {

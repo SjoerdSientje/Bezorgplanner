@@ -197,7 +197,7 @@ export default function VoorraadbeheerPage() {
       voorkeursdatum: string | null;
     }>;
   } | null>(null);
-  const [reservationCommitKey, setReservationCommitKey] = useState<string | null>(
+  const [reservationActionKey, setReservationActionKey] = useState<string | null>(
     null
   );
 
@@ -320,8 +320,8 @@ export default function VoorraadbeheerPage() {
     orderNummer: string | null;
   }) => {
     if (!stockDetailId || !r.externalOrderId) return;
-    const key = `${r.source}:${r.externalOrderId}`;
-    setReservationCommitKey(key);
+    const key = `commit:${r.source}:${r.externalOrderId}`;
+    setReservationActionKey(key);
     setStockDetailError(null);
     try {
       const res = await fetch("/api/inventory/reservations/commit", {
@@ -348,7 +348,50 @@ export default function VoorraadbeheerPage() {
     } catch (e) {
       setStockDetailError(e instanceof Error ? e.message : "Afronden mislukt");
     } finally {
-      setReservationCommitKey(null);
+      setReservationActionKey(null);
+    }
+  };
+
+  const cancelReservation = async (r: {
+    source: "shopify" | "marktplaats" | "reparatie";
+    externalOrderId: string;
+    orderNummer: string | null;
+  }) => {
+    if (!stockDetailId || !r.externalOrderId) return;
+    const label = r.orderNummer || r.externalOrderId;
+    if (
+      !window.confirm(
+        `Reservering ${label} annuleren?\n\nDe reservering verdwijnt; voorraad wordt niet afgeschreven.`
+      )
+    ) {
+      return;
+    }
+    const key = `cancel:${r.source}:${r.externalOrderId}`;
+    setReservationActionKey(key);
+    setStockDetailError(null);
+    try {
+      const res = await fetch("/api/inventory/reservations/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: r.source,
+          externalOrderId: r.externalOrderId,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          typeof data?.error === "string" ? data.error : "Annuleren mislukt"
+        );
+      }
+      const product = products.find((p) => p.id === stockDetailId);
+      if (product) await openStockDetail(product);
+      await load(false);
+      setMessage(`Reservering ${label} geannuleerd.`);
+    } catch (e) {
+      setStockDetailError(e instanceof Error ? e.message : "Annuleren mislukt");
+    } finally {
+      setReservationActionKey(null);
     }
   };
 
@@ -1704,8 +1747,13 @@ export default function VoorraadbeheerPage() {
                     </h3>
                     <ul className="mt-2 space-y-2">
                       {stockDetail.reservations.map((r) => {
-                        const commitKey = `${r.source}:${r.externalOrderId}`;
-                        const committing = reservationCommitKey === commitKey;
+                        const busy = Boolean(reservationActionKey);
+                        const committing =
+                          reservationActionKey ===
+                          `commit:${r.source}:${r.externalOrderId}`;
+                        const cancelling =
+                          reservationActionKey ===
+                          `cancel:${r.source}:${r.externalOrderId}`;
                         return (
                         <li
                           key={r.reservationId}
@@ -1724,10 +1772,18 @@ export default function VoorraadbeheerPage() {
                           <p className="mt-1 text-xs text-stone-400">
                             Voorkeursdatum: {r.voorkeursdatum || "—"}
                           </p>
-                          <div className="mt-2.5 flex justify-end">
+                          <div className="mt-2.5 flex justify-end gap-2">
                             <button
                               type="button"
-                              disabled={committing || Boolean(reservationCommitKey)}
+                              disabled={busy}
+                              onClick={() => void cancelReservation(r)}
+                              className="rounded-lg border border-stone-300 bg-white px-3 py-1.5 text-xs font-semibold text-stone-700 disabled:opacity-50"
+                            >
+                              {cancelling ? "Annuleren…" : "Annuleren"}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy}
                               onClick={() => void commitReservation(r)}
                               className="rounded-lg bg-koopje-orange px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
                             >

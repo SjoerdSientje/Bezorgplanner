@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useCallback, useState, useMemo } from "react";
+import { useEffect, useCallback, useState, useMemo, useRef } from "react";
 import Link from "next/link";
 import Header from "@/components/Header";
 import EditableSheetTable from "@/components/EditableSheetTable";
@@ -11,7 +11,7 @@ import ProductenCell from "@/components/ProductenCell";
 import OpmerkingKlantCell from "@/components/OpmerkingKlantCell";
 import JaNeeCell from "@/components/JaNeeCell";
 import AlleRittenTabel, { type AlleRittenOrder } from "@/components/AlleRittenTabel";
-import LijstSjoerd from "@/components/LijstSjoerd";
+import LijstSjoerd, { type LijstSjoerdHandle } from "@/components/LijstSjoerd";
 import {
   RITJES_HEADERS,
   ordersToTableRows,
@@ -77,6 +77,12 @@ export default function RitjesVandaagPage() {
   // Verhoog dit ALLEEN na een echte server-fetch zodat EditableSheetTable zijn waarden reset.
   // Cel-edits mogen dit NIET verhogen (dat veroorzaakt de page-flash).
   const [tableResetKey, setTableResetKey] = useState(0);
+  const [routesDirty, setRoutesDirty] = useState(false);
+  const [herberekenenLoading, setHerberekenenLoading] = useState(false);
+  /** Verhoog na Routific zodat Lijst Sjoerd lokale swipe-state wist. */
+  const [sjoerdSyncKey, setSjoerdSyncKey] = useState(0);
+  const lijstSjoerdRef = useRef<LijstSjoerdHandle>(null);
+
   const fetchRitjes = useCallback(async () => {
     setLoading(true);
     try {
@@ -123,10 +129,21 @@ export default function RitjesVandaagPage() {
         );
         setTableResetKey((k) => k + 1);
       }
+      setRoutesDirty(false);
+      setSjoerdSyncKey((k) => k + 1);
       await fetchRitjes();
     },
     [fetchRitjes]
   );
+
+  const handleHerberekenRoute = useCallback(async () => {
+    setHerberekenenLoading(true);
+    try {
+      await lijstSjoerdRef.current?.herbereken();
+    } finally {
+      setHerberekenenLoading(false);
+    }
+  }, []);
 
   /** Pas één order in de lokale state aan zonder een server-fetch te triggeren. */
   const patchOrderInState = useCallback(
@@ -568,6 +585,9 @@ export default function RitjesVandaagPage() {
               onRouteGenerated={handleRouteGenerated}
               onBeforeGoedkeuren={fetchRitjes}
               sjoerdOrders={sjoerdOrders}
+              hasDirtyRoutes={routesDirty}
+              herberekenenLoading={herberekenenLoading}
+              onHerberekenRoute={handleHerberekenRoute}
             />
           </div>
 
@@ -657,13 +677,6 @@ export default function RitjesVandaagPage() {
                 </section>
               )}
             </div>
-          ) : activeTab === "sjoerd" ? (
-            // ── Lijst Sjoerd: meenemen=ja orders ─────────────────────────────
-            <LijstSjoerd
-              orders={orders.filter((o) => o.in_morgen_tab !== true) as AlleRittenOrder[]}
-              onPatch={patchOrderById}
-              onReorderComplete={handleReorderComplete}
-            />
           ) : activeTab === "morgen" && routesGroups ? (
             // ── Routes-tab: gegroepeerd op datum én route ─────────────────────
             <div className="space-y-8">
@@ -773,6 +786,23 @@ export default function RitjesVandaagPage() {
               })}
             </div>
           ) : null}
+
+          {/* Altijd gemount (verborgen op andere tabs) zodat swipe-dirty + Herbereken blijven werken. */}
+          {!loading && (
+            <div
+              className={activeTab === "sjoerd" ? undefined : "hidden"}
+              aria-hidden={activeTab !== "sjoerd"}
+            >
+              <LijstSjoerd
+                ref={lijstSjoerdRef}
+                orders={orders.filter((o) => o.in_morgen_tab !== true) as AlleRittenOrder[]}
+                onPatch={patchOrderById}
+                onReorderComplete={handleReorderComplete}
+                onDirtyChange={setRoutesDirty}
+                syncKey={sjoerdSyncKey}
+              />
+            </div>
+          )}
         </div>
       </main>
     </>

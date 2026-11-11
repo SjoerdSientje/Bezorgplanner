@@ -254,13 +254,131 @@ Regels:
   return fallbackSuggestion(title, category);
 }
 
+function isActivePendingStatus(status: string | null | undefined): boolean {
+  return String(status ?? "").trim().toLowerCase() === "active";
+}
+
+async function buildPendingMeta(product: ShopifyAdminProduct) {
+  const shopifyProductId = Number(product.id);
+  const variants = variantIdsOf(product);
+  const categoryMap = await fetchInventoryCollectionProductIds();
+  const { category, collectionHandles } = resolveCollectionMeta(
+    shopifyProductId,
+    categoryMap
+  );
+  return {
+    shopifyProductId,
+    variants,
+    category,
+    collectionHandles,
+    title: String(product.title ?? "").trim() || `Product ${shopifyProductId}`,
+    status: String(product.status ?? "active"),
+    image_url: productImageUrl(product),
+  };
+}
+
+/**
+ * products/update + nog niet gekoppeld: géén nieuwe wachtrijrij.
+ * Wel bestaande pending bijwerken; draft/archived → active telt als heractivatie.
+ */
+export async function touchInventoryPendingOnUpdate(
+  supabase: SupabaseClient,
+  ownerEmail: string,
+  product: ShopifyAdminProduct
+): Promise<{ touched: boolean; reactivated: boolean; pendingId?: string }> {
+  if (!isShopifyProductActive(product) || isExcludedFromInventory(product)) {
+    return { touched: false, reactivated: false };
+  }
+  const meta = await buildPendingMeta(product);
+  const { data: existing } = await supabase
+    .from("inventory_pending_products")
+    .select("id, status")
+    .eq("owner_email", ownerEmail)
+    .eq("shopify_product_id", meta.shopifyProductId)
+    .maybeSingle();
+  if (!existing?.id) {
+    return { touched: false, reactivated: false };
+  }
+  const wasInactive = !isActivePendingStatus(existing.status);
+  const { error } = await supabase
+    .from("inventory_pending_products")
+    .update({
+      shopify_variant_ids: meta.variants,
+      title: meta.title,
+      status: meta.status,
+      category: meta.category,
+      collection_handles: meta.collectionHandles,
+      image_url: meta.image_url,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", existing.id);
+  if (error) {
+    console.error("[inventory-pending] touch update:", error.message);
+    throw new Error(error.message);
+  }
+  return {
+    touched: true,
+    reactivated: wasInactive && isActivePendingStatus(meta.status),
+    pendingId: existing.id,
+  };
+}
+
+/** Draft/archived: pending bewaren (verborgen) i.p.v. wissen — nodig voor draft→active. */
+export async function markInventoryPendingInactive(
+  supabase: SupabaseClient,
+  ownerEmail: string,
+  product: ShopifyAdminProduct
+): Promise<void> {
+  const shopifyProductId = Number(product.id);
+  if (!Number.isFinite(shopifyProductId) || shopifyProductId <= 0) return;
+  if (isExcludedFromInventory(product)) {
+    await clearInventoryPendingProduct(supabase, ownerEmail, shopifyProductId);
+    return;
+  }
+  const meta = await buildPendingMeta(product);
+  const status = String(product.status ?? "draft").toLowerCase() || "draft";
+  const { data: existing } = await supabase
+    .from("inventory_pending_products")
+    .select("id")
+    .eq("owner_email", ownerEmail)
+    .eq("shopify_product_id", shopifyProductId)
+    .maybeSingle();
+  if (existing?.id) {
+    await supabase
+      .from("inventory_pending_products")
+      .update({
+        shopify_variant_ids: meta.variants,
+        title: meta.title,
+        status,
+        category: meta.category,
+        collection_handles: meta.collectionHandles,
+        image_url: meta.image_url,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", existing.id);
+    return;
+  }
+  await supabase.from("inventory_pending_products").insert({
+    owner_email: ownerEmail,
+    shopify_product_id: shopifyProductId,
+    shopify_variant_ids: meta.variants,
+    title: meta.title,
+    status,
+    category: meta.category,
+    collection_handles: meta.collectionHandles,
+    image_url: meta.image_url,
+    ai_suggestion: null,
+    updated_at: new Date().toISOString(),
+  });
+}
+
 export async function enqueueInventoryPendingProduct(
   supabase: SupabaseClient,
   ownerEmail: string,
   product: ShopifyAdminProduct
 ): Promise<{ enqueued: boolean; pendingId?: string }> {
   if (!isShopifyProductActive(product) || isExcludedFromInventory(product)) {
-    await clearInventoryPendingProduct(supabase, ownerEmail, Number(product.id));
+    await markInventoryPendingInactive(supabase, ownerEmail, product);
     return { enqueued: false };
   }
 
@@ -278,15 +396,11 @@ export async function enqueueInventoryPendingProduct(
     return { enqueued: false };
   }
 
-  const categoryMap = await fetchInventoryCollectionProductIds();
-  const { category, collectionHandles } = resolveCollectionMeta(
-    shopifyProductId,
-    categoryMap
-  );
+  const meta = await buildPendingMeta(product);
 
   const { data: existingPending } = await supabase
     .from("inventory_pending_products")
-    .select("id, ai_suggestion")
+    .select("id, ai_suggestion, status")
     .eq("owner_email", ownerEmail)
     .eq("shopify_product_id", shopifyProductId)
     .maybeSingle();
@@ -296,12 +410,12 @@ export async function enqueueInventoryPendingProduct(
     const { error: updErr } = await supabase
       .from("inventory_pending_products")
       .update({
-        shopify_variant_ids: variants,
-        title: String(product.title ?? "").trim() || `Product ${shopifyProductId}`,
-        status: String(product.status ?? "active"),
-        category,
-        collection_handles: collectionHandles,
-        image_url: productImageUrl(product),
+        shopify_variant_ids: meta.variants,
+        title: meta.title,
+        status: meta.status,
+        category: meta.category,
+        collection_handles: meta.collectionHandles,
+        image_url: meta.image_url,
         updated_at: new Date().toISOString(),
       })
       .eq("id", existingPending.id);
@@ -314,18 +428,18 @@ export async function enqueueInventoryPendingProduct(
 
   const suggestion = await suggestInventoryPendingAction(supabase, ownerEmail, {
     title: product.title,
-    category,
+    category: meta.category,
   });
 
   const payload = {
     owner_email: ownerEmail,
     shopify_product_id: shopifyProductId,
-    shopify_variant_ids: variants,
-    title: String(product.title ?? "").trim() || `Product ${shopifyProductId}`,
-    status: String(product.status ?? "active"),
-    category,
-    collection_handles: collectionHandles,
-    image_url: productImageUrl(product),
+    shopify_variant_ids: meta.variants,
+    title: meta.title,
+    status: meta.status,
+    category: meta.category,
+    collection_handles: meta.collectionHandles,
+    image_url: meta.image_url,
     ai_suggestion: suggestion,
     updated_at: new Date().toISOString(),
   };
@@ -354,6 +468,7 @@ export async function listInventoryPendingProducts(
     .from("inventory_pending_products")
     .select("*")
     .eq("owner_email", ownerEmail)
+    .eq("status", "active")
     .order("created_at", { ascending: false });
   if (error) throw new Error(error.message);
   return (data ?? []) as InventoryPendingProductRow[];
@@ -368,7 +483,8 @@ export async function countInventoryPendingProducts(
   const { count, error } = await supabase
     .from("inventory_pending_products")
     .select("id", { count: "exact", head: true })
-    .eq("owner_email", ownerEmail);
+    .eq("owner_email", ownerEmail)
+    .eq("status", "active");
   if (error) throw new Error(error.message);
   return count ?? 0;
 }

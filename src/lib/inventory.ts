@@ -501,12 +501,18 @@ export async function removeInventoryProductByShopifyId(
  * - Combi/family/basic deal → onderliggende groep (zelfde model+kleur), geen aparte voorraadrij.
  * - Nieuw model of kleur → nieuwe voorraadrij.
  * - Inactive/excluded → ontkoppelen (deal) of rij verwijderen (fysiek product).
+ *
+ * Wachtrij (“Nieuwe producten”):
+ * - create / sync → enqueue als actief + nog niet gekoppeld
+ * - update → géén nieuwe wachtrijrij (alleen bestaande pending bijwerken, of draft→active)
  */
 export async function syncInventoryProductFromShopify(
   supabase: SupabaseClient,
   ownerEmail: string,
-  product: ShopifyAdminProduct
+  product: ShopifyAdminProduct,
+  opts?: { event?: "create" | "update" | "sync" }
 ): Promise<{ inserted: number; updated: number; removed: number; enqueued?: boolean }> {
+  const event = opts?.event ?? "sync";
   const shopifyProductId = Number(product.id);
   if (!Number.isFinite(shopifyProductId) || shopifyProductId <= 0) {
     return { inserted: 0, updated: 0, removed: 0 };
@@ -523,7 +529,14 @@ export async function syncInventoryProductFromShopify(
       shopifyProductId,
       { variantIds, title: product.title }
     );
-    await clearInventoryPendingProduct(supabase, ownerEmail, shopifyProductId);
+    // Bewaar pending met niet-active status (verborgen in UI) zodat draft→active
+    // later wél weer in de wachtrij kan; wis niet hard.
+    try {
+      const { markInventoryPendingInactive } = await import("@/lib/inventory-pending");
+      await markInventoryPendingInactive(supabase, ownerEmail, product);
+    } catch {
+      await clearInventoryPendingProduct(supabase, ownerEmail, shopifyProductId);
+    }
     return { inserted: 0, updated: 0, removed };
   }
 
@@ -534,8 +547,22 @@ export async function syncInventoryProductFromShopify(
     variantIds
   );
 
-  // Nieuw actief product → review-wachtrij (geen auto-voorraadrij).
+  // Nog niet gekoppeld: alleen bij create/sync of heractivatie (bestond al als pending).
   if (!linked) {
+    if (event === "update") {
+      const { touchInventoryPendingOnUpdate } = await import("@/lib/inventory-pending");
+      const touched = await touchInventoryPendingOnUpdate(
+        supabase,
+        ownerEmail,
+        product
+      );
+      return {
+        inserted: 0,
+        updated: 0,
+        removed: 0,
+        enqueued: touched.reactivated,
+      };
+    }
     const { enqueued } = await enqueueInventoryPendingProduct(
       supabase,
       ownerEmail,
@@ -600,6 +627,20 @@ export async function syncInventoryProductFromShopify(
 
   // Alleen updaten van bestaande groepen — nooit nieuwe insert via webhook.
   if (existingRows.length === 0) {
+    if (event === "update") {
+      const { touchInventoryPendingOnUpdate } = await import("@/lib/inventory-pending");
+      const touched = await touchInventoryPendingOnUpdate(
+        supabase,
+        ownerEmail,
+        product
+      );
+      return {
+        inserted: 0,
+        updated: 0,
+        removed: 0,
+        enqueued: touched.reactivated,
+      };
+    }
     const { enqueued } = await enqueueInventoryPendingProduct(
       supabase,
       ownerEmail,

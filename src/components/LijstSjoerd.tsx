@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   DndContext,
   DragOverlay,
@@ -570,6 +578,13 @@ type ReorderUpdate = {
   leg_nummer?: number | null;
 };
 
+export type LijstSjoerdHandle = {
+  /** Herberekent dirty routes via Google Maps + tijdsloten (20/80 min). */
+  herbereken: () => Promise<void>;
+  /** True als er lokale swipe-wijzigingen zijn die nog niet herberekend zijn. */
+  hasDirtyRoutes: () => boolean;
+};
+
 function SortableOrderRow({
   id,
   order,
@@ -856,15 +871,24 @@ function DroppableRouteHeader({
   );
 }
 
-export default function LijstSjoerd({
-  orders,
-  onPatch,
-  onReorderComplete,
-}: {
-  orders: AlleRittenOrder[];
-  onPatch: (id: string, fields: Record<string, unknown>) => void;
-  onReorderComplete?: (updates: ReorderUpdate[]) => void | Promise<void>;
-}) {
+const LijstSjoerd = forwardRef<
+  LijstSjoerdHandle,
+  {
+    orders: AlleRittenOrder[];
+    onPatch: (id: string, fields: Record<string, unknown>) => void;
+    onReorderComplete?: (updates: ReorderUpdate[]) => void | Promise<void>;
+    /** Wordt aangeroepen wanneer dirty-state wijzigt (lokale swipe zonder herberekening). */
+    onDirtyChange?: (dirty: boolean) => void;
+    /**
+     * Verhoog na Routific «Route genereren» zodat lokale swipe-state wordt
+     * gewist en containers weer uit de serverorders komen.
+     */
+    syncKey?: number;
+  }
+>(function LijstSjoerd(
+  { orders, onPatch, onReorderComplete, onDirtyChange, syncKey = 0 },
+  ref
+) {
   const groups = useMemo(() => groupByRoute(orders), [orders]);
   const orderById = useMemo(
     () => new Map(orders.map((o) => [String(o.id), o])),
@@ -882,6 +906,10 @@ export default function LijstSjoerd({
     groupsToContainers(groups)
   );
   const containersRef = useRef(containers);
+  const [dirtyContainerIds, setDirtyContainerIds] = useState<Set<string>>(
+    () => new Set()
+  );
+  const dirtyContainerIdsRef = useRef(dirtyContainerIds);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [recalculating, setRecalculating] = useState(false);
   const [reorderError, setReorderError] = useState<string | null>(null);
@@ -890,6 +918,8 @@ export default function LijstSjoerd({
   const containersAtDragStartRef = useRef<Record<string, string[]> | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const tableRef = useRef<HTMLTableElement | null>(null);
+  const onDirtyChangeRef = useRef(onDirtyChange);
+  const prevSyncKeyRef = useRef(syncKey);
 
   const dragEnabled = reorderEnabled && !touchReorder && !recalculating;
   const buttonReorderEnabled = reorderEnabled && touchReorder && !recalculating;
@@ -905,18 +935,68 @@ export default function LijstSjoerd({
     containersRef.current = containers;
   }, [containers]);
 
+  useEffect(() => {
+    dirtyContainerIdsRef.current = dirtyContainerIds;
+  }, [dirtyContainerIds]);
+
+  useEffect(() => {
+    onDirtyChangeRef.current = onDirtyChange;
+  }, [onDirtyChange]);
+
+  const markDirty = useCallback((containerIds: Iterable<string>) => {
+    const ids = Array.from(containerIds);
+    setDirtyContainerIds((prev) => {
+      const next = new Set(prev);
+      let changed = false;
+      for (const id of ids) {
+        if (!next.has(id)) {
+          next.add(id);
+          changed = true;
+        }
+      }
+      if (!changed && prev.size === next.size) return prev;
+      dirtyContainerIdsRef.current = next;
+      onDirtyChangeRef.current?.(next.size > 0);
+      return next;
+    });
+  }, []);
+
+  const clearDirty = useCallback(() => {
+    setDirtyContainerIds((prev) => {
+      if (prev.size === 0) return prev;
+      const next = new Set<string>();
+      dirtyContainerIdsRef.current = next;
+      onDirtyChangeRef.current?.(false);
+      return next;
+    });
+  }, []);
+
+  // Routific opnieuw genereren → lokale swipe-state weg, sync met serverorders.
+  useEffect(() => {
+    if (prevSyncKeyRef.current === syncKey) return;
+    prevSyncKeyRef.current = syncKey;
+    clearDirty();
+    if (isDraggingRef.current) return;
+    const next = groupsToContainers(groups);
+    setContainers(next);
+    containersRef.current = next;
+  }, [syncKey, groups, clearDirty]);
+
   // Let op: NIET gaten op `recalculating` — die is nog steeds true tijdens de
-  // fetchRitjes()-refetch die na een succesvolle herschikking loopt (submitReorder await't
-  // onReorderComplete vóórdat de finally recalculating weer op false zet). Met die gate zou
-  // deze effect de resync na élke geslaagde herschikking overslaan, waardoor `containers`
-  // permanent blijft hangen op de oude, vóór-de-fetch berekende stand: bij de volgende
-  // sleep-actie kloppen container-IDs dan niet meer met de verse `orders`/`groups`, waardoor
-  // slepen stopt te werken en tijdsloten (voor orders die niet meer in de stale containers
-  // staan) niet meer getoond worden.
+  // fetchRitjes()-refetch die na een succesvolle herberekening loopt. Met die gate zou
+  // deze effect de resync na élke geslaagde herberekening overslaan.
+  // Wél overslaan bij dirty lokale swipe-volgorde, anders verdwijnen unsaved moves.
   useEffect(() => {
     if (isDraggingRef.current) return;
+    if (dirtyContainerIdsRef.current.size > 0) return;
     setContainers(groupsToContainers(groups));
   }, [groups]);
+
+  useEffect(() => {
+    return () => {
+      onDirtyChangeRef.current?.(false);
+    };
+  }, []);
 
   // Geen KeyboardSensor: Space/Enter bij tijdslot-bewerken startte per ongeluk een sleep
   // (DragOverlay-popup). Slepen gaat via muis/touch.
@@ -925,16 +1005,11 @@ export default function LijstSjoerd({
     useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 6 } })
   );
 
-  const submitReorder = useCallback(
-    async (
-      nextContainers: Record<string, string[]>,
-      prevContainers: Record<string, string[]>
-    ) => {
-      const changedContainerIds = containerIdsWithChangedOrder(prevContainers, nextContainers);
-      if (changedContainerIds.size === 0) return;
-
+  /** Bouwt /api/route/reorder-payload voor de gegeven container-IDs (volledige herberekening). */
+  const buildRoutesPayload = useCallback(
+    (targetContainerIds: Set<string>, nextContainers: Record<string, string[]>) => {
       const routeEntries = Object.entries(nextContainers)
-        .filter(([containerId, ids]) => ids.length > 0 && changedContainerIds.has(containerId))
+        .filter(([containerId, ids]) => ids.length > 0 && targetContainerIds.has(containerId))
         .map(([containerId, stopIds]) => {
           const routeNummer = parseContainerRoute(containerId);
           const rn = routeNummer ?? 1;
@@ -943,7 +1018,6 @@ export default function LijstSjoerd({
             rn,
             stopIds,
             orderIds: orderIdsFromStopSequence(stopIds),
-            previousOrderIds: orderIdsFromStopSequence(prevContainers[containerId] ?? []),
           };
         })
         .sort((a, b) => {
@@ -952,15 +1026,19 @@ export default function LijstSjoerd({
           return na - nb;
         });
 
-      if (routeEntries.length === 0) return;
+      const routes: Array<{
+        routeNummer: number | null;
+        stopIds: string[];
+        orderIds: string[];
+        previousOrderIds: string[];
+        vertrektijd: string;
+        maxFietsen?: number;
+        meerdereRitten: boolean;
+      }> = [];
 
-      const routes = [];
       for (const entry of routeEntries) {
         if (entry.orderIds.length === 0) continue;
-        // Overig (routeNummer null): herberekent via Google Maps in de nieuwe volgorde.
-        // Vertrektijd = altijd die uit Route genereren (route 1). Niet ankeren op bestaande
-        // tijdsloten: als een lange route over middernacht heen is gewikkeld (bijv. 00:45),
-        // werd dat verkeerdelijk als vertrektijd gebruikt en startte de hele lijst 's nachts.
+        // Overig (routeNummer null): vertrektijd = die van route 1 (Route genereren).
         if (entry.routeNummer == null) {
           const vertrektijd = getVertrektijdForRoute(1) ?? "";
           const orderByIdLocal = new Map(
@@ -975,7 +1053,8 @@ export default function LijstSjoerd({
             routeNummer: null,
             stopIds: entry.stopIds,
             orderIds: entry.orderIds,
-            previousOrderIds: entry.previousOrderIds,
+            // Leeg → volledige herberekening vanaf vertrektijd (geen divergence-shortcut).
+            previousOrderIds: [],
             vertrektijd,
             maxFietsen: saved?.maxFietsen ?? capFromOrders ?? undefined,
             meerdereRitten: Boolean(saved?.meerdereRitten) || hadDepotLegs,
@@ -984,10 +1063,9 @@ export default function LijstSjoerd({
         }
         const vertrektijd = getVertrektijdForRoute(entry.rn);
         if (!vertrektijd) {
-          setReorderError(
+          throw new Error(
             `Geen vertrektijd voor route ${entry.rn}. Stel deze in via Route genereren en bereken de route opnieuw.`
           );
-          return;
         }
         const saved = readSavedRoutesFromStorage()[entry.rn - 1];
         const orderByIdLocal = new Map(
@@ -1005,46 +1083,70 @@ export default function LijstSjoerd({
           routeNummer: entry.routeNummer,
           stopIds: entry.stopIds,
           orderIds: entry.orderIds,
-          previousOrderIds: entry.previousOrderIds,
+          previousOrderIds: [],
           vertrektijd,
           maxFietsen: saved?.maxFietsen ?? capFromOrders ?? undefined,
           meerdereRitten: Boolean(saved?.meerdereRitten) || hadDepotLegs,
         });
       }
 
-      if (routes.length === 0) return;
-
-      setRecalculating(true);
-      setReorderError(null);
-      setCapacityWarning(null);
-      try {
-        const res = await fetch("/api/route/reorder", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ routes }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(
-            [data.error, data.detail].filter(Boolean).join(" — ") || "Herberekenen mislukt."
-          );
-        }
-        setContainers(nextContainers);
-        containersRef.current = nextContainers;
-        if (Array.isArray(data.warnings) && data.warnings.length > 0) {
-          setCapacityWarning(data.warnings.join(" "));
-        }
-        const updates = (data.updates ?? []) as ReorderUpdate[];
-        await Promise.resolve(onReorderComplete?.(updates));
-      } catch (e) {
-        setContainers(groupsToContainers(groups));
-        containersRef.current = groupsToContainers(groups);
-        setReorderError(e instanceof Error ? e.message : "Herberekenen mislukt.");
-      } finally {
-        setRecalculating(false);
-      }
+      return routes;
     },
-    [groups, onReorderComplete]
+    [groups]
+  );
+
+  const runHerbereken = useCallback(async () => {
+    const dirty = dirtyContainerIdsRef.current;
+    if (dirty.size === 0) return;
+
+    const nextContainers = containersRef.current;
+    let routes;
+    try {
+      routes = buildRoutesPayload(dirty, nextContainers);
+    } catch (e) {
+      setReorderError(e instanceof Error ? e.message : "Herberekenen mislukt.");
+      return;
+    }
+    if (routes.length === 0) {
+      clearDirty();
+      return;
+    }
+
+    setRecalculating(true);
+    setReorderError(null);
+    setCapacityWarning(null);
+    try {
+      const res = await fetch("/api/route/reorder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ routes }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          [data.error, data.detail].filter(Boolean).join(" — ") || "Herberekenen mislukt."
+        );
+      }
+      clearDirty();
+      if (Array.isArray(data.warnings) && data.warnings.length > 0) {
+        setCapacityWarning(data.warnings.join(" "));
+      }
+      const updates = (data.updates ?? []) as ReorderUpdate[];
+      await Promise.resolve(onReorderComplete?.(updates));
+    } catch (e) {
+      setReorderError(e instanceof Error ? e.message : "Herberekenen mislukt.");
+    } finally {
+      setRecalculating(false);
+    }
+  }, [buildRoutesPayload, clearDirty, onReorderComplete]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      herbereken: runHerbereken,
+      hasDirtyRoutes: () => dirtyContainerIdsRef.current.size > 0,
+    }),
+    [runHerbereken]
   );
 
   const routeOptions = useMemo((): RouteOption[] => {
@@ -1061,19 +1163,21 @@ export default function LijstSjoerd({
     });
   }, [groups]);
 
+  /** Alleen lokale volgorde; Google Maps pas na «Herbereken route». */
   const applyReorder = useCallback(
-    async (
+    (
       next: Record<string, string[]> | null,
       prevContainers?: Record<string, string[]>
     ) => {
       if (!next) return;
       const before = prevContainers ?? containersRef.current;
       if (JSON.stringify(before) === JSON.stringify(next)) return;
+      const changed = containerIdsWithChangedOrder(before, next);
       setContainers(next);
       containersRef.current = next;
-      await submitReorder(next, before);
+      if (changed.size > 0) markDirty(changed);
     },
-    [submitReorder]
+    [markDirty]
   );
 
   const handleDragStart = (event: DragStartEvent) => {
@@ -1163,19 +1267,27 @@ export default function LijstSjoerd({
     containersAtDragStartRef.current = null;
 
     if (JSON.stringify(prevContainers) !== JSON.stringify(nextContainers)) {
-      await submitReorder(nextContainers, prevContainers);
+      applyReorder(nextContainers, prevContainers);
     }
   };
 
   const handleDragCancel = () => {
     isDraggingRef.current = false;
-    containersAtDragStartRef.current = null;
     setActiveId(null);
+    const snapshot = containersAtDragStartRef.current;
+    containersAtDragStartRef.current = null;
+    // Herstel naar stand vóór deze sleep (niet naar server als er dirty state is).
+    if (snapshot) {
+      setContainers(snapshot);
+      containersRef.current = snapshot;
+      return;
+    }
+    if (dirtyContainerIdsRef.current.size > 0) return;
     setContainers(groupsToContainers(groups));
   };
 
   const removeDepotFromContainer = useCallback(
-    async (containerId: string, depotId: string) => {
+    (containerId: string, depotId: string) => {
       const prev = {
         ...Object.fromEntries(
           Object.entries(containersRef.current).map(([k, v]) => [k, [...v]])
@@ -1183,11 +1295,9 @@ export default function LijstSjoerd({
       };
       const items = (containersRef.current[containerId] ?? []).filter((id) => id !== depotId);
       const next = { ...containersRef.current, [containerId]: items };
-      setContainers(next);
-      containersRef.current = next;
-      await submitReorder(next, prev);
+      applyReorder(next, prev);
     },
-    [submitReorder]
+    [applyReorder]
   );
 
   const totalCount = Object.values(containers).reduce(
@@ -1436,6 +1546,8 @@ export default function LijstSjoerd({
     </table>
   );
 
+  const isDirty = dirtyContainerIds.size > 0;
+
   return (
     <div className="space-y-2">
       {reorderEnabled && (
@@ -1443,15 +1555,20 @@ export default function LijstSjoerd({
           {touchReorder ? (
             <>
               Gebruik <strong>↑ ↓</strong> voor volgorde en het <strong>Route-menu</strong> om een
-              adres naar een andere bezorger te verplaatsen. Tijdsloten worden herberekend via Google
-              Maps.
+              adres naar een andere bezorger te verplaatsen. Klik daarna op{" "}
+              <strong>Herbereken route</strong> voor nieuwe tijdsloten.
             </>
           ) : (
             <>
               <strong>Vasthouden op een rij of adres</strong> en slepen om volgorde of route te
-              wijzigen. Sleep ook de amber <strong>Terug naar depot</strong>-rij. Tijdsloten via
-              Google Maps.
+              wijzigen. Sleep ook de amber <strong>Terug naar depot</strong>-rij. Daarna{" "}
+              <strong>Herbereken route</strong> voor nieuwe tijdsloten.
             </>
+          )}
+          {isDirty && !recalculating && (
+            <span className="ml-2 font-medium text-amber-800">
+              Volgorde gewijzigd — herbereken om tijdsloten bij te werken.
+            </span>
           )}
           {recalculating && (
             <span className="ml-2 font-medium text-koopje-orange">Bezig met herberekenen…</span>
@@ -1509,7 +1626,11 @@ export default function LijstSjoerd({
       </div>
     </div>
   );
-}
+});
+
+LijstSjoerd.displayName = "LijstSjoerd";
+
+export default LijstSjoerd;
 
 function RouteGroupRows({
   containerId,

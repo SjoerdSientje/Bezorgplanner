@@ -166,16 +166,25 @@ interface Props {
   /** Voor goedkeuren: herlaad Lijst Sjoerd zodat we niet op stale slots klikken. */
   onBeforeGoedkeuren?: () => void | Promise<void>;
   sjoerdOrders: RoutePickOrder[];
+  /** True als Lijst Sjoerd lokale swipe-wijzigingen heeft die nog niet herberekend zijn. */
+  hasDirtyRoutes?: boolean;
+  herberekenenLoading?: boolean;
+  /** Na bevestiging in de dialog: herbereken dirty routes via Google Maps. */
+  onHerberekenRoute?: () => void | Promise<void>;
 }
 
 export default function RitjesRouteControls({
   onRouteGenerated,
   onBeforeGoedkeuren,
   sjoerdOrders,
+  hasDirtyRoutes = false,
+  herberekenenLoading = false,
+  onHerberekenRoute,
 }: Props) {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: "ok" | "warning" | "error"; text: string } | null>(null);
   const [showDialog, setShowDialog] = useState(false);
+  const [showHerberekenConfirm, setShowHerberekenConfirm] = useState(false);
   const [routes, setRoutes] = useState<RouteRow[]>(() => loadRoutesDefault());
   const [pickerRouteIndex, setPickerRouteIndex] = useState<number | null>(null);
 
@@ -345,10 +354,15 @@ export default function RitjesRouteControls({
     }
   }
 
+  async function confirmHerbereken() {
+    setShowHerberekenConfirm(false);
+    await onHerberekenRoute?.();
+  }
+
   return (
     <>
       <div className="flex flex-col items-end gap-3">
-        <div className="flex flex-col items-end gap-3 sm:flex-row sm:items-center">
+        <div className="flex flex-col items-end gap-3 sm:flex-row sm:items-center sm:flex-wrap">
           <button
             type="button"
             onClick={() => {
@@ -358,41 +372,101 @@ export default function RitjesRouteControls({
               setShowDialog(true);
               setMessage(null);
             }}
-            disabled={loading}
+            disabled={loading || herberekenenLoading}
             className="rounded-lg bg-koopje-orange px-4 py-2 text-sm font-medium text-white transition hover:bg-koopje-orange-dark disabled:opacity-50"
           >
             {loading ? "Bezig…" : "Route genereren"}
           </button>
-          {message && (
-            <p
-              className={`w-full whitespace-pre-wrap text-sm sm:w-auto ${message.type === "error" ? "text-red-600" : message.type === "warning" ? "text-orange-600" : "text-green-700"}`}
-            >
-              {message.text}
-            </p>
-          )}
-        </div>
-
-        <div className="flex flex-col items-end gap-2 sm:flex-row sm:items-center">
+          <button
+            type="button"
+            onClick={() => setShowHerberekenConfirm(true)}
+            disabled={!hasDirtyRoutes || herberekenenLoading || loading}
+            className="rounded-lg border border-koopje-black/25 bg-white px-4 py-2 text-sm font-medium text-koopje-black transition hover:bg-stone-50 disabled:opacity-50"
+            title={
+              hasDirtyRoutes
+                ? "Herberekent tijdsloten via Google Maps voor de huidige volgorde"
+                : "Pas eerst de volgorde aan in Lijst Sjoerd"
+            }
+          >
+            {herberekenenLoading ? "Bezig…" : "Herbereken route"}
+          </button>
           <button
             type="button"
             onClick={() => {
               submitGoedkeuren();
               setGoedkeurenMessage(null);
             }}
-            disabled={goedkeurenLoading}
+            disabled={goedkeurenLoading || hasDirtyRoutes || herberekenenLoading}
             className="rounded-lg border border-koopje-orange bg-white px-4 py-2 text-sm font-medium text-koopje-orange transition hover:bg-koopje-orange-light disabled:opacity-50"
+            title={
+              hasDirtyRoutes
+                ? "Herbereken eerst de route voordat je goedkeurt"
+                : undefined
+            }
           >
             {goedkeurenLoading ? "Bezig…" : "Planning goedkeuren"}
           </button>
-          {goedkeurenMessage && (
-            <p
-              className={`w-full whitespace-pre-wrap text-sm sm:w-auto ${goedkeurenMessage.type === "error" ? "text-red-600" : "text-green-700"}`}
-            >
-              {goedkeurenMessage.text}
-            </p>
-          )}
         </div>
+        {message && (
+          <p
+            className={`w-full whitespace-pre-wrap text-sm sm:w-auto sm:text-right ${message.type === "error" ? "text-red-600" : message.type === "warning" ? "text-orange-600" : "text-green-700"}`}
+          >
+            {message.text}
+          </p>
+        )}
+        {hasDirtyRoutes && !herberekenenLoading && (
+          <p className="text-sm text-amber-800 sm:text-right">
+            Volgorde gewijzigd — klik op Herbereken route voordat je goedkeurt.
+          </p>
+        )}
+        {goedkeurenMessage && (
+          <p
+            className={`w-full whitespace-pre-wrap text-sm sm:w-auto sm:text-right ${goedkeurenMessage.type === "error" ? "text-red-600" : "text-green-700"}`}
+          >
+            {goedkeurenMessage.text}
+          </p>
+        )}
       </div>
+
+      {showHerberekenConfirm && (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-black/40"
+            onClick={() => setShowHerberekenConfirm(false)}
+            aria-hidden
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="herbereken-title"
+            className="fixed left-1/2 top-1/2 z-50 w-[min(100%-2rem,24rem)] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-stone-200 bg-white p-5 shadow-xl"
+          >
+            <h2 id="herbereken-title" className="text-base font-semibold text-koopje-black">
+              Route herberekenen?
+            </h2>
+            <p className="mt-2 text-sm text-stone-600">
+              Weet je zeker dat je de route(s) opnieuw wilt berekenen op basis van de huidige
+              volgorde? Tijdsloten worden opnieuw opgebouwd via Google Maps.
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowHerberekenConfirm(false)}
+                className="rounded-lg border border-stone-200 bg-white px-4 py-2 text-sm font-medium text-stone-700 hover:bg-stone-50"
+              >
+                Nee
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmHerbereken()}
+                className="rounded-lg bg-koopje-orange px-4 py-2 text-sm font-medium text-white hover:bg-koopje-orange-dark"
+              >
+                Ja
+              </button>
+            </div>
+          </div>
+        </>
+      )}
 
       {showDialog && (
         <>
