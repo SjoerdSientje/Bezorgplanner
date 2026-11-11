@@ -548,6 +548,45 @@ function invoiceDetailsLookDuplicated(
   return false;
 }
 
+/** Strip ordertoevoegingen zodat Shopify-regelnamen matchen met Moneybird-omschrijvingen. */
+function invoiceDescriptionBase(description: string): string {
+  return String(description ?? "")
+    .replace(/\s*\|\s*Framenummer:.*$/i, "")
+    .replace(/\s*\(#\d+\)\s*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * Shopify-regels die op de factuur ontbreken (naam-match).
+ * Vangt o.a. #6405: voorrekje stond in Shopify/snapshot maar niet op de Moneybird-factuur,
+ * terwijl latere webhooks als "paymentOnly" werden overgeslagen.
+ */
+function shopifyLinesMissingFromInvoice(
+  order: ShopifyOrder,
+  invoiceDetails: Array<{ description?: string | null }> | null | undefined
+): string[] {
+  const present = new Set(
+    (invoiceDetails ?? [])
+      .map((d) => invoiceDescriptionBase(String(d.description ?? "")))
+      .filter(Boolean)
+  );
+  const missing: string[] = [];
+  for (const li of order.line_items ?? []) {
+    const qty = effectiveShopifyLineQuantity(li);
+    if (qty <= 0) continue;
+    const name = String(li.name ?? "").trim();
+    if (!name) continue;
+    const key = invoiceDescriptionBase(name);
+    if (!key) continue;
+    if (present.has(key)) continue;
+    // Losse vrije-tekst "voorrekje" dekt "Voorrekje voor Fatbikes" niet — terecht missing.
+    missing.push(name);
+  }
+  return missing;
+}
+
 /**
  * Vervang alle factuurregels atomisch t.o.v. de huidige GET.
  * Na PATCH: controleer op verdubbeling (race) en herstel één keer.
@@ -589,10 +628,13 @@ async function replaceMoneybirdInvoiceDetails(params: {
     invoiceDetailsLookDuplicated(after.details, details) ||
     ((after.details?.length ?? 0) > details.length &&
       !invoiceDetailsUnchanged(after.details, details));
+  const tooFew = (after.details?.length ?? 0) < details.length;
 
-  if (tooMany) {
+  if (tooMany || tooFew) {
     console.warn(
-      "[moneybird] dubbele/teveel factuurregels na PATCH — herstel",
+      tooFew
+        ? "[moneybird] te weinig factuurregels na PATCH — herstel"
+        : "[moneybird] dubbele/teveel factuurregels na PATCH — herstel",
       invoiceId,
       `had=${after.details?.length ?? 0}`,
       `want=${details.length}`
@@ -1663,12 +1705,25 @@ async function syncSalesInvoiceOnShopifyOrderUpdate(
   // Onbetaald (concept of verzonden): hoofdfactuur in-place bijwerken.
   if (shopifyUnpaid) {
     if (paymentOnly) {
-      console.info(
-        "[moneybird] order update — alleen betaling, factuur ongewijzigd",
+      // Snapshot ongewijzigd ≠ factuur compleet. #6405: voorrekje ontbrak op factuur
+      // terwijl snapshot al klopte → updates werden hier permanent overgeslagen.
+      const freshMain = main.id
+        ? ((await fetchSalesInvoiceById(main.id)) ?? main)
+        : main;
+      const missing = shopifyLinesMissingFromInvoice(order, freshMain.details);
+      if (missing.length === 0) {
+        console.info(
+          "[moneybird] order update — alleen betaling, factuur ongewijzigd",
+          reference,
+          isDraft ? "concept" : "verzonden"
+        );
+        return freshMain;
+      }
+      console.warn(
+        "[moneybird] order update — snapshot ongewijzigd maar factuur mist regels — force update",
         reference,
-        isDraft ? "concept" : "verzonden"
+        missing.join(" | ")
       );
-      return main;
     }
     return updateDraftSalesInvoiceFromShopifyOrder(order, {
       shopifyUnpaid: true,
@@ -2555,6 +2610,21 @@ export async function createSalesInvoiceFromShopifyOrder(
       method: "POST",
       body: JSON.stringify(payload),
     });
+
+    // Verifieer dat alle Shopify-regels op de factuur staan (Moneybird/race kan regels droppen).
+    const missingAfterCreate = shopifyLinesMissingFromInvoice(order, created.details);
+    if (missingAfterCreate.length > 0 && created.id && details.length > 0) {
+      console.warn(
+        "[moneybird] concept mist Shopify-regels na create — herstel",
+        created.id,
+        missingAfterCreate.join(" | ")
+      );
+      created = await replaceMoneybirdInvoiceDetails({
+        invoiceId: created.id,
+        contactId: contact.id,
+        details,
+      });
+    }
 
     const totalIncl = shopifyOrderBillableTotalIncl(order);
     console.info(
