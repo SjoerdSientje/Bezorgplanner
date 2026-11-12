@@ -18,7 +18,7 @@ export async function GET(request: NextRequest) {
       null;
     try {
       factuurBackfill = await backfillBezorgdeOrderFacturen(supabase, ownerEmail, {
-        limit: 12,
+        limit: 4,
       });
     } catch (e) {
       console.error("[api/bezorgde-orders] factuur backfill:", e);

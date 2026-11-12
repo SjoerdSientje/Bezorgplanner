@@ -103,10 +103,11 @@ export async function attachMoneybirdFactuurForOrder(
     return { link: null, invoiceId: null, skipped: "mp_order" };
   }
 
-  const existingLink = String(order.link_factuur ?? "").trim();
-  if (existingLink && !options?.force) {
+  // null = nog niet gecheckt; '' = gecheckt, geen factuur; url = PDF gekoppeld.
+  if (order.link_factuur != null && !options?.force) {
+    const existingLink = String(order.link_factuur).trim();
     return {
-      link: existingLink,
+      link: existingLink || null,
       invoiceId: String(order.moneybird_invoice_id ?? "").trim() || null,
       skipped: "already_attached",
     };
@@ -115,6 +116,13 @@ export async function attachMoneybirdFactuurForOrder(
   const invoice = await resolveMoneybirdInvoiceForOrder(supabase, order);
   const invoiceId = String(invoice?.id ?? "").trim();
   if (!invoiceId) {
+    const { error: markErr } = await supabase
+      .from("orders")
+      .update({ link_factuur: "" })
+      .eq("id", order.id);
+    if (markErr && !/link_factuur/i.test(markErr.message)) {
+      console.warn("[order-factuur] mark no_invoice:", markErr.message);
+    }
     return { link: null, invoiceId: null, skipped: "no_invoice" };
   }
 
@@ -203,18 +211,27 @@ export async function backfillBezorgdeOrderFacturen(
     return { attempted: 0, attached: 0, skipped: 0, errors: 0 };
   }
 
-  const { data: rows, error } = await supabase
-    .from("orders")
-    .select(
-      "id, owner_email, source, type, status, order_id, order_nummer, email, moneybird_invoice_id, link_factuur, afgerond_at, mp_tags"
-    )
-    .eq("owner_email", ownerEmail)
-    .eq("status", "bezorgd")
-    .in("source", ["shopify", "reparatie"])
-    .gte("afgerond_at", FACTUUR_BACKFILL_SINCE_ISO)
-    .is("link_factuur", null)
-    .order("afgerond_at", { ascending: false, nullsFirst: false })
+  // Eerst orders met bekende Moneybird-id (minder API-calls), daarna de rest.
+  const base = () =>
+    supabase
+      .from("orders")
+      .select(
+        "id, owner_email, source, type, status, order_id, order_nummer, email, moneybird_invoice_id, link_factuur, afgerond_at, mp_tags"
+      )
+      .eq("owner_email", ownerEmail)
+      .eq("status", "bezorgd")
+      .in("source", ["shopify", "reparatie"])
+      .gte("afgerond_at", FACTUUR_BACKFILL_SINCE_ISO)
+      .is("link_factuur", null)
+      .order("afgerond_at", { ascending: false, nullsFirst: false });
+
+  let { data: rows, error } = await base()
+    .not("moneybird_invoice_id", "is", null)
     .limit(limit);
+
+  if (!error && (rows?.length ?? 0) === 0) {
+    ({ data: rows, error } = await base().limit(limit));
+  }
 
   if (error) {
     if (/link_factuur/i.test(error.message)) {
@@ -239,16 +256,23 @@ export async function backfillBezorgdeOrderFacturen(
     }
     try {
       const result = await attachMoneybirdFactuurForOrder(supabase, order);
-      if (result.link && !result.skipped) attached += 1;
+      if (result.link && result.skipped !== "already_attached") attached += 1;
       else skipped += 1;
+      // Rate-limit Moneybird: kleine pauze tussen orders.
+      await new Promise((r) => setTimeout(r, 350));
     } catch (err) {
       errors += 1;
+      const msg = err instanceof Error ? err.message : String(err);
       console.error(
         "[order-factuur] backfill mislukt voor",
         order.id,
         order.order_nummer,
-        err instanceof Error ? err.message : err
+        msg
       );
+      if (/429|Retry later/i.test(msg)) {
+        // Stop deze batch; volgende page-load/run probeert opnieuw.
+        break;
+      }
     }
   }
 
