@@ -46,6 +46,8 @@ export interface Order {
   serienummer: string | null;
   mp_tags: string | null;
   link_aankoopbewijs: string | null;
+  /** Publieke URL Moneybird-factuur-PDF (bezorgde niet-MP orders). */
+  link_factuur?: string | null;
   /** MP-order zonder garantie → geen aankoopbewijs. */
   geen_garantie?: boolean | null;
   route_nummer?: number | null;

@@ -241,7 +241,7 @@ export async function resolveShopifyOrderIdFromMoneybirdMainInvoice(
 /**
  * Zoek hoofdfactuur: shopify:{id} → lock.invoice_id → Klarna/PAY. payment-id als kenmerk.
  */
-async function findShopifyMainInvoice(
+export async function findShopifyMainInvoice(
   shopifyOrderId: string,
   supabase?: SupabaseClient | null
 ): Promise<MoneybirdSalesInvoice | null> {
@@ -1097,6 +1097,37 @@ export function shouldAutoSendShopifyInvoice(order: ShopifyOrder): boolean {
   const totalIncl = shopifyOrderBillableTotalIncl(order);
   if (isZeroInvoiceTotal(totalIncl)) return false;
   return totalIncl < AUTO_FINALIZE_INVOICE_BELOW_EUR;
+}
+
+/**
+ * Download de PDF van een Moneybird-factuur (volgt redirect van download_pdf).
+ * @see https://developer.moneybird.com/api/sales_invoices/#get_sales_invoices_id_download_pdf
+ */
+export async function downloadSalesInvoicePdf(invoiceId: string): Promise<Buffer> {
+  const id = String(invoiceId ?? "").trim();
+  if (!id) throw new Error("invoiceId ontbreekt.");
+
+  const url = `${MONEYBIRD_API_BASE}/${adminId()}/sales_invoices/${id}/download_pdf`;
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${apiToken()}`,
+      Accept: "application/pdf,*/*",
+    },
+    redirect: "follow",
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => res.statusText);
+    throw new Error(`Moneybird PDF download mislukt (${res.status}): ${detail}`);
+  }
+
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (!buf.length) {
+    throw new Error("Moneybird PDF download gaf een leeg bestand.");
+  }
+  return buf;
 }
 
 /**

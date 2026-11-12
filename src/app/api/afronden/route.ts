@@ -8,6 +8,7 @@ import {
 import { verwerkGarantiebewijs } from "@/lib/garantiebewijs";
 import { promoteRitjesVoorMorgen } from "@/lib/planning-promote";
 import { inferCompletedStatus } from "@/lib/order-completion";
+import { attachMoneybirdFactuurForOrder } from "@/lib/order-factuur";
 
 export const dynamic = "force-dynamic";
 
@@ -517,6 +518,31 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Order bijwerken mislukt." }, { status: 500 });
     }
 
+    // Niet-MP bezorgde orders: Moneybird-factuur-PDF ophalen en koppelen (best-effort).
+    let factuurError: string | null = null;
+    if (nextStatus === "bezorgd" && !isRealMpOrder) {
+      try {
+        await attachMoneybirdFactuurForOrder(supabase, {
+          id: orderId,
+          owner_email: ownerEmail,
+          source: (order as { source?: string }).source,
+          type: (order as { type?: string }).type,
+          status: nextStatus,
+          order_id: (order as { order_id?: string | null }).order_id,
+          order_nummer: (order as { order_nummer?: string | null }).order_nummer,
+          email: (order as { email?: string | null }).email,
+          moneybird_invoice_id:
+            reparatieInvoiceId ??
+            (order as { moneybird_invoice_id?: string | null }).moneybird_invoice_id,
+          link_factuur: (order as { link_factuur?: string | null }).link_factuur,
+          mp_tags: (order as { mp_tags?: string | null }).mp_tags,
+        });
+      } catch (e) {
+        factuurError = e instanceof Error ? e.message : String(e);
+        console.error("[api/afronden] factuur koppelen mislukt", e);
+      }
+    }
+
     // Voorraad bij afronden:
     // - Echte MP-orders: reservering committen (aftrekken).
     // - Shopify < €490: committen via Shopify-id (ook al vaak via fulfilled).
@@ -718,6 +744,7 @@ export async function POST(request: NextRequest) {
         ok: true,
         nextStatus,
         aankoopbewijsError,
+        factuurError,
         debug: {
           orderId,
           slotsVoorDelete: slotsVoor?.length ?? 0,

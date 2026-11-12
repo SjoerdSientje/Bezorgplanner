@@ -5,6 +5,7 @@ import Link from "next/link";
 import Header from "@/components/Header";
 import EditableSheetTable from "@/components/EditableSheetTable";
 import ProductenCell from "@/components/ProductenCell";
+import FactuurCell from "@/components/FactuurCell";
 
 const BEZORGDE_ORDERS_HEADERS = [
   "Order Nummer",
@@ -22,6 +23,7 @@ const BEZORGDE_ORDERS_HEADERS = [
   "Email",
   "Betaalmethode",
   "Nummer in E.164 formaat",
+  "Factuur",
 ];
 
 export default function BezorgdeOrdersPage() {
@@ -42,11 +44,14 @@ export default function BezorgdeOrdersPage() {
     aantal_fietsen: number | null;
     email: string | null;
     telefoon_e164: string | null;
+    link_factuur?: string | null;
+    moneybird_invoice_id?: string | null;
   };
 
   const [orders, setOrders] = useState<BezorgdeOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [nameSearch, setNameSearch] = useState("");
+  const [backfillNote, setBackfillNote] = useState<string | null>(null);
 
   const formatAfgerondDatum = (iso: string | null): string => {
     if (!iso) return "";
@@ -63,8 +68,20 @@ export default function BezorgdeOrdersPage() {
       });
       const data = await res.json().catch(() => ({}));
       setOrders(Array.isArray(data.orders) ? (data.orders as BezorgdeOrder[]) : []);
+      const bf = data.factuurBackfill as
+        | { attempted?: number; attached?: number }
+        | null
+        | undefined;
+      if (bf && Number(bf.attached ?? 0) > 0) {
+        setBackfillNote(
+          `${bf.attached} factuur(en) uit Moneybird bijgewerkt. Vernieuw opnieuw als er nog meer ontbreken.`
+        );
+      } else {
+        setBackfillNote(null);
+      }
     } catch {
       setOrders([]);
+      setBackfillNote(null);
     } finally {
       setLoading(false);
     }
@@ -112,6 +129,7 @@ export default function BezorgdeOrdersPage() {
       o.email ?? "",
       o.betaalmethode ?? "",
       o.telefoon_e164 ?? "",
+      o.link_factuur ?? "",
     ]);
   }, [sortedOrders]);
 
@@ -131,6 +149,24 @@ export default function BezorgdeOrdersPage() {
                 ? order.bestelling_totaal_prijs
                 : null
             }
+          />
+        );
+      },
+      Factuur: (rowIndex: number) => {
+        const order = sortedOrders[rowIndex];
+        if (!order) {
+          return <span className="block px-2 py-1.5 text-sm text-stone-300">—</span>;
+        }
+        return (
+          <FactuurCell
+            orderId={order.id}
+            link={order.link_factuur}
+            email={order.email}
+            onUpdated={({ link }) => {
+              setOrders((prev) =>
+                prev.map((o) => (o.id === order.id ? { ...o, link_factuur: link } : o))
+              );
+            }}
           />
         );
       },
@@ -184,8 +220,14 @@ export default function BezorgdeOrdersPage() {
           </div>
 
           <p className="mb-4 text-sm text-koopje-black/60">
-            Onderstaande tabel toont alle kolommen. Je kunt in elk vakje typen. Scroll horizontaal als niet alles past.
+            Onderstaande tabel toont alle kolommen. Facturen (Moneybird) staan rechts: downloaden of
+            opnieuw verzenden. Scroll horizontaal als niet alles past.
           </p>
+          {backfillNote && (
+            <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+              {backfillNote}
+            </p>
+          )}
 
           {loading ? (
             <p className="text-sm text-koopje-black/60">Laden…</p>
