@@ -48,6 +48,25 @@ type MountedExtra = "achterzitje" | "voorrekje";
 const RIJKLAAR_SURCHARGE_NAME = "Volledig rijklaar";
 const RIJKLAAR_SURCHARGE_PRICE = "50";
 
+let sharedProductRulesPromise: Promise<ProductDefaultItemsRulesV2> | null = null;
+
+function loadSharedProductRules(): Promise<ProductDefaultItemsRulesV2> {
+  if (!sharedProductRulesPromise) {
+    sharedProductRulesPromise = fetch(`/api/product-rules?t=${Date.now()}`, {
+      cache: "no-store",
+    })
+      .then((res) => res.json().catch(() => ({})))
+      .then((data) => {
+        if (data?.rules) {
+          return normalizeProductDefaultItemsRules(data.rules);
+        }
+        return DEFAULT_PRODUCT_RULES_V2;
+      })
+      .catch(() => DEFAULT_PRODUCT_RULES_V2);
+  }
+  return sharedProductRulesPromise;
+}
+
 let idCounter = 0;
 function genId() { return String(++idCounter); }
 
@@ -285,13 +304,11 @@ export default function ProductenCell({
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`/api/product-rules?t=${Date.now()}`, { cache: "no-store" })
-      .then((res) => res.json().catch(() => ({})))
-      .then((data) => {
+    // Gedeelde fetch: 30 cellen → 1 request i.p.v. 30 identieke calls.
+    void loadSharedProductRules()
+      .then((rules) => {
         if (cancelled) return;
-        if (data?.rules) {
-          setProductRules(normalizeProductDefaultItemsRules(data.rules));
-        }
+        setProductRules(rules);
       })
       .catch(() => {
         // Fallback blijft DEFAULT_PRODUCT_RULES_V2.

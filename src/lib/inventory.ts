@@ -876,6 +876,39 @@ export async function pruneInactiveInventoryProducts(
   );
 }
 
+/** Stats uit al geladen producten + reserved-map (geen extra product-query). */
+export function computeInventoryStatsFromRows(
+  rows: Array<{
+    id: string;
+    stock_quantity: number;
+    low_stock_threshold?: number | null;
+  }>,
+  reservedMap: Map<string, number>,
+  mutationsToday: number
+): {
+  totalProducts: number;
+  lowStock: number;
+  outOfStock: number;
+  mutationsToday: number;
+} {
+  let outOfStock = 0;
+  let lowStock = 0;
+  for (const p of rows) {
+    const stock = Math.floor(Number(p.stock_quantity) || 0);
+    const reserved = Math.max(0, Math.floor(reservedMap.get(String(p.id)) ?? 0));
+    const sellable = stock - reserved;
+    const threshold = effectiveLowStockThreshold(p.low_stock_threshold);
+    if (sellable <= 0) outOfStock++;
+    else if (threshold > 0 && sellable <= threshold) lowStock++;
+  }
+  return {
+    totalProducts: rows.length,
+    lowStock,
+    outOfStock,
+    mutationsToday,
+  };
+}
+
 export async function getInventoryStats(
   supabase: SupabaseClient,
   ownerEmail: string
@@ -888,15 +921,21 @@ export async function getInventoryStats(
   const today = getAmsterdamCalendarDate(0);
   const { startUtcIso, endUtcIsoExclusive } = getAmsterdamDayUtcRange(today);
 
-  const { data: products } = await supabase
-    .from("inventory_products")
-    .select("id, stock_quantity, low_stock_threshold")
-    .eq("owner_email", ownerEmail);
+  const [{ data: products }, { count }] = await Promise.all([
+    supabase
+      .from("inventory_products")
+      .select("id, stock_quantity, low_stock_threshold")
+      .eq("owner_email", ownerEmail),
+    supabase
+      .from("inventory_mutations")
+      .select("id", { count: "exact", head: true })
+      .eq("owner_email", ownerEmail)
+      .gte("created_at", startUtcIso)
+      .lt("created_at", endUtcIsoExclusive),
+  ]);
 
   const rows = products ?? [];
-  const totalProducts = rows.length;
-
-  const { getReservedQuantitiesByProductIds, sellableFrom } = await import(
+  const { getReservedQuantitiesByProductIds } = await import(
     "@/lib/inventory-reservations"
   );
   const reservedMap = await getReservedQuantitiesByProductIds(
@@ -905,33 +944,7 @@ export async function getInventoryStats(
     rows.map((p) => String(p.id))
   );
 
-  let outOfStock = 0;
-  let lowStock = 0;
-  for (const p of rows) {
-    const sellable = sellableFrom(
-      Number(p.stock_quantity ?? 0),
-      reservedMap.get(String(p.id)) ?? 0
-    );
-    const threshold = effectiveLowStockThreshold(
-      (p as { low_stock_threshold?: number | null }).low_stock_threshold
-    );
-    if (sellable <= 0) outOfStock++;
-    else if (threshold > 0 && sellable <= threshold) lowStock++;
-  }
-
-  const { count } = await supabase
-    .from("inventory_mutations")
-    .select("id", { count: "exact", head: true })
-    .eq("owner_email", ownerEmail)
-    .gte("created_at", startUtcIso)
-    .lt("created_at", endUtcIsoExclusive);
-
-  return {
-    totalProducts,
-    lowStock,
-    outOfStock,
-    mutationsToday: count ?? 0,
-  };
+  return computeInventoryStatsFromRows(rows, reservedMap, count ?? 0);
 }
 
 export type InventoryLinkedShopifyProduct = {

@@ -15,15 +15,47 @@ export async function GET(request: NextRequest) {
     const ownerEmail = requireAccountEmail(request);
     const supabase = createServerSupabaseClient();
     await rollForwardPastPlanningSlots(ownerEmail, supabase as any);
-    const mpPaused = await isMpPausedForOwner(supabase, ownerEmail);
-    const { data: slots, error: slotsErr } = await supabase
-      .from("planning_slots")
-      .select("id, datum, volgorde, aankomsttijd, tijd_opmerking, status, order_id")
-      .eq("owner_email", ownerEmail)
-      .neq("status", "afgerond")
-      .order("datum", { ascending: true })
-      .order("volgorde", { ascending: true });
 
+    const PLANNING_ORDER_SELECT = [
+      "id",
+      "status",
+      "source",
+      "type",
+      "reparatie_betaalwijze",
+      "te_betalen",
+      "al_betaald",
+      "betaald",
+      "bezorgtijd_voorkeur",
+      "route_nummer",
+      "route_naam",
+      "leg_nummer",
+      "rit_nummer",
+      "order_nummer",
+      "naam",
+      "adres_url",
+      "bel_link",
+      "bestelling_totaal_prijs",
+      "aantal_fietsen",
+      "producten",
+      "line_items_json",
+      "opmerkingen_klant",
+      "volledig_adres",
+      "telefoon_nummer",
+      "email",
+    ].join(", ");
+
+    const [mpPaused, slotsResult] = await Promise.all([
+      isMpPausedForOwner(supabase, ownerEmail),
+      supabase
+        .from("planning_slots")
+        .select("id, datum, volgorde, aankomsttijd, tijd_opmerking, status, order_id")
+        .eq("owner_email", ownerEmail)
+        .neq("status", "afgerond")
+        .order("datum", { ascending: true })
+        .order("volgorde", { ascending: true }),
+    ]);
+
+    const { data: slots, error: slotsErr } = slotsResult;
     if (slotsErr) {
       console.error("[api/planning]", slotsErr);
       return NextResponse.json(
@@ -40,7 +72,7 @@ export async function GET(request: NextRequest) {
     const orderIds = slotList.map((s: { order_id: string }) => s.order_id);
     const { data: ordersData, error: ordersErr } = await supabase
       .from("orders")
-      .select("*")
+      .select(PLANNING_ORDER_SELECT)
       .eq("owner_email", ownerEmail)
       .in("id", orderIds);
 
@@ -53,7 +85,10 @@ export async function GET(request: NextRequest) {
     }
 
     const ordersById = new Map(
-      (ordersData ?? []).map((o: Record<string, unknown>) => [o.id, o])
+      ((ordersData ?? []) as unknown as Record<string, unknown>[]).map((o) => [
+        o.id,
+        o,
+      ])
     );
 
     const rows = slotList

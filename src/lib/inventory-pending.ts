@@ -517,12 +517,11 @@ export async function listInventoryPendingProducts(
   return (data ?? []) as InventoryPendingProductRow[];
 }
 
+/** Goedkope badge-count: geen prune (die draait bij modal/list/sync). */
 export async function countInventoryPendingProducts(
   supabase: SupabaseClient,
   ownerEmail: string
 ): Promise<number> {
-  await pruneLinkedInventoryPendingProducts(supabase, ownerEmail);
-
   const { count, error } = await supabase
     .from("inventory_pending_products")
     .select("id", { count: "exact", head: true })
@@ -535,6 +534,7 @@ export async function countInventoryPendingProducts(
 /**
  * Verwijder pending-items die al een voorraadregel hebben (bijv. via zoeken/sync
  * aangemaakt zonder de wachtrij te legen).
+ * Laadt inventory één keer i.p.v. N× link-checks.
  */
 export async function pruneLinkedInventoryPendingProducts(
   supabase: SupabaseClient,
@@ -547,25 +547,59 @@ export async function pruneLinkedInventoryPendingProducts(
   if (error) throw new Error(error.message);
   if (!pendingRows?.length) return 0;
 
-  let removed = 0;
+  const [{ data: inventoryRows }, { data: deductionRows }] = await Promise.all([
+    supabase
+      .from("inventory_products")
+      .select("shopify_product_id, shopify_variant_id, shopify_variant_ids")
+      .eq("owner_email", ownerEmail),
+    supabase
+      .from("inventory_shopify_deductions")
+      .select("shopify_product_id")
+      .eq("owner_email", ownerEmail),
+  ]);
+
+  const linkedProductIds = new Set<number>();
+  const linkedVariantIds = new Set<number>();
+  for (const row of inventoryRows ?? []) {
+    const pid = Number(row.shopify_product_id);
+    if (Number.isFinite(pid) && pid > 0) linkedProductIds.add(pid);
+    const vid = Number(row.shopify_variant_id);
+    if (Number.isFinite(vid) && vid > 0) linkedVariantIds.add(vid);
+    for (const id of row.shopify_variant_ids ?? []) {
+      const n = Number(id);
+      if (Number.isFinite(n) && n > 0) linkedVariantIds.add(n);
+    }
+  }
+  for (const row of deductionRows ?? []) {
+    const pid = Number(row.shopify_product_id);
+    if (Number.isFinite(pid) && pid > 0) linkedProductIds.add(pid);
+  }
+
+  const toRemove: number[] = [];
   for (const row of pendingRows) {
     const shopifyProductId = Number(row.shopify_product_id);
+    if (!Number.isFinite(shopifyProductId) || shopifyProductId <= 0) continue;
+    if (linkedProductIds.has(shopifyProductId)) {
+      toRemove.push(shopifyProductId);
+      continue;
+    }
     const variantIds = (row.shopify_variant_ids ?? [])
       .map((id: number) => Number(id))
       .filter((id: number) => Number.isFinite(id) && id > 0);
-    if (
-      await isShopifyProductLinkedToInventory(
-        supabase,
-        ownerEmail,
-        shopifyProductId,
-        variantIds
-      )
-    ) {
-      await clearInventoryPendingProduct(supabase, ownerEmail, shopifyProductId);
-      removed++;
+    if (variantIds.some((id: number) => linkedVariantIds.has(id))) {
+      toRemove.push(shopifyProductId);
     }
   }
-  return removed;
+
+  if (toRemove.length === 0) return 0;
+
+  const { error: delErr } = await supabase
+    .from("inventory_pending_products")
+    .delete()
+    .eq("owner_email", ownerEmail)
+    .in("shopify_product_id", toRemove);
+  if (delErr) throw new Error(delErr.message);
+  return toRemove.length;
 }
 
 type ApplyMode = "new_rule" | "link_existing";

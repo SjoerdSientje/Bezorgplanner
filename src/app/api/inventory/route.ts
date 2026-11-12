@@ -6,6 +6,7 @@ import {
 } from "@/lib/account";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import {
+  computeInventoryStatsFromRows,
   getInventoryStats,
   getInventoryLinkedShopifyProducts,
   syncInventoryFromShopify,
@@ -16,11 +17,38 @@ import {
   parseIsoDateOnly,
   pushInventoryLevertijdMetafieldsToShopifyProducts,
 } from "@/lib/inventory-levertijd";
+import { getAmsterdamCalendarDate, getAmsterdamDayUtcRange } from "@/lib/planning-date";
 import { ShopifyAdminError } from "@/lib/shopify-admin";
 
 export const dynamic = "force-dynamic";
 /** Volledige Shopify-catalogus-sync; nieuwe producten gaan naar de review-wachtrij. */
 export const maxDuration = 120;
+
+/** Lijst-UI kolommen — geen shopify_variant_ids / moneybird arrays op elke load. */
+const INVENTORY_LIST_SELECT = [
+  "id",
+  "owner_email",
+  "shopify_product_id",
+  "shopify_variant_id",
+  "title",
+  "variant_title",
+  "product_type",
+  "vendor",
+  "tags",
+  "category",
+  "stock_quantity",
+  "image_url",
+  "group_key",
+  "model_name",
+  "color_name",
+  "levertijd",
+  "restock_datum",
+  "opmerking",
+  "low_stock_threshold",
+  "last_mutation_source",
+  "created_at",
+  "updated_at",
+].join(", ");
 
 export async function GET(request: NextRequest) {
   try {
@@ -31,7 +59,7 @@ export async function GET(request: NextRequest) {
 
     let query = supabase
       .from("inventory_products")
-      .select("*")
+      .select(INVENTORY_LIST_SELECT)
       .eq("owner_email", ownerEmail)
       .order("title", { ascending: true });
 
@@ -44,27 +72,42 @@ export async function GET(request: NextRequest) {
       query = query.eq("category", category as InventoryCategory);
     }
 
-    const [{ data: products, error }, stats, pendingCount] = await Promise.all([
-      query,
-      getInventoryStats(supabase, ownerEmail),
-      countInventoryPendingProducts(supabase, ownerEmail).catch(() => 0),
-    ]);
+    const today = getAmsterdamCalendarDate(0);
+    const { startUtcIso, endUtcIsoExclusive } = getAmsterdamDayUtcRange(today);
+
+    const [{ data: products, error }, pendingCount, mutationsCountResult] =
+      await Promise.all([
+        query,
+        countInventoryPendingProducts(supabase, ownerEmail).catch(() => 0),
+        supabase
+          .from("inventory_mutations")
+          .select("id", { count: "exact", head: true })
+          .eq("owner_email", ownerEmail)
+          .gte("created_at", startUtcIso)
+          .lt("created_at", endUtcIsoExclusive),
+      ]);
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    const list = products ?? [];
+    type ListRow = {
+      id: string;
+      stock_quantity: number;
+      low_stock_threshold?: number | null;
+      [key: string]: unknown;
+    };
+    const list = (products ?? []) as unknown as ListRow[];
     const { getReservedQuantitiesByProductIds } = await import(
       "@/lib/inventory-reservations"
     );
     const reservedMap = await getReservedQuantitiesByProductIds(
       supabase,
       ownerEmail,
-      list.map((p: { id: string }) => String(p.id))
+      list.map((p) => String(p.id))
     );
 
-    const productsWithReserved = list.map((p: { id: string; stock_quantity: number }) => {
+    const productsWithReserved = list.map((p) => {
       const reserved = reservedMap.get(String(p.id)) ?? 0;
       return {
         ...p,
@@ -72,6 +115,12 @@ export async function GET(request: NextRequest) {
         sellable_quantity: Number(p.stock_quantity ?? 0) - reserved,
       };
     });
+
+    const stats = computeInventoryStatsFromRows(
+      list,
+      reservedMap,
+      mutationsCountResult.count ?? 0
+    );
 
     return NextResponse.json(
       { products: productsWithReserved, stats, pendingCount },

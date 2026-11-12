@@ -61,68 +61,78 @@ export function isOrderMarkedCompleted(row: {
   return Boolean(row.afgerond_at);
 }
 
+async function batchRepairStatus(
+  supabase: SupabaseClient,
+  ownerEmail: string,
+  rows: Array<{
+    id: string;
+    source?: string | null;
+    type?: string | null;
+    reparatie_betaalwijze?: string | null;
+    moneybird_invoice_id?: string | null;
+    mp_tags?: string | null;
+    order_nummer?: string | null;
+    status?: string | null;
+  }>
+): Promise<number> {
+  const byStatus = new Map<CompletedOrderStatus, string[]>();
+  for (const row of rows) {
+    const next = inferCompletedStatus(row);
+    const current = String(row.status ?? "").trim();
+    if (current === next) continue;
+    const list = byStatus.get(next) ?? [];
+    list.push(String(row.id));
+    byStatus.set(next, list);
+  }
+
+  let repaired = 0;
+  for (const [status, ids] of Array.from(byStatus.entries())) {
+    if (ids.length === 0) continue;
+    const { error: updErr } = await supabase
+      .from("orders")
+      .update({ status })
+      .eq("owner_email", ownerEmail)
+      .in("id", ids);
+    if (!updErr) repaired += ids.length;
+    else console.error("[order-completion] repair batch update", updErr);
+  }
+  return repaired;
+}
+
 /**
  * Herstel:
- * 1) ritjes_vandaag + afgerond_at (Shopify-webhook die status terugzette)
- * 2) afgeronde reparatie-orders naar de juiste bestemming (bezorgd vs mp_orders)
+ * 1) open lijsten + afgerond_at (Shopify-webhook die status terugzette)
+ * 2) afgeronde reparaties die nog in ritjes/gepland staan
+ * Geen volledige historische scan van alle afgeronde reparaties op elke page-load.
  */
 export async function repairCompletedOrdersWithWrongStatus(
   supabase: SupabaseClient,
   ownerEmail: string
 ): Promise<number> {
-  let repaired = 0;
-
-  const { data: brokenShopifyLike, error: brokenErr } = await supabase
+  const { data: brokenOpen, error: brokenErr } = await supabase
     .from("orders")
     .select(
       "id, source, type, reparatie_betaalwijze, moneybird_invoice_id, mp_tags, order_nummer, status"
     )
     .eq("owner_email", ownerEmail)
-    .eq("status", "ritjes_vandaag")
+    .in("status", ["ritjes_vandaag", "gepland"])
     .not("afgerond_at", "is", null);
 
   if (brokenErr) {
-    console.error("[order-completion] repair query (ritjes+afgerond)", brokenErr);
-  } else {
-    for (const row of brokenShopifyLike ?? []) {
-      const next = inferCompletedStatus(row);
-      const { error: updErr } = await supabase
-        .from("orders")
-        .update({ status: next })
-        .eq("id", row.id)
-        .eq("owner_email", ownerEmail);
-      if (!updErr) repaired += 1;
-      else console.error("[order-completion] repair update", updErr);
-    }
+    console.error("[order-completion] repair query (open+afgerond)", brokenErr);
+    return 0;
   }
 
-  // Reparaties die al afgerond zijn maar in de verkeerde lijst staan.
-  const { data: reparaties, error: repErr } = await supabase
-    .from("orders")
-    .select(
-      "id, source, type, reparatie_betaalwijze, moneybird_invoice_id, mp_tags, order_nummer, status"
-    )
-    .eq("owner_email", ownerEmail)
-    .eq("source", "reparatie")
-    .not("afgerond_at", "is", null);
+  type RepairRow = {
+    id: string;
+    source?: string | null;
+    type?: string | null;
+    reparatie_betaalwijze?: string | null;
+    moneybird_invoice_id?: string | null;
+    mp_tags?: string | null;
+    order_nummer?: string | null;
+    status?: string | null;
+  };
 
-  if (repErr) {
-    console.error("[order-completion] repair query (reparatie)", repErr);
-    return repaired;
-  }
-
-  for (const row of reparaties ?? []) {
-    const next = inferCompletedStatus(row);
-    const current = String(row.status ?? "").trim();
-    if (current === next) continue;
-    const { error: updErr } = await supabase
-      .from("orders")
-      .update({ status: next })
-      .eq("id", row.id)
-      .eq("owner_email", ownerEmail);
-    if (!updErr) repaired += 1;
-    else console.error("[order-completion] reparatie status fix", updErr);
-  }
-
-  return repaired;
+  return batchRepairStatus(supabase, ownerEmail, (brokenOpen ?? []) as RepairRow[]);
 }

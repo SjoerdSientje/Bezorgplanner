@@ -450,15 +450,21 @@ export default function PlanningPage() {
     fetchPlanning();
   }, [fetchPlanning]);
 
-  // Auto-refresh als de gebruiker terugkeert naar dit tabblad / venster.
+  // Auto-refresh bij terugkeer naar tab — max 1× per 60s (niet bij elke focus).
   useEffect(() => {
-    const onFocus = () => fetchPlanning();
-    const onVisible = () => { if (document.visibilityState === "visible") fetchPlanning(); };
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", onVisible);
+    let lastFetchAt = Date.now();
+    const maybeRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      const now = Date.now();
+      if (now - lastFetchAt < 60_000) return;
+      lastFetchAt = now;
+      void fetchPlanning();
+    };
+    window.addEventListener("focus", maybeRefresh);
+    document.addEventListener("visibilitychange", maybeRefresh);
     return () => {
-      window.removeEventListener("focus", onFocus);
-      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", maybeRefresh);
+      document.removeEventListener("visibilitychange", maybeRefresh);
     };
   }, [fetchPlanning]);
 
