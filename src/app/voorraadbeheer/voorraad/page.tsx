@@ -12,6 +12,12 @@ import {
   type InventoryProductRow,
   type InventorySource,
 } from "@/lib/inventory";
+import {
+  attachInventoryStockPool,
+  groupInventoryByStockPool,
+  underlyingStockLabel,
+  type InventoryListEntry,
+} from "@/lib/inventory-stock-pools";
 import { getAmsterdamCalendarDate } from "@/lib/planning-date";
 import { matchesSearchQuery } from "@/lib/search-match";
 
@@ -128,8 +134,58 @@ function linkRoleLabel(role: LinkedShopifyProduct["role"]): string {
 function matchesInventorySearch(product: InventoryProductRow, query: string): boolean {
   const q = query.trim();
   if (!q) return true;
-  const hay = `${product.title} ${product.model_name ?? ""} ${product.color_name ?? ""} ${product.category} ${product.levertijd ?? ""} ${product.restock_datum ?? ""} ${product.opmerking ?? ""}`;
+  const hay = `${product.title} ${product.stock_pool_title ?? ""} ${product.model_name ?? ""} ${product.color_name ?? ""} ${product.category} ${product.levertijd ?? ""} ${product.restock_datum ?? ""} ${product.opmerking ?? ""}`;
   return matchesSearchQuery(hay, q);
+}
+
+function poolTotals(members: InventoryProductRow[]) {
+  const stock = members.reduce((sum, product) => sum + Number(product.stock_quantity || 0), 0);
+  const reserved = members.reduce((sum, product) => sum + reservedOf(product), 0);
+  const sellable = members.reduce((sum, product) => sum + sellableOf(product), 0);
+  const thresholds = members
+    .map((product) => effectiveLowStockThreshold(product.low_stock_threshold))
+    .filter((value) => value > 0);
+  return {
+    stock,
+    reserved,
+    sellable,
+    threshold: thresholds.length > 0 ? Math.min(...thresholds) : 0,
+  };
+}
+
+function memberMatchesStockFilter(product: InventoryProductRow, stockFilter: StockFilter): boolean {
+  if (stockFilter === "alle") return true;
+  const sellable = sellableOf(product);
+  const threshold = effectiveLowStockThreshold(product.low_stock_threshold);
+  if (stockFilter === "laag") return sellable > 0 && threshold > 0 && sellable <= threshold;
+  return sellable <= 0;
+}
+
+function PoolStock({ members }: { members: InventoryProductRow[] }) {
+  const totals = poolTotals(members);
+  return (
+    <span
+      className="inline-flex items-center gap-1"
+      title="Som van de onderliggende voorraden"
+    >
+      <span
+        className={`font-medium tabular-nums ${stockClass(totals.sellable, totals.threshold)}`}
+      >
+        {totals.stock}
+      </span>
+      {totals.reserved > 0 && (
+        <span
+          className="inline-flex items-center text-amber-500"
+          title={`${totals.reserved} gereserveerd`}
+          aria-label={`${totals.reserved} gereserveerd`}
+        >
+          <svg viewBox="0 0 20 20" className="h-3.5 w-3.5" fill="currentColor" aria-hidden>
+            <path d="M10 2.5L18 17H2L10 2.5z" />
+          </svg>
+        </span>
+      )}
+    </span>
+  );
 }
 
 export default function VoorraadbeheerPage() {
@@ -238,26 +294,50 @@ export default function VoorraadbeheerPage() {
     load(false);
   }, [load]);
 
+  const pooledProducts = useMemo(
+    () => products.map((product) => attachInventoryStockPool(product)),
+    [products]
+  );
+
   const managePickProducts = useMemo(() => {
-    return products.filter((p) => matchesInventorySearch(p, manageSearch));
-  }, [products, manageSearch]);
+    return pooledProducts.filter((p) => matchesInventorySearch(p, manageSearch));
+  }, [pooledProducts, manageSearch]);
 
   const manageSelectedProducts = useMemo(() => {
-    return products.filter((p) => manageSelectedIds.has(p.id));
-  }, [products, manageSelectedIds]);
+    return pooledProducts.filter((p) => manageSelectedIds.has(p.id));
+  }, [pooledProducts, manageSelectedIds]);
 
-  const displayedProducts = useMemo(() => {
-    return products.filter((p) => {
-      if (filter !== "alle" && p.category !== filter) return false;
-      const sellable = sellableOf(p);
-      const threshold = effectiveLowStockThreshold(p.low_stock_threshold);
-      if (stockFilter === "laag" && !(sellable > 0 && threshold > 0 && sellable <= threshold)) {
+  const allEntries = useMemo(
+    () => groupInventoryByStockPool(pooledProducts),
+    [pooledProducts]
+  );
+
+  const displayedEntries = useMemo(() => {
+    return allEntries.filter((entry) => {
+      const members = entry.kind === "pool" ? entry.members : [entry.product];
+      if (filter !== "alle" && !members.some((product) => product.category === filter)) {
         return false;
       }
-      if (stockFilter === "uitverkocht" && sellable > 0) return false;
-      return matchesInventorySearch(p, inventorySearch);
+      const searchOk =
+        entry.kind === "pool"
+          ? matchesSearchQuery(entry.title, inventorySearch) ||
+            members.some((product) => matchesInventorySearch(product, inventorySearch))
+          : matchesInventorySearch(entry.product, inventorySearch);
+      if (!searchOk) return false;
+      if (stockFilter === "alle") return true;
+      if (entry.kind === "pool") {
+        const totals = poolTotals(members);
+        const totalMatches =
+          stockFilter === "laag"
+            ? totals.sellable > 0 &&
+              totals.threshold > 0 &&
+              totals.sellable <= totals.threshold
+            : totals.sellable <= 0;
+        return totalMatches || members.some((product) => memberMatchesStockFilter(product, stockFilter));
+      }
+      return memberMatchesStockFilter(entry.product, stockFilter);
     });
-  }, [products, filter, stockFilter, inventorySearch]);
+  }, [allEntries, filter, stockFilter, inventorySearch]);
 
   const toggleStockFilter = (f: StockFilter) => {
     setStockFilter((prev) => (prev === f ? "alle" : f));
@@ -1018,8 +1098,13 @@ export default function VoorraadbeheerPage() {
                     onChange={() => toggleManageProduct(p.id)}
                     className="h-4 w-4 shrink-0 rounded accent-koopje-orange"
                   />
-                  <span className="min-w-0 flex-1 truncate font-medium text-koopje-black">
-                    {p.title}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium text-koopje-black">{p.title}</span>
+                    {p.stock_pool_title ? (
+                      <span className="block truncate text-[11px] font-normal text-stone-400">
+                        Totaal: {p.stock_pool_title}
+                      </span>
+                    ) : null}
                   </span>
                   <span className={`shrink-0 text-xs ${stockClass(p.stock_quantity, effectiveLowStockThreshold(p.low_stock_threshold))}`}>
                     {p.stock_quantity}
@@ -1213,6 +1298,183 @@ export default function VoorraadbeheerPage() {
     </>
   );
 
+  const mobileProductCard = (product: InventoryProductRow, nested: boolean) => (
+    <div
+      key={product.id}
+      className={
+        nested
+          ? "rounded-lg border border-stone-200 bg-stone-50 p-3"
+          : "rounded-xl border border-stone-200 bg-white p-4 shadow-sm"
+      }
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <button
+            type="button"
+            onClick={() => toggleLinkedProducts(product.id)}
+            title={product.title}
+            className="w-full text-left font-medium leading-snug text-koopje-black underline decoration-stone-300 underline-offset-2 hover:decoration-koopje-orange"
+          >
+            {nested ? underlyingStockLabel(product.title) : product.title}
+            <span className="ml-1 text-xs font-normal text-stone-400 no-underline">
+              {expandedLinkId === product.id ? "▾" : "▸"}
+            </span>
+          </button>
+          <p className="mt-0.5 text-xs capitalize text-stone-500">
+            {nested ? "Onderliggende voorraad" : FILTER_LABELS[product.category as Filter] ?? product.category}
+          </p>
+          {linkedProductsPanel(product.id)}
+        </div>
+        <span className="shrink-0">{stockCell(product)}</span>
+      </div>
+      <div className="mt-3 grid grid-cols-1 gap-2 text-sm">
+        <div className="flex gap-2">
+          <span className="w-20 shrink-0 text-xs font-medium uppercase text-stone-400">
+            Levertijd
+          </span>
+          <span className="min-w-0 text-stone-700">{displayLevertijd(product)}</span>
+        </div>
+        <div className="flex flex-col gap-1">
+          <span className="text-xs font-medium uppercase text-stone-400">
+            Opmerking
+            {savingOpmerkingId === product.id ? (
+              <span className="ml-1 normal-case text-stone-400">opslaan…</span>
+            ) : null}
+          </span>
+          {opmerkingInput(
+            product,
+            "w-full rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-sm text-stone-700 placeholder:text-stone-300 focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
+          )}
+        </div>
+      </div>
+      <div className="mt-3 flex items-center justify-between gap-2 border-t border-stone-100 pt-3">
+        <span className="text-xs text-stone-400">{sourceLabel(product.last_mutation_source)}</span>
+        <button
+          type="button"
+          onClick={() => openEditModal(product)}
+          className="rounded-lg border border-koopje-orange px-3 py-1.5 text-xs font-medium text-koopje-orange hover:bg-koopje-orange-light"
+        >
+          Aanpassen
+        </button>
+      </div>
+    </div>
+  );
+
+  const desktopProductRows = (product: InventoryProductRow, nested: boolean) => (
+    <Fragment key={product.id}>
+      <tr className={nested ? "border-t border-stone-100 bg-stone-50/80" : "border-t border-stone-100 hover:bg-stone-50/50"}>
+        <td className={`max-w-[14rem] py-3 font-medium text-koopje-black xl:max-w-xs ${nested ? "pl-8 pr-4" : "px-4"}`}>
+          <button
+            type="button"
+            onClick={() => toggleLinkedProducts(product.id)}
+            title={product.title}
+            className="w-full text-left underline decoration-stone-300 underline-offset-2 hover:decoration-koopje-orange"
+          >
+            <span className="line-clamp-2">
+              {nested ? underlyingStockLabel(product.title) : product.title}
+            </span>
+            <span className="mt-0.5 block text-xs font-normal text-stone-400 no-underline">
+              {expandedLinkId === product.id
+                ? "Verberg Shopify-koppelingen"
+                : "Toon Shopify-koppelingen"}
+            </span>
+          </button>
+        </td>
+        <td className="px-3 py-3 capitalize text-stone-600">
+          {nested ? (
+            <span className="text-xs normal-case text-stone-400">Variant</span>
+          ) : (
+            FILTER_LABELS[product.category as Filter] ?? product.category
+          )}
+        </td>
+        <td className="px-3 py-3">{stockCell(product)}</td>
+        <td className="max-w-[8rem] px-3 py-3 text-stone-700">
+          <span className="line-clamp-2">{displayLevertijd(product)}</span>
+        </td>
+        <td className="min-w-[14rem] max-w-[22rem] px-3 py-2 xl:max-w-[28rem]">
+          {opmerkingInput(
+            product,
+            `w-full rounded-md border border-transparent bg-transparent px-1.5 py-1 text-sm text-stone-700 placeholder:text-stone-300 hover:border-stone-200 focus:border-koopje-orange focus:bg-white focus:outline-none focus:ring-1 focus:ring-koopje-orange ${
+              savingOpmerkingId === product.id ? "opacity-60" : ""
+            }`
+          )}
+        </td>
+        <td className="hidden px-3 py-3 text-stone-500 lg:table-cell">
+          {sourceLabel(product.last_mutation_source)}
+        </td>
+        <td className="px-4 py-3 text-right">
+          <button
+            type="button"
+            onClick={() => openEditModal(product)}
+            className="rounded-lg border border-koopje-orange px-3 py-1.5 text-xs font-medium text-koopje-orange hover:bg-koopje-orange-light"
+          >
+            Aanpassen
+          </button>
+        </td>
+      </tr>
+      {expandedLinkId === product.id && (
+        <tr className="border-t border-stone-50 bg-stone-50/80">
+          <td colSpan={7} className="px-4 py-3">
+            {linkedProductsPanel(product.id)}
+          </td>
+        </tr>
+      )}
+    </Fragment>
+  );
+
+  const renderEntry = (entry: InventoryListEntry<InventoryProductRow>, layout: "mobile" | "desktop") => {
+    if (entry.kind === "product") {
+      return layout === "mobile"
+        ? mobileProductCard(entry.product, false)
+        : desktopProductRows(entry.product, false);
+    }
+    const category = entry.members[0]?.category;
+    if (layout === "mobile") {
+      return (
+        <div key={entry.id} className="rounded-xl border border-stone-200 bg-white p-4 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="font-medium leading-snug text-koopje-black">{entry.title}</p>
+              <p className="mt-0.5 text-xs text-stone-500">
+                Totaal van de onderliggende voorraden
+                {category ? ` · ${FILTER_LABELS[category as Filter] ?? category}` : ""}
+              </p>
+            </div>
+            <span className="shrink-0">
+              <PoolStock members={entry.members} />
+            </span>
+          </div>
+          <div className="mt-3 space-y-3 border-t border-stone-100 pt-3">
+            {entry.members.map((member) => mobileProductCard(member, true))}
+          </div>
+        </div>
+      );
+    }
+    return (
+      <Fragment key={entry.id}>
+        <tr className="border-t border-stone-200 bg-white">
+          <td className="max-w-[14rem] px-4 py-3 font-medium text-koopje-black xl:max-w-xs">
+            <span className="line-clamp-2">{entry.title}</span>
+            <span className="mt-0.5 block text-xs font-normal text-stone-400">
+              Totaal van de onderliggende voorraden
+            </span>
+          </td>
+          <td className="px-3 py-3 capitalize text-stone-600">
+            {category ? FILTER_LABELS[category as Filter] ?? category : "—"}
+          </td>
+          <td className="px-3 py-3">
+            <PoolStock members={entry.members} />
+          </td>
+          <td className="px-3 py-3 text-stone-400">—</td>
+          <td className="px-3 py-3 text-xs text-stone-400">Per variant</td>
+          <td className="hidden px-3 py-3 text-stone-400 lg:table-cell">—</td>
+          <td className="px-4 py-3" />
+        </tr>
+        {entry.members.map((member) => desktopProductRows(member, true))}
+      </Fragment>
+    );
+  };
+
   return (
     <>
       <Header />
@@ -1368,7 +1630,7 @@ export default function VoorraadbeheerPage() {
               </button>
             ))}
             <span className="ml-auto self-center text-sm text-stone-500">
-              {displayedProducts.length} van {products.length} producten
+              {displayedEntries.length} van {allEntries.length} voorraadregels
             </span>
           </div>
 
@@ -1383,65 +1645,8 @@ export default function VoorraadbeheerPage() {
             <>
               {/* Mobiel: kaarten */}
               <div className="space-y-3 md:hidden">
-                {displayedProducts.map((p) => (
-                  <div
-                    key={p.id}
-                    className="rounded-xl border border-stone-200 bg-white p-4 shadow-sm"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 flex-1">
-                        <button
-                          type="button"
-                          onClick={() => toggleLinkedProducts(p.id)}
-                          className="w-full text-left font-medium leading-snug text-koopje-black underline decoration-stone-300 underline-offset-2 hover:decoration-koopje-orange"
-                        >
-                          {p.title}
-                          <span className="ml-1 text-xs font-normal text-stone-400 no-underline">
-                            {expandedLinkId === p.id ? "▾" : "▸"}
-                          </span>
-                        </button>
-                        <p className="mt-0.5 text-xs capitalize text-stone-500">
-                          {FILTER_LABELS[p.category as Filter] ?? p.category}
-                        </p>
-                        {linkedProductsPanel(p.id)}
-                      </div>
-                      <span className="shrink-0">{stockCell(p)}</span>
-                    </div>
-                    <div className="mt-3 grid grid-cols-1 gap-2 text-sm">
-                      <div className="flex gap-2">
-                        <span className="w-20 shrink-0 text-xs font-medium uppercase text-stone-400">
-                          Levertijd
-                        </span>
-                        <span className="min-w-0 text-stone-700">{displayLevertijd(p)}</span>
-                      </div>
-                      <div className="flex flex-col gap-1">
-                        <span className="text-xs font-medium uppercase text-stone-400">
-                          Opmerking
-                          {savingOpmerkingId === p.id ? (
-                            <span className="ml-1 normal-case text-stone-400">opslaan…</span>
-                          ) : null}
-                        </span>
-                        {opmerkingInput(
-                          p,
-                          "w-full rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-sm text-stone-700 placeholder:text-stone-300 focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
-                        )}
-                      </div>
-                    </div>
-                    <div className="mt-3 flex items-center justify-between gap-2 border-t border-stone-100 pt-3">
-                      <span className="text-xs text-stone-400">
-                        {sourceLabel(p.last_mutation_source)}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => openEditModal(p)}
-                        className="rounded-lg border border-koopje-orange px-3 py-1.5 text-xs font-medium text-koopje-orange hover:bg-koopje-orange-light"
-                      >
-                        Aanpassen
-                      </button>
-                    </div>
-                  </div>
-                ))}
-                {displayedProducts.length === 0 && (
+                {displayedEntries.map((entry) => renderEntry(entry, "mobile"))}
+                {displayedEntries.length === 0 && (
                   <p className="rounded-xl border border-stone-200 px-4 py-8 text-center text-stone-500">
                     {inventorySearch.trim()
                       ? "Geen producten gevonden voor deze zoekopdracht."
@@ -1465,61 +1670,8 @@ export default function VoorraadbeheerPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {displayedProducts.map((p) => (
-                      <Fragment key={p.id}>
-                        <tr className="border-t border-stone-100 hover:bg-stone-50/50">
-                          <td className="max-w-[14rem] px-4 py-3 font-medium text-koopje-black xl:max-w-xs">
-                            <button
-                              type="button"
-                              onClick={() => toggleLinkedProducts(p.id)}
-                              className="w-full text-left underline decoration-stone-300 underline-offset-2 hover:decoration-koopje-orange"
-                            >
-                              <span className="line-clamp-2">{p.title}</span>
-                              <span className="mt-0.5 block text-xs font-normal text-stone-400 no-underline">
-                                {expandedLinkId === p.id
-                                  ? "Verberg Shopify-koppelingen"
-                                  : "Toon Shopify-koppelingen"}
-                              </span>
-                            </button>
-                          </td>
-                          <td className="px-3 py-3 capitalize text-stone-600">
-                            {FILTER_LABELS[p.category as Filter] ?? p.category}
-                          </td>
-                          <td className="px-3 py-3">{stockCell(p)}</td>
-                          <td className="max-w-[8rem] px-3 py-3 text-stone-700">
-                            <span className="line-clamp-2">{displayLevertijd(p)}</span>
-                          </td>
-                          <td className="min-w-[14rem] max-w-[22rem] px-3 py-2 xl:max-w-[28rem]">
-                            {opmerkingInput(
-                              p,
-                              `w-full rounded-md border border-transparent bg-transparent px-1.5 py-1 text-sm text-stone-700 placeholder:text-stone-300 hover:border-stone-200 focus:border-koopje-orange focus:bg-white focus:outline-none focus:ring-1 focus:ring-koopje-orange ${
-                                savingOpmerkingId === p.id ? "opacity-60" : ""
-                              }`
-                            )}
-                          </td>
-                          <td className="hidden px-3 py-3 text-stone-500 lg:table-cell">
-                            {sourceLabel(p.last_mutation_source)}
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <button
-                              type="button"
-                              onClick={() => openEditModal(p)}
-                              className="rounded-lg border border-koopje-orange px-3 py-1.5 text-xs font-medium text-koopje-orange hover:bg-koopje-orange-light"
-                            >
-                              Aanpassen
-                            </button>
-                          </td>
-                        </tr>
-                        {expandedLinkId === p.id && (
-                          <tr className="border-t border-stone-50 bg-stone-50/80">
-                            <td colSpan={7} className="px-4 py-3">
-                              {linkedProductsPanel(p.id)}
-                            </td>
-                          </tr>
-                        )}
-                      </Fragment>
-                    ))}
-                    {displayedProducts.length === 0 && (
+                    {displayedEntries.map((entry) => renderEntry(entry, "desktop"))}
+                    {displayedEntries.length === 0 && (
                       <tr>
                         <td colSpan={7} className="px-4 py-8 text-center text-stone-500">
                           {inventorySearch.trim()

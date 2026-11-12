@@ -39,6 +39,7 @@ import {
 } from "@/lib/inventory-pending";
 import { isOrderMarkedCompleted } from "@/lib/order-completion";
 import { scoreSearchMatch } from "@/lib/search-match";
+import { findInventoryStockPool } from "@/lib/inventory-stock-pools";
 
 export type InventoryCategory = "fiets" | "onderdeel" | "accessoire" | "overig";
 export type InventorySource =
@@ -105,6 +106,12 @@ export type InventoryProductRow = {
   reserved_quantity?: number;
   /** Alleen in API-responses: stock − reserved (mag negatief). */
   sellable_quantity?: number;
+  /**
+   * Gedeeld totaal waar deze regel onder hangt. De eigen stock_quantity blijft
+   * de onderliggende voorraad; het totaal in de lijst is de som van de groep.
+   */
+  stock_pool_id?: string | null;
+  stock_pool_title?: string | null;
   last_mutation_source: InventorySource | null;
   created_at: string;
   updated_at: string;
@@ -373,16 +380,26 @@ async function upsertInventoryGroups(
         ...matches.map((row) => row.stock_quantity)
       );
 
+      // Onderliggende voorraad in een kabel-groep houdt zijn eigen naam.
+      const updatePayload: Record<string, unknown> = { ...payload, stock_quantity: stockQuantity };
+      if (
+        findInventoryStockPool(primary.group_key) ||
+        findInventoryStockPool(payload.group_key)
+      ) {
+        delete updatePayload.title;
+        delete updatePayload.color_name;
+      }
+
       const { error } = await supabase
         .from("inventory_products")
-        .update({ ...payload, stock_quantity: stockQuantity })
+        .update(updatePayload)
         .eq("id", primary.id);
 
       if (!error) {
         updated++;
         rows = rows.map((row) =>
           row.id === primary.id
-            ? ({ ...row, ...payload, stock_quantity: stockQuantity } as InventoryProductRow)
+            ? ({ ...row, ...updatePayload, stock_quantity: stockQuantity } as InventoryProductRow)
             : row
         );
       }

@@ -20,6 +20,7 @@ import {
   partsGroupKeyFromTitle,
 } from "@/lib/inventory-parts-rules";
 import type { InventoryCategory, InventoryProductRow } from "@/lib/inventory";
+import { findInventoryStockPool } from "@/lib/inventory-stock-pools";
 
 function productImageUrl(product: ShopifyAdminProduct): string | null {
   return product.image?.src ?? null;
@@ -295,9 +296,18 @@ export async function rebuildPartsInventoryFromShopifyCollections(
     }
 
     if (existing) {
+      const pooled = findInventoryStockPool(existing.group_key);
+      const rowPayload = pooled
+        ? {
+            ...payload,
+            title: existing.title,
+            color_name: existing.color_name,
+            group_key: existing.group_key,
+          }
+        : payload;
       const { data, error } = await supabase
         .from("inventory_products")
-        .update(payload)
+        .update(rowPayload)
         .eq("id", existing.id)
         .eq("owner_email", ownerEmail)
         .select("id, group_key, title, category")
@@ -308,7 +318,7 @@ export async function rebuildPartsInventoryFromShopifyCollections(
       }
       const id = data?.id ?? existing.id;
       inventoryIdByCanonical.set(normalizePartsTitle(bucket.canonicalTitle), id);
-      rememberExisting({ ...existing, ...payload, id } as InventoryProductRow);
+      rememberExisting({ ...existing, ...rowPayload, id } as InventoryProductRow);
       stockRowsUpserted++;
     } else {
       const { data, error } = await supabase
@@ -330,9 +340,19 @@ export async function rebuildPartsInventoryFromShopifyCollections(
           .eq("group_key", bucket.groupKey)
           .maybeSingle();
         if (conflict) {
+          const existingConflict = conflict as InventoryProductRow;
+          const pooled = findInventoryStockPool(existingConflict.group_key);
+          const rowPayload = pooled
+            ? {
+                ...payload,
+                title: existingConflict.title,
+                color_name: existingConflict.color_name,
+                group_key: existingConflict.group_key,
+              }
+            : payload;
           const { data: updated, error: upErr } = await supabase
             .from("inventory_products")
-            .update(payload)
+            .update(rowPayload)
             .eq("id", conflict.id)
             .eq("owner_email", ownerEmail)
             .select("id")
@@ -343,7 +363,7 @@ export async function rebuildPartsInventoryFromShopifyCollections(
           }
           const id = updated?.id ?? conflict.id;
           inventoryIdByCanonical.set(normalizePartsTitle(bucket.canonicalTitle), id);
-          rememberExisting({ ...(conflict as InventoryProductRow), ...payload, id });
+          rememberExisting({ ...existingConflict, ...rowPayload, id });
           stockRowsUpserted++;
         } else {
           warnings.push(`Insert mislukt ${bucket.canonicalTitle}: ${error.message}`);

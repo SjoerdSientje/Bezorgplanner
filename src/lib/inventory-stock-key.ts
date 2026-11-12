@@ -274,9 +274,12 @@ function shortTrimLabel(optionName: string, value: string): string {
     return value.trim();
   }
   if (optionName === "Motorkabel") {
-    if (/rood/i.test(value)) return "Rode kabel";
-    if (/zwart/i.test(value)) return "Zwarte kabel";
-    return value.trim();
+    const trimmed = value.trim();
+    // "Rode motorkabel" blijft staan; los "Rood"/"Zwart" wordt "Rode kabel".
+    if (/motorkabel/i.test(trimmed)) return trimmed;
+    if (/rood/i.test(trimmed)) return "Rode kabel";
+    if (/zwart/i.test(trimmed)) return "Zwarte kabel";
+    return trimmed;
   }
   return value.trim();
 }
