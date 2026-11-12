@@ -278,39 +278,66 @@ async function buildPendingMeta(product: ShopifyAdminProduct) {
 }
 
 /**
- * products/update + nog niet gekoppeld: géén nieuwe wachtrijrij.
- * Wel bestaande pending bijwerken; draft/archived → active telt als heractivatie.
+ * products/update + actief + nog niet gekoppeld:
+ * Alleen “nieuw in wachtrij” bij draft/andere → active (bestaande inactive pending).
+ * Gewone updates (titel/prijs) op een al-actief product: géén nieuwe enqueue.
  */
 export async function touchInventoryPendingOnUpdate(
   supabase: SupabaseClient,
   ownerEmail: string,
   product: ShopifyAdminProduct
-): Promise<{ touched: boolean; reactivated: boolean; pendingId?: string }> {
+): Promise<{
+  touched: boolean;
+  reactivated: boolean;
+  enqueued: boolean;
+  pendingId?: string;
+}> {
   if (!isShopifyProductActive(product) || isExcludedFromInventory(product)) {
-    return { touched: false, reactivated: false };
+    return { touched: false, reactivated: false, enqueued: false };
   }
   const meta = await buildPendingMeta(product);
   const { data: existing } = await supabase
     .from("inventory_pending_products")
-    .select("id, status")
+    .select("id, status, ai_suggestion")
     .eq("owner_email", ownerEmail)
     .eq("shopify_product_id", meta.shopifyProductId)
     .maybeSingle();
+
+  // Geen eerdere pending (nooit als draft gezien) → geen enqueue op update.
   if (!existing?.id) {
-    return { touched: false, reactivated: false };
+    return { touched: false, reactivated: false, enqueued: false };
   }
+
   const wasInactive = !isActivePendingStatus(existing.status);
+  const reactivated = wasInactive && isActivePendingStatus(meta.status);
+  // AI alleen bij heractivatie of als die nog ontbreekt (niet bij elke titelwijziging).
+  const needsAi =
+    reactivated ||
+    existing.ai_suggestion == null ||
+    (typeof existing.ai_suggestion === "object" &&
+      existing.ai_suggestion !== null &&
+      Object.keys(existing.ai_suggestion as object).length === 0);
+
+  const patch: Record<string, unknown> = {
+    shopify_variant_ids: meta.variants,
+    title: meta.title,
+    status: meta.status,
+    category: meta.category,
+    collection_handles: meta.collectionHandles,
+    image_url: meta.image_url,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (needsAi) {
+    patch.ai_suggestion = await suggestInventoryPendingAction(supabase, ownerEmail, {
+      title: product.title,
+      category: meta.category,
+    });
+  }
+
   const { error } = await supabase
     .from("inventory_pending_products")
-    .update({
-      shopify_variant_ids: meta.variants,
-      title: meta.title,
-      status: meta.status,
-      category: meta.category,
-      collection_handles: meta.collectionHandles,
-      image_url: meta.image_url,
-      updated_at: new Date().toISOString(),
-    })
+    .update(patch)
     .eq("id", existing.id);
   if (error) {
     console.error("[inventory-pending] touch update:", error.message);
@@ -318,7 +345,9 @@ export async function touchInventoryPendingOnUpdate(
   }
   return {
     touched: true,
-    reactivated: wasInactive && isActivePendingStatus(meta.status),
+    reactivated,
+    // Alleen draft/andere → active telt als “nieuw in Nieuwe producten”.
+    enqueued: reactivated,
     pendingId: existing.id,
   };
 }
@@ -405,25 +434,39 @@ export async function enqueueInventoryPendingProduct(
     .eq("shopify_product_id", shopifyProductId)
     .maybeSingle();
 
-  // Bestaande wachtrijregel: metadata bijwerken, AI niet opnieuw aanroepen.
+  // Bestaande wachtrijregel: metadata bijwerken; AI alleen als die nog ontbreekt.
   if (existingPending?.id) {
+    const wasInactive = !isActivePendingStatus(existingPending.status);
+    const needsAi =
+      wasInactive ||
+      existingPending.ai_suggestion == null ||
+      (typeof existingPending.ai_suggestion === "object" &&
+        existingPending.ai_suggestion !== null &&
+        Object.keys(existingPending.ai_suggestion as object).length === 0);
+    const patch: Record<string, unknown> = {
+      shopify_variant_ids: meta.variants,
+      title: meta.title,
+      status: meta.status,
+      category: meta.category,
+      collection_handles: meta.collectionHandles,
+      image_url: meta.image_url,
+      updated_at: new Date().toISOString(),
+    };
+    if (needsAi) {
+      patch.ai_suggestion = await suggestInventoryPendingAction(supabase, ownerEmail, {
+        title: product.title,
+        category: meta.category,
+      });
+    }
     const { error: updErr } = await supabase
       .from("inventory_pending_products")
-      .update({
-        shopify_variant_ids: meta.variants,
-        title: meta.title,
-        status: meta.status,
-        category: meta.category,
-        collection_handles: meta.collectionHandles,
-        image_url: meta.image_url,
-        updated_at: new Date().toISOString(),
-      })
+      .update(patch)
       .eq("id", existingPending.id);
     if (updErr) {
       console.error("[inventory-pending] enqueue update:", updErr.message);
       throw new Error(updErr.message);
     }
-    return { enqueued: false, pendingId: existingPending.id };
+    return { enqueued: wasInactive, pendingId: existingPending.id };
   }
 
   const suggestion = await suggestInventoryPendingAction(supabase, ownerEmail, {

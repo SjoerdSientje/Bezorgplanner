@@ -504,7 +504,8 @@ export async function removeInventoryProductByShopifyId(
  *
  * Wachtrij (“Nieuwe producten”):
  * - create / sync → enqueue als actief + nog niet gekoppeld
- * - update → géén nieuwe wachtrijrij (alleen bestaande pending bijwerken, of draft→active)
+ * - update → alleen draft/andere → active (bestaande inactive pending + AI);
+ *   géén enqueue bij gewone updates van al-actieve producten
  */
 export async function syncInventoryProductFromShopify(
   supabase: SupabaseClient,
@@ -547,7 +548,7 @@ export async function syncInventoryProductFromShopify(
     variantIds
   );
 
-  // Nog niet gekoppeld: alleen bij create/sync of heractivatie (bestond al als pending).
+  // Nog niet gekoppeld: create/sync enqueue; update alleen bij draft/andere → active.
   if (!linked) {
     if (event === "update") {
       const { touchInventoryPendingOnUpdate } = await import("@/lib/inventory-pending");
@@ -560,7 +561,7 @@ export async function syncInventoryProductFromShopify(
         inserted: 0,
         updated: 0,
         removed: 0,
-        enqueued: touched.reactivated,
+        enqueued: touched.enqueued,
       };
     }
     const { enqueued } = await enqueueInventoryPendingProduct(
@@ -638,7 +639,7 @@ export async function syncInventoryProductFromShopify(
         inserted: 0,
         updated: 0,
         removed: 0,
-        enqueued: touched.reactivated,
+        enqueued: touched.enqueued,
       };
     }
     const { enqueued } = await enqueueInventoryPendingProduct(
