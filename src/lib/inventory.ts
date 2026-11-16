@@ -521,8 +521,8 @@ export async function removeInventoryProductByShopifyId(
  *
  * Wachtrij (“Nieuwe producten”):
  * - create / sync → enqueue als actief + nog niet gekoppeld
- * - update → alleen draft/andere → active (bestaande inactive pending + AI);
- *   géén enqueue bij gewone updates van al-actieve producten
+ * - update → draft→active, of actief zonder pending-rij (gemiste draft-webhook);
+ *   al-actieve pending alleen metadata bijwerken
  */
 export async function syncInventoryProductFromShopify(
   supabase: SupabaseClient,

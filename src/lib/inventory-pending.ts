@@ -279,8 +279,9 @@ async function buildPendingMeta(product: ShopifyAdminProduct) {
 
 /**
  * products/update + actief + nog niet gekoppeld:
- * Alleen “nieuw in wachtrij” bij draft/andere → active (bestaande inactive pending).
- * Gewone updates (titel/prijs) op een al-actief product: géén nieuwe enqueue.
+ * - draft/andere → active met bestaande pending: heractiveer in de wachtrij
+ * - geen pending-rij (create/draft-webhook gemist): alsnog enqueue
+ * - al-actieve pending: alleen metadata bijwerken, géén “nieuw”-melding
  */
 export async function touchInventoryPendingOnUpdate(
   supabase: SupabaseClient,
@@ -303,9 +304,19 @@ export async function touchInventoryPendingOnUpdate(
     .eq("shopify_product_id", meta.shopifyProductId)
     .maybeSingle();
 
-  // Geen eerdere pending (nooit als draft gezien) → geen enqueue op update.
+  // Geen eerdere pending (create/draft-webhook gemist) → alsnog in wachtrij.
   if (!existing?.id) {
-    return { touched: false, reactivated: false, enqueued: false };
+    const enqueued = await enqueueInventoryPendingProduct(
+      supabase,
+      ownerEmail,
+      product
+    );
+    return {
+      touched: enqueued.enqueued || Boolean(enqueued.pendingId),
+      reactivated: false,
+      enqueued: enqueued.enqueued,
+      pendingId: enqueued.pendingId,
+    };
   }
 
   const wasInactive = !isActivePendingStatus(existing.status);
