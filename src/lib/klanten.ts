@@ -2,7 +2,9 @@ import { splitMoneybirdAddress1 } from "@/lib/moneybird-contact-shared";
 import { splitVolledigAdres } from "@/lib/adres-fields";
 import {
   encodeKlantId,
+  klantMatchesSearchPrefix,
   parseKlantId,
+  splitNaamToVoorAchternaam,
   type Klant,
 } from "@/lib/klanten-shared";
 import {
@@ -15,7 +17,11 @@ import {
 import { createServerSupabaseClient } from "@/lib/supabase";
 
 export type { Klant } from "@/lib/klanten-shared";
-export { encodeKlantId, parseKlantId } from "@/lib/klanten-shared";
+export {
+  encodeKlantId,
+  klantMatchesSearchPrefix,
+  parseKlantId,
+} from "@/lib/klanten-shared";
 
 type MpCustomerRow = {
   id: string;
@@ -29,10 +35,14 @@ type MpCustomerRow = {
 function fromMoneybird(contact: MoneybirdContact): Klant {
   const { straatnaam, huisnummer } = splitMoneybirdAddress1(contact.address1);
   const email = String(contact.email ?? "").trim().toLowerCase();
+  const voornaam = String(contact.firstname ?? "").trim();
+  const achternaam = String(contact.lastname ?? "").trim();
   return {
     id: encodeKlantId("mb", String(contact.id)),
     email,
     naam: moneybirdContactDisplayName(contact),
+    voornaam,
+    achternaam,
     telefoon: String(contact.phone ?? "").trim(),
     straatnaam,
     huisnummer,
@@ -48,10 +58,13 @@ function fromMpRow(row: MpCustomerRow): Klant {
   const adres = splitVolledigAdres(String(row.volledig_adres ?? ""));
   const email = String(row.email ?? "").trim().toLowerCase();
   const naam = String(row.naam ?? "").trim();
+  const { voornaam, achternaam } = splitNaamToVoorAchternaam(naam);
   return {
     id: encodeKlantId("mp", row.id),
     email,
     naam: naam || email || "MP-klant",
+    voornaam,
+    achternaam,
     telefoon: String(row.telefoon_nummer ?? "").trim(),
     straatnaam: adres.straatnaam,
     huisnummer: adres.huisnummer,
@@ -69,13 +82,14 @@ function mergePreferMoneybird(mb: Klant, mp: Klant): Klant {
     ...mb,
     bronnen: { moneybird: true, mp: true },
     mpOrderId: mp.mpOrderId,
-    // Vul lege MB-velden aan met MP.
     telefoon: mb.telefoon || mp.telefoon,
     straatnaam: mb.straatnaam || mp.straatnaam,
     huisnummer: mb.huisnummer || mp.huisnummer,
     postcode: mb.postcode || mp.postcode,
     woonplaats: mb.woonplaats || mp.woonplaats,
     naam: mb.naam || mp.naam,
+    voornaam: mb.voornaam || mp.voornaam,
+    achternaam: mb.achternaam || mp.achternaam,
   };
 }
 
@@ -106,10 +120,9 @@ async function listMpCustomerRows(
     .order("afgerond_at", { ascending: false, nullsFirst: false })
     .limit(limit * 2);
 
-  if (q.length >= 2) {
-    req = req.or(
-      `email.ilike.%${q}%,naam.ilike.%${q}%,telefoon_nummer.ilike.%${q}%`
-    );
+  // Brede kandidaten (prefix e-mail/naam of achternaam ergens in naam); strikte filter daarna.
+  if (q.length >= 1) {
+    req = req.or(`email.ilike.${q}%,naam.ilike.${q}%,naam.ilike.% ${q}%`);
   }
 
   const { data, error } = await req;
@@ -135,7 +148,7 @@ function uniqueMpKlanten(rows: MpCustomerRow[]): Klant[] {
 
 /**
  * Gecombineerde klantenlijst: Moneybird + afgeronde MP-orders.
- * Zelfde e-mail → één rij (Moneybird-gegevens, beide bronnen).
+ * Zoeken: alleen voornaam / achternaam / e-mail die begint met de query.
  */
 export async function searchKlanten(
   ownerEmail: string,
@@ -152,7 +165,7 @@ export async function searchKlanten(
   const [mbList, mpRows] = await Promise.all([
     includeMoneybird
       ? listMoneybirdContacts({
-          query: q.length >= 2 ? q : undefined,
+          query: q.length >= 1 ? q : undefined,
           page: 1,
           perPage: Math.min(100, limit),
         }).catch(() => [] as MoneybirdContact[])
@@ -189,14 +202,8 @@ export async function searchKlanten(
 
   let merged = sortKlanten([...Array.from(byEmail.values()), ...noEmail]);
 
-  if (q.length >= 2) {
-    const needle = q.toLowerCase();
-    merged = merged.filter((k) => {
-      const hay = [k.naam, k.email, k.telefoon, k.postcode, k.woonplaats, k.straatnaam]
-        .join(" ")
-        .toLowerCase();
-      return hay.includes(needle);
-    });
+  if (q.length >= 1) {
+    merged = merged.filter((k) => klantMatchesSearchPrefix(k, q));
   }
 
   return merged.slice(0, limit);

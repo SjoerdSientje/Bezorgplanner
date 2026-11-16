@@ -10,6 +10,8 @@ export type Klant = {
   id: string;
   email: string;
   naam: string;
+  voornaam: string;
+  achternaam: string;
   telefoon: string;
   straatnaam: string;
   huisnummer: string;
@@ -19,6 +21,33 @@ export type Klant = {
   moneybirdId: string | null;
   mpOrderId: string | null;
 };
+
+/** Zoeken: alleen prefix-match op voornaam, achternaam of e-mail. */
+export function klantMatchesSearchPrefix(klant: Klant, query: string): boolean {
+  const needle = String(query ?? "").trim().toLowerCase();
+  if (!needle) return true;
+  return (
+    klant.email.toLowerCase().startsWith(needle) ||
+    klant.voornaam.toLowerCase().startsWith(needle) ||
+    klant.achternaam.toLowerCase().startsWith(needle)
+  );
+}
+
+export function splitNaamToVoorAchternaam(naam: string): {
+  voornaam: string;
+  achternaam: string;
+} {
+  const parts = String(naam ?? "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (parts.length === 0) return { voornaam: "", achternaam: "" };
+  if (parts.length === 1) return { voornaam: parts[0]!, achternaam: "" };
+  return {
+    voornaam: parts[0]!,
+    achternaam: parts.slice(1).join(" "),
+  };
+}
 
 export function encodeKlantId(kind: "mb" | "mp", rawId: string): string {
   return `${kind}:${String(rawId ?? "").trim()}`;

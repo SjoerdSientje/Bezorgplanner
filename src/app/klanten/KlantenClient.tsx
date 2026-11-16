@@ -143,7 +143,7 @@ export default function KlantenClient() {
                 setQuery(next);
                 scheduleFetch(next);
               }}
-              placeholder="Naam, e-mail, telefoon…"
+              placeholder="Voornaam, achternaam of e-mail…"
               className="mt-1 w-full rounded-xl border border-koopje-black/20 px-3 py-2.5 text-sm focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
             />
           </label>
