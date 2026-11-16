@@ -125,6 +125,24 @@ export default async function Home() {
                 <span className="mt-1 text-sm text-koopje-black/60">Bezorgde orders en MP orders</span>
               </Link>
             </li>
+
+            <li>
+              <Link
+                href="/klanten"
+                className="group flex flex-col rounded-xl border border-koopje-black/10 bg-white p-6 shadow-sm transition hover:border-koopje-orange hover:shadow-md focus:outline-none focus:ring-2 focus:ring-koopje-orange focus:ring-offset-2"
+              >
+                <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-koopje-orange-light text-koopje-orange transition group-hover:bg-koopje-orange group-hover:text-white">
+                  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                      d="M17 20h5v-2a4 4 0 00-4-4h-1M9 20H4v-2a4 4 0 014-4h1m8-4a4 4 0 11-8 0 4 4 0 018 0zm6 4a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                </span>
+                <span className="mt-4 font-medium text-koopje-black">Klanten</span>
+                <span className="mt-1 text-sm text-koopje-black/60">
+                  Moneybird- en Marktplaats-klanten opzoeken
+                </span>
+              </Link>
+            </li>
           </ul>
         </div>
       </main>

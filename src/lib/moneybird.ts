@@ -770,6 +770,50 @@ export async function searchMoneybirdContactsByEmailPrefix(
   return [...prefixHits, ...otherHits].slice(0, limit);
 }
 
+/** Lijst/zoek Moneybird-contacten (pagina). Incl. contacten zonder e-mail. */
+export async function listMoneybirdContacts(options?: {
+  query?: string;
+  page?: number;
+  perPage?: number;
+}): Promise<MoneybirdContact[]> {
+  if (!isMoneybirdConfigured()) return [];
+  const page = Math.max(1, Math.floor(options?.page ?? 1));
+  const perPage = Math.min(100, Math.max(1, Math.floor(options?.perPage ?? 50)));
+  const q = String(options?.query ?? "").trim();
+  const params = new URLSearchParams({
+    page: String(page),
+    per_page: String(perPage),
+  });
+  if (q) params.set("query", q);
+  const list = await moneybirdFetch<MoneybirdContact[]>(
+    `/contacts.json?${params.toString()}`
+  );
+  return Array.isArray(list) ? list : [];
+}
+
+export async function getMoneybirdContactById(
+  contactId: string
+): Promise<MoneybirdContact | null> {
+  if (!isMoneybirdConfigured()) return null;
+  const id = String(contactId ?? "").trim();
+  if (!id) return null;
+  try {
+    return await moneybirdFetch<MoneybirdContact>(`/contacts/${id}.json`);
+  } catch {
+    return null;
+  }
+}
+
+/** Exacte e-mailmatch in Moneybird (of null). */
+export async function findMoneybirdContactByEmail(
+  email: string
+): Promise<MoneybirdContact | null> {
+  if (!isMoneybirdConfigured()) return null;
+  const needle = String(email ?? "").trim().toLowerCase();
+  if (!needle) return null;
+  return findContactByEmail(needle);
+}
+
 async function createContact(input: {
   email: string;
   firstname?: string;
