@@ -5,7 +5,13 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Header from "@/components/Header";
 import AdresAutocomplete from "@/components/AdresAutocomplete";
+import MoneybirdContactEmailAutocomplete from "@/components/MoneybirdContactEmailAutocomplete";
 import ProductAutocomplete from "@/components/ProductAutocomplete";
+import {
+  moneybirdContactFillsEqual,
+  moneybirdContactUpdateConfirmMessage,
+  type MoneybirdContactFormFill,
+} from "@/lib/moneybird-contact-shared";
 import {
   arbeidPrijsIncl,
   arbeidUrenFromPrijsIncl,
@@ -70,6 +76,9 @@ export default function ReparatieNieuwPage() {
     postcode: "",
     woonplaats: "",
   });
+  /** Snapshot van de gekozen Moneybird-klant; null = handmatig / geen selectie. */
+  const [selectedMbContact, setSelectedMbContact] =
+    useState<MoneybirdContactFormFill | null>(null);
   const [bezorgtijd, setBezorgtijd] = useState("");
   const [datumVoorkeur, setDatumVoorkeur] = useState("");
   const [opmerking, setOpmerking] = useState("");
@@ -387,6 +396,18 @@ export default function ReparatieNieuwPage() {
     setFietsOokOpgehaald(checked);
   }
 
+  function currentContactFill(): MoneybirdContactFormFill {
+    return {
+      email,
+      naam,
+      telefoon,
+      straatnaam: adres.straatnaam,
+      huisnummer: adres.huisnummer,
+      postcode: adres.postcode,
+      woonplaats: adres.woonplaats,
+    };
+  }
+
   async function submit() {
     setError(null);
     if (!naam.trim() || !volledigAdres) {
@@ -403,6 +424,15 @@ export default function ReparatieNieuwPage() {
     ) {
       setError("Vul een omschrijving in bij elke vrije tekstregel.");
       return;
+    }
+    if (selectedMbContact) {
+      const current = currentContactFill();
+      if (!moneybirdContactFillsEqual(selectedMbContact, current)) {
+        const ok = window.confirm(
+          moneybirdContactUpdateConfirmMessage(selectedMbContact, current)
+        );
+        if (!ok) return;
+      }
     }
     setSaving(true);
     try {
@@ -598,20 +628,37 @@ export default function ReparatieNieuwPage() {
             )}
 
             <label className="block text-sm">
+              E-mail
+              <MoneybirdContactEmailAutocomplete
+                value={email}
+                onChange={(next) => {
+                  setEmail(next);
+                  setSelectedMbContact(null);
+                }}
+                onSelectContact={(fill) => {
+                  setSelectedMbContact(fill);
+                  setEmail(fill.email);
+                  setNaam(fill.naam);
+                  setTelefoon(fill.telefoon);
+                  setAdres({
+                    straatnaam: fill.straatnaam,
+                    huisnummer: fill.huisnummer,
+                    postcode: fill.postcode,
+                    woonplaats: fill.woonplaats,
+                  });
+                }}
+              />
+              <span className="mt-1 block text-xs text-koopje-black/50">
+                Typ een e-mail om bestaande Moneybird-klanten te zoeken. Klik een
+                klant om alle gegevens over te nemen.
+              </span>
+            </label>
+            <label className="block text-sm">
               Naam *
               <input
                 className="mt-1 w-full rounded-xl border border-koopje-black/20 px-3 py-2.5"
                 value={naam}
                 onChange={(e) => setNaam(e.target.value)}
-              />
-            </label>
-            <label className="block text-sm">
-              E-mail
-              <input
-                type="email"
-                className="mt-1 w-full rounded-xl border border-koopje-black/20 px-3 py-2.5"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
               />
             </label>
             <label className="block text-sm">

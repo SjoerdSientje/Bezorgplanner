@@ -4,9 +4,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Header from "@/components/Header";
 import AdresAutocomplete from "@/components/AdresAutocomplete";
+import MoneybirdContactEmailAutocomplete from "@/components/MoneybirdContactEmailAutocomplete";
 import ProductAutocomplete from "@/components/ProductAutocomplete";
 import ArbeidUrenInput from "@/components/ArbeidUrenInput";
 import { splitVolledigAdres } from "@/lib/adres-fields";
+import {
+  moneybirdContactFillsEqual,
+  moneybirdContactUpdateConfirmMessage,
+  type MoneybirdContactFormFill,
+} from "@/lib/moneybird-contact-shared";
 import {
   arbeidPrijsIncl,
   normalizeStandaardOnderdelen,
@@ -106,6 +112,8 @@ export default function ReparatiesGeplandPage() {
   const [error, setError] = useState<string | null>(null);
   const [edit, setEdit] = useState<EditDraft | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [selectedMbContact, setSelectedMbContact] =
+    useState<MoneybirdContactFormFill | null>(null);
   const [saving, setSaving] = useState(false);
   const [voorrij, setVoorrij] = useState<{ km: number; bedrag: number } | null>(null);
   const [voorrijLoading, setVoorrijLoading] = useState(false);
@@ -275,6 +283,7 @@ export default function ReparatiesGeplandPage() {
   function startEdit(o: OrderRow) {
     const adres = splitVolledigAdres(o.volledig_adres ?? "");
     const soort = o.type as ReparatieSoort;
+    setSelectedMbContact(null);
     setEdit({
       id: o.id,
       soort,
@@ -405,6 +414,26 @@ export default function ReparatiesGeplandPage() {
       setConfirmOpen(false);
       return;
     }
+    if (selectedMbContact) {
+      const current: MoneybirdContactFormFill = {
+        email: edit.email,
+        naam: edit.naam,
+        telefoon: edit.telefoonnummer,
+        straatnaam: edit.straatnaam,
+        huisnummer: edit.huisnummer,
+        postcode: edit.postcode,
+        woonplaats: edit.woonplaats,
+      };
+      if (!moneybirdContactFillsEqual(selectedMbContact, current)) {
+        const ok = window.confirm(
+          moneybirdContactUpdateConfirmMessage(selectedMbContact, current)
+        );
+        if (!ok) {
+          setConfirmOpen(false);
+          return;
+        }
+      }
+    }
     setSaving(true);
     setError(null);
     try {
@@ -469,6 +498,7 @@ export default function ReparatiesGeplandPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Opslaan mislukt");
       setEdit(null);
+      setSelectedMbContact(null);
       setConfirmOpen(false);
       await load();
     } catch (e) {
@@ -627,19 +657,39 @@ export default function ReparatiesGeplandPage() {
                     </p>
                   )}
                   <label className="block">
+                    E-mail
+                    <MoneybirdContactEmailAutocomplete
+                      className="mt-1 w-full rounded border px-2 py-2"
+                      value={edit.email}
+                      onChange={(email) => {
+                        setSelectedMbContact(null);
+                        setEdit((prev) => (prev ? { ...prev, email } : prev));
+                      }}
+                      onSelectContact={(fill) => {
+                        setSelectedMbContact(fill);
+                        setEdit((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                email: fill.email,
+                                naam: fill.naam,
+                                telefoonnummer: fill.telefoon,
+                                straatnaam: fill.straatnaam,
+                                huisnummer: fill.huisnummer,
+                                postcode: fill.postcode,
+                                woonplaats: fill.woonplaats,
+                              }
+                            : prev
+                        );
+                      }}
+                    />
+                  </label>
+                  <label className="block">
                     Naam
                     <input
                       className="mt-1 w-full rounded border px-2 py-2"
                       value={edit.naam}
                       onChange={(e) => setEdit({ ...edit, naam: e.target.value })}
-                    />
-                  </label>
-                  <label className="block">
-                    E-mail
-                    <input
-                      className="mt-1 w-full rounded border px-2 py-2"
-                      value={edit.email}
-                      onChange={(e) => setEdit({ ...edit, email: e.target.value })}
                     />
                   </label>
                   <label className="block">
@@ -1062,6 +1112,7 @@ export default function ReparatiesGeplandPage() {
                     className="rounded-lg px-3 py-2 text-sm text-koopje-black/60"
                     onClick={() => {
                       setEdit(null);
+                      setSelectedMbContact(null);
                       setConfirmOpen(false);
                     }}
                   >

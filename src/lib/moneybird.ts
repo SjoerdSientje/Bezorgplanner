@@ -26,6 +26,16 @@ import {
   type ShopifyAdminProduct,
 } from "@/lib/shopify-admin";
 import { createServerSupabaseClient } from "@/lib/supabase";
+import {
+  moneybirdContactDisplayName,
+  type MoneybirdContactSuggestion,
+} from "@/lib/moneybird-contact-shared";
+
+export type { MoneybirdContactSuggestion } from "@/lib/moneybird-contact-shared";
+export {
+  moneybirdContactDisplayName,
+  splitMoneybirdAddress1,
+} from "@/lib/moneybird-contact-shared";
 
 const MONEYBIRD_API_BASE = "https://moneybird.com/api/v2";
 
@@ -100,6 +110,12 @@ export type MoneybirdContact = {
   firstname?: string | null;
   lastname?: string | null;
   company_name?: string | null;
+  phone?: string | null;
+  address1?: string | null;
+  address2?: string | null;
+  zipcode?: string | null;
+  city?: string | null;
+  country?: string | null;
 };
 
 export type MoneybirdSalesInvoiceDetail = {
@@ -596,6 +612,8 @@ async function replaceMoneybirdInvoiceDetails(params: {
   contactId?: string;
   reference?: string;
   details: MoneybirdInvoiceDetailPayload[];
+  /** Zet Moneybird contact-snapshot op de factuur opnieuw (naam/adres). */
+  updateContact?: boolean;
 }): Promise<MoneybirdSalesInvoice> {
   const invoiceId = String(params.invoiceId ?? "").trim();
   const details = params.details;
@@ -609,6 +627,7 @@ async function replaceMoneybirdInvoiceDetails(params: {
     };
     if (params.contactId) salesInvoice.contact_id = params.contactId;
     if (params.reference != null) salesInvoice.reference = params.reference;
+    if (params.updateContact) salesInvoice.update_contact = true;
     return moneybirdFetch<MoneybirdSalesInvoice>(
       `/sales_invoices/${invoiceId}.json`,
       {
@@ -700,6 +719,56 @@ async function findContactByEmail(email: string): Promise<MoneybirdContact | nul
   return exact ?? list[0] ?? null;
 }
 
+function toContactSuggestion(contact: MoneybirdContact): MoneybirdContactSuggestion | null {
+  const email = String(contact.email ?? "").trim().toLowerCase();
+  if (!email || !contact.id) return null;
+  return {
+    id: String(contact.id),
+    email,
+    displayName: moneybirdContactDisplayName(contact),
+    firstname: String(contact.firstname ?? "").trim(),
+    lastname: String(contact.lastname ?? "").trim(),
+    companyName: String(contact.company_name ?? "").trim(),
+    phone: String(contact.phone ?? "").trim(),
+    address1: String(contact.address1 ?? "").trim(),
+    zipcode: String(contact.zipcode ?? "").trim(),
+    city: String(contact.city ?? "").trim(),
+  };
+}
+
+/**
+ * Zoek Moneybird-contacten waarvan het e-mailadres begint met de getypte query.
+ * Moneybird `query` is breed; we filteren zelf op e-mail-prefix.
+ */
+export async function searchMoneybirdContactsByEmailPrefix(
+  query: string,
+  options?: { limit?: number }
+): Promise<MoneybirdContactSuggestion[]> {
+  if (!isMoneybirdConfigured()) return [];
+  const q = String(query ?? "").trim().toLowerCase();
+  if (q.length < 2) return [];
+  const limit = Math.min(20, Math.max(1, Math.floor(options?.limit ?? 10)));
+
+  const list = await moneybirdFetch<MoneybirdContact[]>(
+    `/contacts.json?query=${encodeURIComponent(q)}&per_page=25`
+  );
+  if (!Array.isArray(list) || list.length === 0) return [];
+
+  const prefixHits: MoneybirdContactSuggestion[] = [];
+  const otherHits: MoneybirdContactSuggestion[] = [];
+  const seen = new Set<string>();
+
+  for (const contact of list) {
+    const suggestion = toContactSuggestion(contact);
+    if (!suggestion || seen.has(suggestion.id)) continue;
+    seen.add(suggestion.id);
+    if (suggestion.email.startsWith(q)) prefixHits.push(suggestion);
+    else if (suggestion.email.includes(q)) otherHits.push(suggestion);
+  }
+
+  return [...prefixHits, ...otherHits].slice(0, limit);
+}
+
 async function createContact(input: {
   email: string;
   firstname?: string;
@@ -727,6 +796,73 @@ async function createContact(input: {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+async function updateContact(
+  contactId: string,
+  input: {
+    email?: string;
+    firstname?: string;
+    lastname?: string;
+    phone?: string;
+    address1?: string;
+    zipcode?: string;
+    city?: string;
+    country?: string;
+  }
+): Promise<MoneybirdContact> {
+  const id = String(contactId ?? "").trim();
+  if (!id) throw new Error("contactId is verplicht.");
+  const contact: Record<string, string> = {};
+  if (input.email != null) {
+    contact.email = input.email;
+    contact.send_invoices_to_email = input.email;
+  }
+  if (input.firstname != null) contact.firstname = input.firstname;
+  if (input.lastname != null) contact.lastname = input.lastname;
+  if (input.phone != null) contact.phone = input.phone;
+  if (input.address1 != null) contact.address1 = input.address1;
+  if (input.zipcode != null) contact.zipcode = input.zipcode;
+  if (input.city != null) contact.city = input.city;
+  if (input.country != null) contact.country = input.country;
+
+  return moneybirdFetch<MoneybirdContact>(`/contacts/${id}.json`, {
+    method: "PATCH",
+    body: JSON.stringify({ contact }),
+  });
+}
+
+/** Zoek of maak Moneybird-klant; bestaande klant wordt bijgewerkt met formuliervelden. */
+async function findOrUpsertReparatieContact(
+  input: ReparatieInvoiceContactInput
+): Promise<MoneybirdContact> {
+  const email =
+    String(input.email ?? "").trim().toLowerCase() || "onbekend@koopjefatbike.nl";
+  const payload = {
+    email,
+    firstname: String(input.firstname ?? "").trim(),
+    lastname: String(input.lastname ?? "").trim() || "Klant",
+    phone: String(input.phone ?? "").trim(),
+    address1: String(input.address1 ?? "").trim(),
+    zipcode: String(input.zipcode ?? "").trim(),
+    city: String(input.city ?? "").trim(),
+    country: "NL",
+  };
+
+  const existing = await findContactByEmail(email);
+  if (!existing?.id) {
+    return createContact(payload);
+  }
+
+  try {
+    return await updateContact(existing.id, payload);
+  } catch (err) {
+    console.warn(
+      "[moneybird] contact bijwerken mislukt, gebruik bestaande klant:",
+      err instanceof Error ? err.message : err
+    );
+    return existing;
+  }
 }
 
 export async function findOrCreateContactForShopifyOrder(
@@ -2968,22 +3104,7 @@ export async function upsertReparatieSalesInvoice(params: {
     });
   }
 
-  const email =
-    String(params.contact.email ?? "").trim().toLowerCase() ||
-    "onbekend@koopjefatbike.nl";
-  let contact = await findContactByEmail(email);
-  if (!contact) {
-    contact = await createContact({
-      email,
-      firstname: params.contact.firstname ?? "",
-      lastname: params.contact.lastname ?? "Klant",
-      phone: params.contact.phone ?? "",
-      address1: params.contact.address1 ?? "",
-      zipcode: params.contact.zipcode ?? "",
-      city: params.contact.city ?? "",
-      country: "NL",
-    });
-  }
+  const contact = await findOrUpsertReparatieContact(params.contact);
 
   const reference = reparatieReferenceForOrderId(orderId);
   const existingId = String(params.existingInvoiceId ?? "").trim();
@@ -3006,14 +3127,30 @@ export async function upsertReparatieSalesInvoice(params: {
       return full;
     }
 
-    // Vergelijk regels: bij gelijke inhoud geen PATCH (voorkomt dubbele regels).
-    if (invoiceDetailsUnchanged(full.details, details)) {
+    // Vergelijk regels: bij gelijke inhoud geen PATCH (voorkomt dubbele regels),
+    // behalve als contactgegevens zijn gewijzigd → die wel doorzetten op de factuur.
+    const contactChanged =
+      String(full.contact_id ?? "") !== String(contact.id ?? "");
+    if (invoiceDetailsUnchanged(full.details, details) && !contactChanged) {
+      // Contactnaam/-adres kan wel zijn bijgewerkt; forceer snapshot op de factuur.
+      const refreshed = await moneybirdFetch<MoneybirdSalesInvoice>(
+        `/sales_invoices/${full.id}.json`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            sales_invoice: {
+              contact_id: contact.id,
+              update_contact: true,
+            },
+          }),
+        }
+      );
       console.info(
-        "[moneybird] reparatie conceptfactuur al in sync, skip",
-        full.id,
+        "[moneybird] reparatie conceptfactuur contact bijgewerkt",
+        refreshed.id,
         reference
       );
-      return full;
+      return refreshed;
     }
 
     // Oude regels vernietigen + nieuwe zetten (PATCH zonder _destroy voegt toe).
@@ -3022,6 +3159,7 @@ export async function upsertReparatieSalesInvoice(params: {
       contactId: contact.id,
       reference,
       details,
+      updateContact: true,
     });
     console.info("[moneybird] reparatie conceptfactuur bijgewerkt", updated.id, reference);
     return updated;
