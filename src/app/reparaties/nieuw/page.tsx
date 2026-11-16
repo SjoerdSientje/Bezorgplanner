@@ -636,7 +636,10 @@ export default function ReparatieNieuwPage() {
                   setSelectedMbContact(null);
                 }}
                 onSelectContact={(fill) => {
-                  setSelectedMbContact(fill);
+                  // Alleen echte Moneybird-klanten mogen later MB bijwerken.
+                  setSelectedMbContact(
+                    fill.source === "mp" ? null : fill
+                  );
                   setEmail(fill.email);
                   setNaam(fill.naam);
                   setTelefoon(fill.telefoon);
@@ -649,8 +652,8 @@ export default function ReparatieNieuwPage() {
                 }}
               />
               <span className="mt-1 block text-xs text-koopje-black/50">
-                Typ een e-mail om bestaande Moneybird-klanten te zoeken. Klik een
-                klant om alle gegevens over te nemen.
+                Typ een e-mail om Moneybird-klanten of eerdere MP-klanten te
+                zoeken. Klik een klant om alle gegevens over te nemen.
               </span>
             </label>
             <label className="block text-sm">

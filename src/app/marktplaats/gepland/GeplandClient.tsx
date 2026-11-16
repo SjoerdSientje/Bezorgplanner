@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import Header from "@/components/Header";
 import AdresAutocomplete from "@/components/AdresAutocomplete";
+import MoneybirdContactEmailAutocomplete from "@/components/MoneybirdContactEmailAutocomplete";
 import ProductAutocomplete from "@/components/ProductAutocomplete";
 import {
   DEFAULT_PRODUCT_RULES_V2,
@@ -482,11 +483,54 @@ export default function MarktplaatsGeplandClient() {
                 </p>
                 <div>
                   <label className="mb-1 block text-sm font-medium text-koopje-black">
+                    Email
+                  </label>
+                  <MoneybirdContactEmailAutocomplete
+                    value={edit.email}
+                    onChange={(email) =>
+                      setEdit((prev) => (prev ? { ...prev, email } : prev))
+                    }
+                    onSelectContact={(fill) =>
+                      setEdit((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              email: fill.email,
+                              naam: fill.naam,
+                              telefoonnummer: fill.telefoon,
+                              straatnaam: fill.straatnaam,
+                              huisnummer: fill.huisnummer,
+                              postcode: fill.postcode,
+                              woonplaats: fill.woonplaats,
+                            }
+                          : prev
+                      )
+                    }
+                    className="w-full rounded-xl border border-koopje-black/20 px-3 py-2.5 text-sm focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
+                  />
+                  <p className="mt-1 text-xs text-koopje-black/50">
+                    Zoekt Moneybird- en eerdere MP-klanten. Alleen invullen voor
+                    order/aankoopbewijs — Moneybird blijft ongewijzigd.
+                  </p>
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-koopje-black">
                     Naam klant<span className="ml-1 text-koopje-orange">*</span>
                   </label>
                   <input
                     value={edit.naam}
                     onChange={(e) => setEdit({ ...edit, naam: e.target.value })}
+                    className="w-full rounded-xl border border-koopje-black/20 px-3 py-2.5 text-sm focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-koopje-black">
+                    Telefoonnummer
+                  </label>
+                  <input
+                    type="tel"
+                    value={edit.telefoonnummer}
+                    onChange={(e) => setEdit({ ...edit, telefoonnummer: e.target.value })}
                     className="w-full rounded-xl border border-koopje-black/20 px-3 py-2.5 text-sm focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
                   />
                 </div>
@@ -511,26 +555,6 @@ export default function MarktplaatsGeplandClient() {
                     )
                   }
                 />
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-koopje-black">
-                    Telefoonnummer
-                  </label>
-                  <input
-                    type="tel"
-                    value={edit.telefoonnummer}
-                    onChange={(e) => setEdit({ ...edit, telefoonnummer: e.target.value })}
-                    className="w-full rounded-xl border border-koopje-black/20 px-3 py-2.5 text-sm focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-koopje-black">Email</label>
-                  <input
-                    type="email"
-                    value={edit.email}
-                    onChange={(e) => setEdit({ ...edit, email: e.target.value })}
-                    className="w-full rounded-xl border border-koopje-black/20 px-3 py-2.5 text-sm focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
-                  />
-                </div>
               </div>
 
               <div className="space-y-4 rounded-xl border border-koopje-orange/30 bg-koopje-orange-light/20 px-4 py-4">

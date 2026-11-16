@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import Header from "@/components/Header";
 import AdresAutocomplete from "@/components/AdresAutocomplete";
+import MoneybirdContactEmailAutocomplete from "@/components/MoneybirdContactEmailAutocomplete";
 import ProductAutocomplete from "@/components/ProductAutocomplete";
 import {
   DEFAULT_PRODUCT_RULES_V2,
@@ -366,7 +367,35 @@ export default function NieuwMarktplaatsOrderClient() {
                     </span>
                   </span>
                 </label>
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-koopje-black">
+                    Email
+                  </label>
+                  <MoneybirdContactEmailAutocomplete
+                    value={form.email}
+                    onChange={(email) => setField("email", email)}
+                    onSelectContact={(fill) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        email: fill.email,
+                        naam: fill.naam,
+                        telefoonnummer: fill.telefoon,
+                        straatnaam: fill.straatnaam,
+                        huisnummer: fill.huisnummer,
+                        postcode: fill.postcode,
+                        woonplaats: fill.woonplaats,
+                      }))
+                    }
+                    className="w-full rounded-xl border border-koopje-black/20 px-3 py-2.5 text-sm text-koopje-black placeholder:text-koopje-black/40 focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
+                  />
+                  <p className="mt-1 text-xs text-koopje-black/50">
+                    Typ een e-mail om Moneybird- of eerdere MP-klanten te zoeken.
+                    Alleen invullen voor het aankoopbewijs — Moneybird zelf blijft
+                    ongewijzigd.
+                  </p>
+                </div>
                 <Field label="Naam klant" id="naam" value={form.naam} onChange={setField} placeholder="Voor- en achternaam" required />
+                <Field label="Telefoonnummer" id="telefoonnummer" type="tel" value={form.telefoonnummer} onChange={setField} placeholder="06 12345678" />
                 <AdresAutocomplete
                   velden={{
                     straatnaam: form.straatnaam,
@@ -382,8 +411,6 @@ export default function NieuwMarktplaatsOrderClient() {
                     woonplaats: v.woonplaats,
                   }))}
                 />
-                <Field label="Telefoonnummer" id="telefoonnummer" type="tel" value={form.telefoonnummer} onChange={setField} placeholder="06 12345678" />
-                <Field label="Email" id="email" type="email" value={form.email} onChange={setField} placeholder="klant@email.nl" />
               </div>
 
               {/* Bezorggegevens */}

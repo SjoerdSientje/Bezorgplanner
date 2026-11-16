@@ -666,7 +666,10 @@ export default function ReparatiesGeplandPage() {
                         setEdit((prev) => (prev ? { ...prev, email } : prev));
                       }}
                       onSelectContact={(fill) => {
-                        setSelectedMbContact(fill);
+                        // Alleen echte Moneybird-klanten mogen later MB bijwerken.
+                        setSelectedMbContact(
+                          fill.source === "mp" ? null : fill
+                        );
                         setEdit((prev) =>
                           prev
                             ? {

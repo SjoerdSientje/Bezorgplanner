@@ -1,5 +1,7 @@
 /** Client-veilige Moneybird contact helpers (geen server/API imports). */
 
+export type ContactSuggestionSource = "moneybird" | "mp";
+
 export type MoneybirdContactSuggestion = {
   id: string;
   email: string;
@@ -11,6 +13,8 @@ export type MoneybirdContactSuggestion = {
   address1: string;
   zipcode: string;
   city: string;
+  /** moneybird = MB-klant; mp = klant uit afgeronde MP-order (geen MB-update). */
+  source?: ContactSuggestionSource;
 };
 
 /** Formuliervelden die uit een Moneybird-klant komen / ernaartoe gaan. */
@@ -22,6 +26,8 @@ export type MoneybirdContactFormFill = {
   huisnummer: string;
   postcode: string;
   woonplaats: string;
+  /** Alleen 'moneybird' triggert bevestiging/update in reparatieflow. */
+  source?: ContactSuggestionSource;
 };
 
 function normField(value: string | null | undefined): string {

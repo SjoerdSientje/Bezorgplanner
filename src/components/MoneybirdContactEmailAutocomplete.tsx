@@ -34,6 +34,7 @@ function suggestionToFill(item: MoneybirdContactSuggestion): MoneybirdContactFor
     huisnummer,
     postcode: item.zipcode,
     woonplaats: item.city,
+    source: item.source ?? "moneybird",
   };
 }
 
@@ -196,7 +197,16 @@ export default function MoneybirdContactEmailAutocomplete({
                     : "text-stone-700 hover:bg-stone-50"
                 }`}
               >
-                <span className="text-sm font-medium leading-snug">{item.displayName}</span>
+                <span className="flex items-baseline justify-between gap-2">
+                  <span className="text-sm font-medium leading-snug">
+                    {item.displayName}
+                  </span>
+                  {item.source === "mp" && (
+                    <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-stone-400">
+                      MP
+                    </span>
+                  )}
+                </span>
                 <span className="text-xs text-stone-500">{item.email}</span>
                 {(item.city || item.zipcode || item.phone) && (
                   <span className="text-xs text-stone-400">

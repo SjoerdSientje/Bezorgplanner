@@ -733,6 +733,7 @@ function toContactSuggestion(contact: MoneybirdContact): MoneybirdContactSuggest
     address1: String(contact.address1 ?? "").trim(),
     zipcode: String(contact.zipcode ?? "").trim(),
     city: String(contact.city ?? "").trim(),
+    source: "moneybird",
   };
 }
 
