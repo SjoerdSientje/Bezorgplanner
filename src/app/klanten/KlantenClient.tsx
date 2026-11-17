@@ -4,10 +4,14 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import KlantBronBadges from "@/components/KlantBronBadges";
 import type { Klant } from "@/lib/klanten-shared";
+import {
+  formatKlantOrderPrijs,
+  type KlantOrderHistorieDetail,
+} from "@/lib/klant-orderhistorie-shared";
 
 const DEBOUNCE_MS = 280;
 
-type TabId = "gegevens";
+type TabId = "gegevens" | "ordergeschiedenis";
 
 function Field({ label, value }: { label: string; value: string }) {
   return (
@@ -22,6 +26,30 @@ function Field({ label, value }: { label: string; value: string }) {
   );
 }
 
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition ${
+        active
+          ? "border-koopje-orange text-koopje-black"
+          : "border-transparent text-koopje-black/45 hover:text-koopje-black"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
 export default function KlantenClient() {
   const [query, setQuery] = useState("");
   const [customers, setCustomers] = useState<Klant[]>([]);
@@ -32,9 +60,15 @@ export default function KlantenClient() {
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [tab, setTab] = useState<TabId>("gegevens");
+  const [orders, setOrders] = useState<KlantOrderHistorieDetail[]>([]);
+  const [loadingOrders, setLoadingOrders] = useState(false);
+  const [ordersError, setOrdersError] = useState<string | null>(null);
+  const [ordersLoadedFor, setOrdersLoadedFor] = useState<string | null>(null);
+  const [openOrderId, setOpenOrderId] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fetchGenRef = useRef(0);
   const detailGenRef = useRef(0);
+  const ordersGenRef = useRef(0);
 
   function fetchList(q: string) {
     const gen = ++fetchGenRef.current;
@@ -76,11 +110,19 @@ export default function KlantenClient() {
     if (!selectedId) {
       setSelected(null);
       setDetailError(null);
+      setOrders([]);
+      setOrdersError(null);
+      setOrdersLoadedFor(null);
+      setOpenOrderId(null);
       return;
     }
     const gen = ++detailGenRef.current;
     setLoadingDetail(true);
     setDetailError(null);
+    setOrders([]);
+    setOrdersError(null);
+    setOrdersLoadedFor(null);
+    setOpenOrderId(null);
     fetch(`/api/klanten/${encodeURIComponent(selectedId)}`, { cache: "no-store" })
       .then(async (res) => {
         const data = await res.json();
@@ -102,6 +144,37 @@ export default function KlantenClient() {
       });
   }, [selectedId]);
 
+  useEffect(() => {
+    if (!selectedId || tab !== "ordergeschiedenis") return;
+    if (ordersLoadedFor === selectedId) return;
+
+    const gen = ++ordersGenRef.current;
+    setLoadingOrders(true);
+    setOrdersError(null);
+    fetch(`/api/klanten/${encodeURIComponent(selectedId)}/orders`, {
+      cache: "no-store",
+    })
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.error || "Orders laden mislukt.");
+        return data as { orders?: KlantOrderHistorieDetail[] };
+      })
+      .then((data) => {
+        if (gen !== ordersGenRef.current) return;
+        setOrders(Array.isArray(data.orders) ? data.orders : []);
+        setOrdersLoadedFor(selectedId);
+        setOpenOrderId(null);
+      })
+      .catch((e) => {
+        if (gen !== ordersGenRef.current) return;
+        setOrders([]);
+        setOrdersError(e instanceof Error ? e.message : "Orders laden mislukt.");
+      })
+      .finally(() => {
+        if (gen === ordersGenRef.current) setLoadingOrders(false);
+      });
+  }, [selectedId, tab, ordersLoadedFor]);
+
   const adresRegel = selected
     ? [
         [selected.straatnaam, selected.huisnummer].filter(Boolean).join(" "),
@@ -110,6 +183,10 @@ export default function KlantenClient() {
         .filter(Boolean)
         .join(", ")
     : "";
+
+  const openOrder = openOrderId
+    ? orders.find((o) => o.id === openOrderId) ?? null
+    : null;
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6 sm:py-12">
@@ -233,18 +310,22 @@ export default function KlantenClient() {
                   />
                 </div>
 
-                <div className="mt-4 flex gap-1 border-b border-transparent">
-                  <button
-                    type="button"
-                    onClick={() => setTab("gegevens")}
-                    className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition ${
-                      tab === "gegevens"
-                        ? "border-koopje-orange text-koopje-black"
-                        : "border-transparent text-koopje-black/45 hover:text-koopje-black"
-                    }`}
+                <div className="mt-4 flex gap-1">
+                  <TabButton
+                    active={tab === "gegevens"}
+                    onClick={() => {
+                      setTab("gegevens");
+                      setOpenOrderId(null);
+                    }}
                   >
                     Gegevens
-                  </button>
+                  </TabButton>
+                  <TabButton
+                    active={tab === "ordergeschiedenis"}
+                    onClick={() => setTab("ordergeschiedenis")}
+                  >
+                    Ordergeschiedenis
+                  </TabButton>
                 </div>
               </div>
 
@@ -281,6 +362,160 @@ export default function KlantenClient() {
                     </dd>
                   </div>
                 </dl>
+              )}
+
+              {tab === "ordergeschiedenis" && (
+                <div className="px-5 py-5 sm:px-6 sm:py-6">
+                  {!selected.email && (
+                    <p className="text-sm text-koopje-black/50">
+                      Geen e-mailadres — ordergeschiedenis kan niet gekoppeld worden.
+                    </p>
+                  )}
+
+                  {selected.email && loadingOrders && (
+                    <p className="text-sm text-koopje-black/50">Orders laden…</p>
+                  )}
+
+                  {ordersError && (
+                    <p className="text-sm text-red-600">{ordersError}</p>
+                  )}
+
+                  {selected.email && !loadingOrders && !ordersError && orders.length === 0 && (
+                    <p className="text-sm text-koopje-black/50">
+                      Nog geen afgeronde orders voor deze klant.
+                    </p>
+                  )}
+
+                  {selected.email && !loadingOrders && orders.length > 0 && !openOrder && (
+                    <ul className="divide-y divide-koopje-black/8 rounded-xl border border-koopje-black/10">
+                      {orders.map((order) => (
+                        <li key={order.id}>
+                          <button
+                            type="button"
+                            onClick={() => setOpenOrderId(order.id)}
+                            className="flex w-full items-start justify-between gap-3 px-4 py-3 text-left transition hover:bg-stone-50"
+                          >
+                            <span className="min-w-0">
+                              <span className="block text-sm font-medium text-koopje-black">
+                                {order.typeLabel}
+                              </span>
+                              <span className="mt-0.5 block text-xs text-koopje-black/50">
+                                {order.aangemaaktOp || "Aanmaaktijd onbekend"}
+                              </span>
+                            </span>
+                            <span className="shrink-0 text-sm font-medium text-koopje-black">
+                              {formatKlantOrderPrijs(order.totaalPrijs)}
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  {openOrder && (
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() => setOpenOrderId(null)}
+                        className="mb-4 inline-flex items-center gap-1.5 text-sm text-koopje-black/60 transition hover:text-koopje-black"
+                      >
+                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                        </svg>
+                        Terug naar overzicht
+                      </button>
+
+                      <div className="mb-5">
+                        <h3 className="text-base font-semibold text-koopje-black">
+                          {openOrder.typeLabel}
+                        </h3>
+                        {openOrder.orderNummer && (
+                          <p className="mt-0.5 text-sm text-koopje-black/55">
+                            {openOrder.orderNummer}
+                          </p>
+                        )}
+                      </div>
+
+                      <dl className="grid gap-5 sm:grid-cols-2">
+                        <Field
+                          label="Aangemaakt"
+                          value={openOrder.aangemaaktOp || ""}
+                        />
+                        <Field
+                          label="Afgerond"
+                          value={openOrder.afgerondOp || ""}
+                        />
+                        <Field
+                          label="Totaalprijs"
+                          value={formatKlantOrderPrijs(openOrder.totaalPrijs)}
+                        />
+                        <div className="sm:col-span-2">
+                          <Field
+                            label="Opmerking"
+                            value={openOrder.opmerking || ""}
+                          />
+                        </div>
+                        <div className="sm:col-span-2">
+                          <dt className="text-xs font-medium uppercase tracking-wide text-koopje-black/45">
+                            Producten
+                          </dt>
+                          <dd className="mt-2">
+                            {openOrder.producten.length === 0 ? (
+                              <p className="text-sm text-koopje-black/45">—</p>
+                            ) : (
+                              <ul className="space-y-1.5">
+                                {openOrder.producten.map((p, idx) => (
+                                  <li
+                                    key={`${p.naam}-${idx}`}
+                                    className="flex items-start justify-between gap-3 text-sm text-koopje-black"
+                                  >
+                                    <span>{p.naam}</span>
+                                    {p.prijs != null && (
+                                      <span className="shrink-0 text-koopje-black/60">
+                                        {formatKlantOrderPrijs(p.prijs)}
+                                      </span>
+                                    )}
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </dd>
+                        </div>
+                        <div className="sm:col-span-2">
+                          <dt className="text-xs font-medium uppercase tracking-wide text-koopje-black/45">
+                            Factuur / aankoopbewijs
+                          </dt>
+                          <dd className="mt-2 flex flex-wrap gap-3 text-sm">
+                            {openOrder.linkFactuur && (
+                              <a
+                                href={openOrder.linkFactuur}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-koopje-orange underline-offset-2 hover:underline"
+                              >
+                                Factuur openen
+                              </a>
+                            )}
+                            {openOrder.linkAankoopbewijs && (
+                              <a
+                                href={openOrder.linkAankoopbewijs}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-koopje-orange underline-offset-2 hover:underline"
+                              >
+                                Aankoopbewijs openen
+                              </a>
+                            )}
+                            {!openOrder.linkFactuur &&
+                              !openOrder.linkAankoopbewijs && (
+                                <span className="text-koopje-black/45">—</span>
+                              )}
+                          </dd>
+                        </div>
+                      </dl>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           )}

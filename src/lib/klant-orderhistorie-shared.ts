@@ -1,0 +1,85 @@
+/** Client-veilige types/helpers voor klant-ordergeschiedenis. */
+
+export type KlantOrderHistorieSamenvatting = {
+  id: string;
+  /** DD-MM-JJJJ UU:mm of null als onbekend. */
+  aangemaaktOp: string | null;
+  typeLabel: string;
+  totaalPrijs: number | null;
+};
+
+export type KlantOrderHistorieProduct = {
+  naam: string;
+  prijs: number | null;
+};
+
+export type KlantOrderHistorieDetail = KlantOrderHistorieSamenvatting & {
+  orderNummer: string | null;
+  opmerking: string | null;
+  /** DD-MM-JJJJ UU:mm of null. */
+  afgerondOp: string | null;
+  producten: KlantOrderHistorieProduct[];
+  linkFactuur: string | null;
+  linkAankoopbewijs: string | null;
+};
+
+export function formatKlantOrderDateTime(
+  iso: string | null | undefined
+): string | null {
+  const raw = String(iso ?? "").trim();
+  if (!raw) return null;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return null;
+
+  const parts = new Intl.DateTimeFormat("nl-NL", {
+    timeZone: "Europe/Amsterdam",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(d);
+
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === type)?.value ?? "";
+  const day = get("day");
+  const month = get("month");
+  const year = get("year");
+  const hour = get("hour");
+  const minute = get("minute");
+  if (!day || !month || !year) return null;
+  return `${day}-${month}-${year} ${hour}:${minute}`;
+}
+
+export function formatKlantOrderPrijs(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return `€ ${value.toLocaleString("nl-NL", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+/** Leesbare order-types voor de geschiedenislijst. */
+export function klantOrderTypeLabel(input: {
+  source?: string | null;
+  type?: string | null;
+}): string {
+  const source = String(input.source ?? "").trim().toLowerCase();
+  const type = String(input.type ?? "").trim().toLowerCase();
+
+  if (source === "shopify") return "Shopify order";
+  if (source === "mp") {
+    if (type === "mp_winkel") return "MP afhaal order";
+    return "MP bezorg order";
+  }
+  if (source === "reparatie") {
+    if (type === "reparatie_ophalen") return "Ophalen";
+    if (type === "reparatie_terugbrengen") return "Terugbrengen";
+    if (type === "reparatie_deur") return "Reparatie aan huis";
+    return "Reparatie";
+  }
+  if (type) return type;
+  if (source) return source;
+  return "Order";
+}
