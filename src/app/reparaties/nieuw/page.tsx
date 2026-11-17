@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 import Header from "@/components/Header";
 import AdresAutocomplete from "@/components/AdresAutocomplete";
 import MoneybirdContactEmailAutocomplete from "@/components/MoneybirdContactEmailAutocomplete";
+import OrderMedewerkerPicker from "@/components/OrderMedewerkerPicker";
+import type { OrderMedewerker } from "@/lib/order-medewerker";
 import ProductAutocomplete from "@/components/ProductAutocomplete";
 import {
   moneybirdContactFillsEqual,
@@ -82,6 +84,8 @@ export default function ReparatieNieuwPage() {
   const [bezorgtijd, setBezorgtijd] = useState("");
   const [datumVoorkeur, setDatumVoorkeur] = useState("");
   const [opmerking, setOpmerking] = useState("");
+  const [achtergrondverhaal, setAchtergrondverhaal] = useState("");
+  const [aangemaaktDoor, setAangemaaktDoor] = useState<OrderMedewerker | "">("");
 
   const [standaard, setStandaard] = useState<ReparatieStandaardItem[]>([]);
   const [standaardLoading, setStandaardLoading] = useState(true);
@@ -414,6 +418,10 @@ export default function ReparatieNieuwPage() {
       setError("Naam en adres zijn verplicht.");
       return;
     }
+    if (!aangemaaktDoor) {
+      setError("Kies wie deze order aanmaakt.");
+      return;
+    }
     if (needsProducts && regels.length === 0) {
       setError("Voeg minstens één factuurregel toe.");
       return;
@@ -518,6 +526,8 @@ export default function ReparatieNieuwPage() {
           bezorgtijd_voorkeur: bezorgtijd,
           datum_voorkeur: datumVoorkeur,
           opmerking,
+          achtergrondverhaal,
+          aangemaakt_door: aangemaaktDoor,
           regels: payloadRegels,
           voorrij_bedrag: voorrijTotaalParsed ?? 0,
         }),
@@ -732,6 +742,11 @@ export default function ReparatieNieuwPage() {
                 placeholder="datum of x voor vandaag"
               />
             </label>
+            <OrderMedewerkerPicker
+              value={aangemaaktDoor}
+              onChange={setAangemaaktDoor}
+            />
+
             <label className="block text-sm">
               Opmerking
               <textarea
@@ -740,6 +755,20 @@ export default function ReparatieNieuwPage() {
                 value={opmerking}
                 onChange={(e) => setOpmerking(e.target.value)}
               />
+            </label>
+            <label className="block text-sm">
+              Achtergrondverhaal
+              <textarea
+                className="mt-1 w-full rounded-xl border border-koopje-black/20 px-3 py-2.5"
+                rows={5}
+                value={achtergrondverhaal}
+                onChange={(e) => setAchtergrondverhaal(e.target.value)}
+                placeholder="Uitgebreider verhaal bij deze reparatie (optioneel, later bij afronden aan te vullen)"
+              />
+              <span className="mt-1 block text-xs text-koopje-black/50">
+                Alleen zichtbaar in de ordergeschiedenis van de klant; kan bij
+                afronden nog worden aangevuld.
+              </span>
             </label>
 
             {soort === "reparatie_ophalen" && (

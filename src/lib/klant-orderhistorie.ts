@@ -29,10 +29,12 @@ type OrderRow = {
   created_at: string | null;
   afgerond_at: string | null;
   bezorger_naam: string | null;
+  aangemaakt_door: string | null;
+  achtergrondverhaal: string | null;
 };
 
 const ORDER_SELECT =
-  "id, source, type, status, order_nummer, email, producten, line_items_json, bestelling_totaal_prijs, opmerkingen_klant, link_factuur, link_aankoopbewijs, created_at, afgerond_at, bezorger_naam";
+  "id, source, type, status, order_nummer, email, producten, line_items_json, bestelling_totaal_prijs, opmerkingen_klant, link_factuur, link_aankoopbewijs, created_at, afgerond_at, bezorger_naam, aangemaakt_door, achtergrondverhaal";
 
 function parseProducten(
   producten: string | null | undefined,
@@ -82,6 +84,7 @@ function toDetail(row: OrderRow): KlantOrderHistorieDetail {
   const orderNummer = String(row.order_nummer ?? "").trim() || null;
   return {
     id: String(row.id),
+    source: String(row.source ?? "").trim().toLowerCase() || null,
     aangemaaktOp: formatKlantOrderDateTime(row.created_at),
     typeLabel: klantOrderTypeLabel({ source: row.source, type: row.type }),
     totaalPrijs:
@@ -94,6 +97,8 @@ function toDetail(row: OrderRow): KlantOrderHistorieDetail {
       bezorgerNaam: row.bezorger_naam,
       orderNummer,
     }),
+    aangemaaktDoor: String(row.aangemaakt_door ?? "").trim() || null,
+    achtergrondverhaal: String(row.achtergrondverhaal ?? "").trim() || null,
     producten: parseProducten(row.producten, row.line_items_json),
     linkFactuur: String(row.link_factuur ?? "").trim() || null,
     linkAankoopbewijs: String(row.link_aankoopbewijs ?? "").trim() || null,

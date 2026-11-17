@@ -459,6 +459,13 @@ export default function KlantenClient() {
                           label="Bezorger"
                           value={openOrder.bezorger || ""}
                         />
+                        {(openOrder.source === "mp" ||
+                          openOrder.source === "reparatie") && (
+                          <Field
+                            label="Aangemaakt door"
+                            value={openOrder.aangemaaktDoor || ""}
+                          />
+                        )}
                         <Field
                           label="Totaalprijs"
                           value={formatKlantOrderPrijs(openOrder.totaalPrijs)}
@@ -469,6 +476,18 @@ export default function KlantenClient() {
                             value={openOrder.opmerking || ""}
                           />
                         </div>
+                        {openOrder.source === "reparatie" && (
+                          <div className="sm:col-span-2">
+                            <dt className="text-xs font-medium uppercase tracking-wide text-koopje-black/45">
+                              Achtergrondverhaal
+                            </dt>
+                            <dd className="mt-1 whitespace-pre-wrap text-sm text-koopje-black">
+                              {openOrder.achtergrondverhaal?.trim()
+                                ? openOrder.achtergrondverhaal
+                                : "—"}
+                            </dd>
+                          </div>
+                        )}
                         <div className="sm:col-span-2">
                           <dt className="text-xs font-medium uppercase tracking-wide text-koopje-black/45">
                             Producten

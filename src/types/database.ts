@@ -55,6 +55,10 @@ export interface Order {
   rit_nummer?: number | null;
 
   bezorger_naam: string | null;
+  /** Wie MP/reparatie-order aanmaakte (Sientje, Merlin, …). */
+  aangemaakt_door?: string | null;
+  /** Uitgebreid reparatieverhaal (aanpasbaar bij afronden). */
+  achtergrondverhaal?: string | null;
   betaalmethode: string | null;
   betaald_bedrag: number | null;
   afgerond_at: string | null;

@@ -56,6 +56,7 @@ type OrderDetail = {
   telefoon_nummer?: string | null;
   moneybird_invoice_id?: string | null;
   geen_garantie?: boolean | null;
+  achtergrondverhaal?: string | null;
 };
 
 type ReparatieDraftRegel = {
@@ -243,8 +244,13 @@ export default function AfrondenVragenlijstPage({
   );
   const [standaard, setStandaard] = useState<ReparatieStandaardItem[]>([]);
   const [standaardLoading, setStandaardLoading] = useState(false);
+  const [showAchtergrondToevoegen, setShowAchtergrondToevoegen] = useState(false);
+  const [achtergrondToevoeging, setAchtergrondToevoeging] = useState("");
 
   const isReparatieDeur = order?.type === "reparatie_deur";
+  const isReparatieOrder =
+    String(order?.source ?? "").toLowerCase() === "reparatie" ||
+    String(order?.type ?? "").startsWith("reparatie_");
   const productenNogNietBekend = Boolean(order?.producten_nog_niet_bekend);
 
   const fetchOrder = useCallback(async () => {
@@ -463,6 +469,10 @@ export default function AfrondenVragenlijstPage({
             isReparatieDeur && !convertToOphalen
               ? draftRegelsToApiPayload(reparatieRegels)
               : undefined,
+          achtergrondverhaal_toevoeging:
+            isReparatieOrder && showAchtergrondToevoegen
+              ? achtergrondToevoeging.trim() || undefined
+              : undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -494,6 +504,9 @@ export default function AfrondenVragenlijstPage({
     convertToOphalen,
     reparatieFactuur,
     reparatieRegels,
+    isReparatieOrder,
+    showAchtergrondToevoegen,
+    achtergrondToevoeging,
   ]);
 
   return (
@@ -911,6 +924,55 @@ export default function AfrondenVragenlijstPage({
                     placeholder="bijv. SN123456789 of in doos"
                     className="w-full rounded-xl border border-koopje-black/20 px-3 py-2.5 text-sm text-koopje-black placeholder:text-koopje-black/30 outline-none focus:border-koopje-orange focus:ring-2 focus:ring-koopje-orange/20"
                   />
+                </div>
+              )}
+
+              {isReparatieOrder && (
+                <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
+                  <p className="mb-2 text-sm font-semibold text-koopje-black">
+                    Achtergrondverhaal
+                  </p>
+                  {String(order.achtergrondverhaal ?? "").trim() ? (
+                    <p className="whitespace-pre-wrap rounded-xl bg-stone-50 px-3 py-2.5 text-sm text-koopje-black/80">
+                      {order.achtergrondverhaal}
+                    </p>
+                  ) : (
+                    <p className="text-sm text-koopje-black/50">
+                      Nog geen achtergrondverhaal vastgelegd.
+                    </p>
+                  )}
+                  {!showAchtergrondToevoegen ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowAchtergrondToevoegen(true)}
+                      className="mt-3 rounded-full border border-koopje-black/15 px-3 py-1.5 text-sm text-koopje-black transition hover:bg-stone-50"
+                    >
+                      Voeg info toe
+                    </button>
+                  ) : (
+                    <div className="mt-3 space-y-2">
+                      <textarea
+                        className="w-full rounded-xl border border-koopje-black/20 px-3 py-2.5 text-sm outline-none focus:border-koopje-orange focus:ring-2 focus:ring-koopje-orange/20"
+                        rows={4}
+                        value={achtergrondToevoeging}
+                        onChange={(e) => setAchtergrondToevoeging(e.target.value)}
+                        placeholder="Extra info die bij afronden duidelijk is geworden…"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowAchtergrondToevoegen(false);
+                          setAchtergrondToevoeging("");
+                        }}
+                        className="text-xs text-koopje-black/50 underline-offset-2 hover:underline"
+                      >
+                        Annuleren
+                      </button>
+                    </div>
+                  )}
+                  <p className="mt-2 text-xs text-koopje-black/45">
+                    Optioneel — je mag ook afronden zonder iets toe te voegen.
+                  </p>
                 </div>
               )}
 

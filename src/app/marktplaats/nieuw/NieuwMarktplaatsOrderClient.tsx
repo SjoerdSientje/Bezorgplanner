@@ -6,6 +6,8 @@ import { useSearchParams } from "next/navigation";
 import Header from "@/components/Header";
 import AdresAutocomplete from "@/components/AdresAutocomplete";
 import MoneybirdContactEmailAutocomplete from "@/components/MoneybirdContactEmailAutocomplete";
+import OrderMedewerkerPicker from "@/components/OrderMedewerkerPicker";
+import type { OrderMedewerker } from "@/lib/order-medewerker";
 import ProductAutocomplete from "@/components/ProductAutocomplete";
 import {
   DEFAULT_PRODUCT_RULES_V2,
@@ -46,6 +48,7 @@ interface FormData {
   bezorgtijd_voorkeur: string;
   datum_voorkeur: string;
   opmerking: string;
+  aangemaakt_door: string;
 }
 
 const EMPTY: FormData = {
@@ -60,6 +63,7 @@ const EMPTY: FormData = {
   bezorgtijd_voorkeur: "",
   datum_voorkeur: "",
   opmerking: "",
+  aangemaakt_door: "",
 };
 
 let nextId = 1;
@@ -240,6 +244,10 @@ export default function NieuwMarktplaatsOrderClient() {
     e.preventDefault();
     if (!soort) return;
     if (!form.naam.trim()) { setError("Naam klant is verplicht."); return; }
+    if (!form.aangemaakt_door.trim()) {
+      setError("Kies wie deze order aanmaakt.");
+      return;
+    }
     if (producten.some((p) => !p.naam.trim())) { setError("Vul alle productnamen in."); return; }
 
     setLoading(true);
@@ -394,6 +402,13 @@ export default function NieuwMarktplaatsOrderClient() {
                     ongewijzigd.
                   </p>
                 </div>
+                <OrderMedewerkerPicker
+                  value={form.aangemaakt_door}
+                  onChange={(v) =>
+                    setField("aangemaakt_door", v as OrderMedewerker | "")
+                  }
+                  className="mb-1"
+                />
                 <Field label="Naam klant" id="naam" value={form.naam} onChange={setField} placeholder="Voor- en achternaam" required />
                 <Field label="Telefoonnummer" id="telefoonnummer" type="tel" value={form.telefoonnummer} onChange={setField} placeholder="06 12345678" />
                 <AdresAutocomplete

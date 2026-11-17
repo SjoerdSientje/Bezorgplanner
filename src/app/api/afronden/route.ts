@@ -9,6 +9,7 @@ import { verwerkGarantiebewijs } from "@/lib/garantiebewijs";
 import { promoteRitjesVoorMorgen } from "@/lib/planning-promote";
 import { inferCompletedStatus } from "@/lib/order-completion";
 import { attachMoneybirdFactuurForOrder } from "@/lib/order-factuur";
+import { appendAchtergrondverhaal } from "@/lib/order-medewerker";
 
 export const dynamic = "force-dynamic";
 
@@ -55,6 +56,9 @@ export async function POST(request: NextRequest) {
     const reparatieBetaalwijzeBody = String(body.reparatie_betaalwijze ?? "")
       .trim()
       .toLowerCase();
+    const achtergrondverhaalToevoeging = String(
+      body.achtergrondverhaal_toevoeging ?? ""
+    ).trim();
 
     if (!orderId) {
       return NextResponse.json({ error: "Order-id ontbreekt." }, { status: 400 });
@@ -507,6 +511,13 @@ export async function POST(request: NextRequest) {
     };
     if (needsBedrag && betaalBedragNum != null) {
       updatePayload.betaald_bedrag = betaalBedragNum;
+    }
+    // Reparatie: optioneel extra info aan achtergrondverhaal plakken.
+    if (orderSource === "reparatie" && achtergrondverhaalToevoeging) {
+      updatePayload.achtergrondverhaal = appendAchtergrondverhaal(
+        (order as { achtergrondverhaal?: string | null }).achtergrondverhaal,
+        achtergrondverhaalToevoeging
+      );
     }
 
     const { error: updErr } = await supabase

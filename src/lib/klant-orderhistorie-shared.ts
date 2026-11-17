@@ -14,12 +14,17 @@ export type KlantOrderHistorieProduct = {
 };
 
 export type KlantOrderHistorieDetail = KlantOrderHistorieSamenvatting & {
+  source: string | null;
   orderNummer: string | null;
   opmerking: string | null;
   /** DD-MM-JJJJ UU:mm of null. */
   afgerondOp: string | null;
   /** Bezorgernaam, of "Afgehaald" bij winkelafhaal. */
   bezorger: string | null;
+  /** Alleen MP/reparatie: wie de order aanmaakte. */
+  aangemaaktDoor: string | null;
+  /** Alleen reparatie: uitgebreid verhaal. */
+  achtergrondverhaal: string | null;
   producten: KlantOrderHistorieProduct[];
   linkFactuur: string | null;
   linkAankoopbewijs: string | null;

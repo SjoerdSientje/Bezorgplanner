@@ -34,6 +34,7 @@ import {
   reparatieLineItemsForInventoryDeduction,
 } from "@/lib/inventory";
 import { sendReparatieOrderBevestiging } from "@/lib/whatsapp";
+import { parseOrderMedewerker } from "@/lib/order-medewerker";
 
 export const dynamic = "force-dynamic";
 
@@ -269,6 +270,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const aangemaaktDoor = parseOrderMedewerker(body.aangemaakt_door);
+    if (!aangemaaktDoor) {
+      return NextResponse.json(
+        { error: "Kies wie deze order aanmaakt." },
+        { status: 400 }
+      );
+    }
+
     const fietsOokOpgehaald =
       soort === "reparatie_terugbrengen" && Boolean(body.fiets_ook_opgehaald);
 
@@ -405,6 +414,8 @@ export async function POST(request: NextRequest) {
       bezorgtijd_voorkeur: String(body.bezorgtijd_voorkeur ?? "").trim() || null,
       datum_opmerking: datumOpmerking,
       opmerkingen_klant: String(body.opmerking ?? "").trim() || null,
+      achtergrondverhaal: String(body.achtergrondverhaal ?? "").trim() || null,
+      aangemaakt_door: aangemaaktDoor,
       producten,
       line_items_json: lineItemsJson,
       bestelling_totaal_prijs: Math.round(totaal * 100) / 100,

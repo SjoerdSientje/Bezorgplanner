@@ -18,6 +18,7 @@ import {
   type MpProductRegel,
 } from "@/lib/mp-order-products";
 import type { ProductDefaultItemsRulesV2 } from "@/lib/product-default-items-rules";
+import { parseOrderMedewerker } from "@/lib/order-medewerker";
 
 /** Extraheer fietsmodel: 'V20 PRO Fatbike 2026 + ringslot | Combi-Deal 🔥' → 'V20 PRO' */
 function extractModel(producten: string | null): string | null {
@@ -322,6 +323,13 @@ export async function POST(request: NextRequest) {
     const telefoonRaw = (body.telefoonnummer ?? "").trim();
     const { e164, belLink } = normalizeTelefoon(telefoonRaw);
     const naam = (body.naam ?? "").trim();
+    const aangemaaktDoor = parseOrderMedewerker(body.aangemaakt_door);
+    if (!aangemaaktDoor) {
+      return NextResponse.json(
+        { error: "Kies wie deze order aanmaakt." },
+        { status: 400 }
+      );
+    }
 
     // Datum (Amsterdam timezone)
     const nu = new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Amsterdam" }));
@@ -413,6 +421,7 @@ export async function POST(request: NextRequest) {
       model: soort === "bezorging" ? modelBerekend : null,
       line_items_json: lineItemsJson,
       geen_garantie: Boolean(body.geen_garantie),
+      aangemaakt_door: aangemaaktDoor,
       datum: datumDb,
       meenemen_in_planning: soort === "bezorging"
         ? defaultMeenemenInPlanning(new Date())
