@@ -36,7 +36,7 @@ export default function HandleidingButton() {
         aria-label="Handleiding openen"
       >
         <BookIcon className="h-4 w-4 shrink-0" />
-        <span className="hidden sm:inline">Handleiding</span>
+        <span>Handleiding</span>
       </button>
       <HandleidingModal open={open} onClose={() => setOpen(false)} />
     </>
