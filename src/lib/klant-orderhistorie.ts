@@ -1,4 +1,3 @@
-import { COMPLETED_ORDER_STATUSES } from "@/lib/order-completion";
 import {
   formatKlantOrderDateTime,
   klantOrderTypeLabel,
@@ -94,7 +93,16 @@ function toDetail(row: OrderRow): KlantOrderHistorieDetail {
 }
 
 /**
- * Alle afgeronde orders van een klant (op e-mail), terugwerkend uit `orders`.
+ * Orders in klantgeschiedenis:
+ * - afgerond (bezorgd / mp_orders), of
+ * - al een Moneybird-factuur (reparatie/Shopify concept) → meteen zichtbaar
+ *   zodra de MB-klant bij orderaanmaak is aangemaakt.
+ */
+const HISTORY_ORDER_FILTER =
+  "status.eq.bezorgd,status.eq.mp_orders,moneybird_invoice_id.not.is.null";
+
+/**
+ * Ordergeschiedenis van een klant (op e-mail), terugwerkend uit `orders`.
  * Ontbrekende velden blijven null — order wordt toch meegenomen.
  */
 export async function listKlantOrderHistorie(
@@ -110,7 +118,7 @@ export async function listKlantOrderHistorie(
     .select(ORDER_SELECT)
     .eq("owner_email", ownerEmail)
     .ilike("email", email)
-    .in("status", [...COMPLETED_ORDER_STATUSES])
+    .or(HISTORY_ORDER_FILTER)
     .order("created_at", { ascending: false, nullsFirst: false })
     .limit(200);
 
@@ -145,7 +153,7 @@ export async function getKlantOrderHistorieItem(
     .eq("owner_email", ownerEmail)
     .eq("id", id)
     .ilike("email", email)
-    .in("status", [...COMPLETED_ORDER_STATUSES])
+    .or(HISTORY_ORDER_FILTER)
     .maybeSingle();
 
   if (error || !data) return null;

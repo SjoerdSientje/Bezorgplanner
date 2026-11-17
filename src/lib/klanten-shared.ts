@@ -3,10 +3,12 @@
 export type KlantBronnen = {
   moneybird: boolean;
   mp: boolean;
+  /** Pre-Moneybird (vóór 1 okt 2026) uit afgeronde niet-MP orders. */
+  snelstart: boolean;
 };
 
 export type Klant = {
-  /** Stabiele id: `mb:{moneybirdId}` of `mp:{orderId}`. */
+  /** Stabiele id: `mb:{moneybirdId}`, `mp:{orderId}` of `ss:{orderId}`. */
   id: string;
   email: string;
   naam: string;
@@ -20,6 +22,7 @@ export type Klant = {
   bronnen: KlantBronnen;
   moneybirdId: string | null;
   mpOrderId: string | null;
+  snelstartOrderId: string | null;
 };
 
 /** Zoeken: alleen prefix-match op voornaam, achternaam of e-mail. */
@@ -49,15 +52,16 @@ export function splitNaamToVoorAchternaam(naam: string): {
   };
 }
 
-export function encodeKlantId(kind: "mb" | "mp", rawId: string): string {
+/** `mb` = Moneybird; `mp` = afgeronde MP-order; `ss` = Snelstart (pre-MB). */
+export function encodeKlantId(kind: "mb" | "mp" | "ss", rawId: string): string {
   return `${kind}:${String(rawId ?? "").trim()}`;
 }
 
 export function parseKlantId(
   id: string
-): { kind: "mb" | "mp"; rawId: string } | null {
+): { kind: "mb" | "mp" | "ss"; rawId: string } | null {
   const raw = String(id ?? "").trim();
-  const m = raw.match(/^(mb|mp):(.+)$/);
+  const m = raw.match(/^(mb|mp|ss):(.+)$/);
   if (!m) return null;
-  return { kind: m[1] as "mb" | "mp", rawId: m[2]! };
+  return { kind: m[1] as "mb" | "mp" | "ss", rawId: m[2]! };
 }

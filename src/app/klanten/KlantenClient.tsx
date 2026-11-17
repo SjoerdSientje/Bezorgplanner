@@ -262,6 +262,7 @@ export default function KlantenClient() {
                     <KlantBronBadges
                       moneybird={k.bronnen.moneybird}
                       mp={k.bronnen.mp}
+                      snelstart={k.bronnen.snelstart}
                     />
                   </button>
                 </li>
@@ -307,6 +308,7 @@ export default function KlantenClient() {
                   <KlantBronBadges
                     moneybird={selected.bronnen.moneybird}
                     mp={selected.bronnen.mp}
+                    snelstart={selected.bronnen.snelstart}
                   />
                 </div>
 
@@ -346,17 +348,25 @@ export default function KlantenClient() {
                     <dd className="mt-2 flex flex-wrap items-center gap-2 text-sm text-koopje-black">
                       {selected.bronnen.moneybird && (
                         <span className="inline-flex items-center gap-1.5 rounded-full bg-stone-50 px-2.5 py-1">
-                          <KlantBronBadges moneybird mp={false} />
+                          <KlantBronBadges moneybird mp={false} snelstart={false} />
                           Moneybird
+                        </span>
+                      )}
+                      {selected.bronnen.snelstart && !selected.bronnen.moneybird && (
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-stone-50 px-2.5 py-1">
+                          <KlantBronBadges moneybird={false} mp={false} snelstart />
+                          Snelstart
                         </span>
                       )}
                       {selected.bronnen.mp && (
                         <span className="inline-flex items-center gap-1.5 rounded-full bg-stone-50 px-2.5 py-1">
-                          <KlantBronBadges moneybird={false} mp />
+                          <KlantBronBadges moneybird={false} mp snelstart={false} />
                           Marktplaats
                         </span>
                       )}
-                      {!selected.bronnen.moneybird && !selected.bronnen.mp && (
+                      {!selected.bronnen.moneybird &&
+                        !selected.bronnen.mp &&
+                        !selected.bronnen.snelstart && (
                         <span>—</span>
                       )}
                     </dd>

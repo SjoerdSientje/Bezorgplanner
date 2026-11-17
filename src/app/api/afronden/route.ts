@@ -495,7 +495,9 @@ export async function POST(request: NextRequest) {
     // Huidige datum in Amsterdam-tijd (YYYY-MM-DD) = de werkelijke bezorgdatum
     const bezorgdatum = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Amsterdam" });
 
-    // Update order afrond-info + status
+    // Update order afrond-info + status.
+    // Status bezorgd/mp_orders → zichtbaar in afgeronde orders én (via e-mail)
+    // als klant + ordergeschiedenis in /klanten.
     const updatePayload: Record<string, unknown> = {
       bezorger_naam: bezorgerNaam,
       betaalmethode,
