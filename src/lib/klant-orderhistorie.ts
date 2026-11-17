@@ -1,4 +1,5 @@
 import {
+  formatKlantOrderBezorger,
   formatKlantOrderDateTime,
   klantOrderTypeLabel,
   type KlantOrderHistorieDetail,
@@ -27,10 +28,11 @@ type OrderRow = {
   link_aankoopbewijs: string | null;
   created_at: string | null;
   afgerond_at: string | null;
+  bezorger_naam: string | null;
 };
 
 const ORDER_SELECT =
-  "id, source, type, status, order_nummer, email, producten, line_items_json, bestelling_totaal_prijs, opmerkingen_klant, link_factuur, link_aankoopbewijs, created_at, afgerond_at";
+  "id, source, type, status, order_nummer, email, producten, line_items_json, bestelling_totaal_prijs, opmerkingen_klant, link_factuur, link_aankoopbewijs, created_at, afgerond_at, bezorger_naam";
 
 function parseProducten(
   producten: string | null | undefined,
@@ -77,15 +79,21 @@ function parseProducten(
 
 function toDetail(row: OrderRow): KlantOrderHistorieDetail {
   const totaal = row.bestelling_totaal_prijs;
+  const orderNummer = String(row.order_nummer ?? "").trim() || null;
   return {
     id: String(row.id),
     aangemaaktOp: formatKlantOrderDateTime(row.created_at),
     typeLabel: klantOrderTypeLabel({ source: row.source, type: row.type }),
     totaalPrijs:
       totaal != null && Number.isFinite(Number(totaal)) ? Number(totaal) : null,
-    orderNummer: String(row.order_nummer ?? "").trim() || null,
+    orderNummer,
     opmerking: String(row.opmerkingen_klant ?? "").trim() || null,
     afgerondOp: formatKlantOrderDateTime(row.afgerond_at),
+    bezorger: formatKlantOrderBezorger({
+      type: row.type,
+      bezorgerNaam: row.bezorger_naam,
+      orderNummer,
+    }),
     producten: parseProducten(row.producten, row.line_items_json),
     linkFactuur: String(row.link_factuur ?? "").trim() || null,
     linkAankoopbewijs: String(row.link_aankoopbewijs ?? "").trim() || null,

@@ -18,10 +18,32 @@ export type KlantOrderHistorieDetail = KlantOrderHistorieSamenvatting & {
   opmerking: string | null;
   /** DD-MM-JJJJ UU:mm of null. */
   afgerondOp: string | null;
+  /** Bezorgernaam, of "Afgehaald" bij winkelafhaal. */
+  bezorger: string | null;
   producten: KlantOrderHistorieProduct[];
   linkFactuur: string | null;
   linkAankoopbewijs: string | null;
 };
+
+/** Weergave bezorger: afhaal → "Afgehaald", anders bezorgernaam. */
+export function formatKlantOrderBezorger(input: {
+  type?: string | null;
+  bezorgerNaam?: string | null;
+  orderNummer?: string | null;
+}): string | null {
+  const type = String(input.type ?? "").trim().toLowerCase();
+  const bezorger = String(input.bezorgerNaam ?? "").trim();
+  const orderNummer = String(input.orderNummer ?? "").trim();
+
+  if (
+    type === "mp_winkel" ||
+    bezorger.toLowerCase() === "winkelverkoop" ||
+    /^#?afh/i.test(orderNummer)
+  ) {
+    return "Afgehaald";
+  }
+  return bezorger || null;
+}
 
 export function formatKlantOrderDateTime(
   iso: string | null | undefined

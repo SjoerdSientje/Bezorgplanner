@@ -456,6 +456,10 @@ export default function KlantenClient() {
                           value={openOrder.afgerondOp || ""}
                         />
                         <Field
+                          label="Bezorger"
+                          value={openOrder.bezorger || ""}
+                        />
+                        <Field
                           label="Totaalprijs"
                           value={formatKlantOrderPrijs(openOrder.totaalPrijs)}
                         />
