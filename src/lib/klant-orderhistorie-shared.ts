@@ -87,6 +87,21 @@ export function formatKlantOrderPrijs(value: number | null | undefined): string 
   })}`;
 }
 
+/** Korte productregel voor de ordergeschiedenis-lijst (zonder detailklik). */
+export function formatKlantOrderProductenLijst(
+  producten: KlantOrderHistorieProduct[] | null | undefined,
+  maxItems = 4
+): string | null {
+  const names = (producten ?? [])
+    .map((p) => String(p?.naam ?? "").trim())
+    .filter(Boolean);
+  if (names.length === 0) return null;
+  const shown = names.slice(0, Math.max(1, maxItems));
+  const extra = names.length - shown.length;
+  const text = shown.join(" · ");
+  return extra > 0 ? `${text} · +${extra}` : text;
+}
+
 /** Leesbare order-types voor de geschiedenislijst. */
 export function klantOrderTypeLabel(input: {
   source?: string | null;

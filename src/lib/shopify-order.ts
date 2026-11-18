@@ -94,6 +94,13 @@ export type ShopifyRefund = {
   }> | null;
 };
 
+export interface ShopifyFulfillment {
+  id?: string | number | null;
+  status?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
 export interface ShopifyOrder {
   id?: string | number | null;
   name?: string | null;
@@ -104,6 +111,9 @@ export interface ShopifyOrder {
   fulfillment_status?: string | null;
   cancelled_at?: string | null;
   created_at?: string | null;
+  /** Shopify closed_at — order afgehandeld/gesloten. */
+  closed_at?: string | null;
+  updated_at?: string | null;
   email?: string | null;
   contact_email?: string | null;
   phone?: string | null;
@@ -112,6 +122,7 @@ export interface ShopifyOrder {
   billing_address?: ShopifyAddress | null;
   line_items?: ShopifyLineItem[] | null;
   shipping_lines?: ShopifyShippingLine[] | null;
+  fulfillments?: ShopifyFulfillment[] | null;
   /** Huidig ordertotaal (nieuwere Shopify webhooks). */
   current_total_price?: string | number | null;
   /**
@@ -268,12 +279,12 @@ export function isOnderhoudspakketLineName(name: string): boolean {
 }
 
 /**
- * Pakketjes-wachtrij: totaal &lt; €450, niet geannuleerd, nog niet volledig verzonden.
- * Service-orders (terugbrengen, ophalen, proefrit, reparatie) zijn geen pakketjes.
- * Alleen-onderhoudspakket-orders (brons/zilver/goud) horen hier niet.
+ * Shopify-order van het pakketjes-type (< €450 of €0 garantie/nalevering),
+ * ongeacht of die al fulfilled is. Gebruikt voor wachtrij én klantgeschiedenis.
  */
-export function qualifiesForPakketjes(order: ShopifyOrder): boolean {
+export function isPakketjesTypeOrder(order: ShopifyOrder): boolean {
   if (isShowroomShippingOrder(order)) return false;
+  if (order.cancelled_at) return false;
   const SERVICE_KEYWORDS = ["terugbrengen", "ophalen", "proefrit", "reparatie aan huis"];
   const tags = String(order.tags ?? "").toLowerCase();
   const lineItemNames = (order.line_items ?? []).map((li) => String(li.name ?? "").toLowerCase());
@@ -291,18 +302,59 @@ export function qualifiesForPakketjes(order: ShopifyOrder): boolean {
   const qualifiesByTotal = total > 0 && total < PAKKETJES_MAX_PRIJS;
   const qualifiesBySpecialService = total === 0 && hasSpecialServiceItem;
   if (!qualifiesByTotal && !qualifiesBySpecialService) return false;
-  if (order.cancelled_at) return false;
-  const fs = String(order.fulfillment_status ?? "").toLowerCase();
-  if (fs === "fulfilled") return false;
 
   const lineItems = activeShopifyLineItems(order);
   const physicalLines = lineItems.filter(
     (li) => !isOnderhoudspakketLineName(String(li.name ?? ""))
   );
-  // Alleen onderhoudspakket(ten) of geen fysieke regels → geen pakketjes-wachtrij.
+  // Alleen onderhoudspakket(ten) of geen fysieke regels → geen pakketjes.
   if (physicalLines.length === 0 && !qualifiesBySpecialService) {
     return false;
   }
+  return true;
+}
+
+/** Order is in Shopify afgehandeld (fulfilled of gesloten). */
+export function isShopifyOrderHandled(order: ShopifyOrder): boolean {
+  const fs = String(order.fulfillment_status ?? "").toLowerCase();
+  if (fs === "fulfilled") return true;
+  if (order.closed_at) return true;
+  return false;
+}
+
+/**
+ * Tijdstip waarop de order in Shopify werd afgehandeld:
+ * laatste fulfillment → closed_at → updated_at → created_at.
+ */
+export function shopifyOrderHandledAt(order: ShopifyOrder): Date {
+  let bestMs = NaN;
+  for (const f of order.fulfillments ?? []) {
+    const t = Date.parse(String(f.created_at ?? f.updated_at ?? ""));
+    if (Number.isFinite(t) && (!Number.isFinite(bestMs) || t > bestMs)) {
+      bestMs = t;
+    }
+  }
+  if (Number.isFinite(bestMs)) return new Date(bestMs);
+
+  const closed = Date.parse(String(order.closed_at ?? ""));
+  if (Number.isFinite(closed)) return new Date(closed);
+
+  const updated = Date.parse(String(order.updated_at ?? ""));
+  if (Number.isFinite(updated) && isShopifyOrderHandled(order)) {
+    return new Date(updated);
+  }
+
+  return shopifyOrderCreatedAt(order);
+}
+
+/**
+ * Pakketjes-wachtrij: totaal &lt; €450, niet geannuleerd, nog niet volledig verzonden.
+ * Service-orders (terugbrengen, ophalen, proefrit, reparatie) zijn geen pakketjes.
+ * Alleen-onderhoudspakket-orders (brons/zilver/goud) horen hier niet.
+ */
+export function qualifiesForPakketjes(order: ShopifyOrder): boolean {
+  if (!isPakketjesTypeOrder(order)) return false;
+  if (isShopifyOrderHandled(order)) return false;
   return true;
 }
 

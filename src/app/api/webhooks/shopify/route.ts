@@ -16,6 +16,7 @@ import {
   type ShopifyLineSnapshot,
 } from "@/lib/shopify-order";
 import { buildPakketjesRow } from "@/lib/pakketjes-sync";
+import { archiveFulfilledPakketjesForOwners } from "@/lib/pakketjes-order-history";
 import {
   allAccountEmails,
   getInventoryScanOwnerEmail,
@@ -506,6 +507,17 @@ export async function POST(request: NextRequest) {
     const orderCreatedMs = shopifyOrderCreatedAt(order).getTime();
 
     if (shopifyOrderId) {
+      // Afgehandelde pakketjes (<€450 / garantie-nalevering) → klantgeschiedenis.
+      // Onafhankelijk van pakketjes-cutoff (die alleen de open wachtrij raakt).
+      try {
+        await archiveFulfilledPakketjesForOwners(supabase, order);
+      } catch (err) {
+        console.error(
+          "[webhooks/shopify] pakketjes → orderhistorie:",
+          err instanceof Error ? err.message : err
+        );
+      }
+
       for (const ownerEmail of allAccountEmails()) {
         if (!shopifyWebhookOrderAppliesToOwner(ownerEmail, order.note)) {
           continue;

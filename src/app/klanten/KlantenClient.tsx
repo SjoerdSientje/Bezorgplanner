@@ -6,6 +6,7 @@ import KlantBronBadges from "@/components/KlantBronBadges";
 import type { Klant } from "@/lib/klanten-shared";
 import {
   formatKlantOrderPrijs,
+  formatKlantOrderProductenLijst,
   type KlantOrderHistorieDetail,
 } from "@/lib/klant-orderhistorie-shared";
 
@@ -398,7 +399,11 @@ export default function KlantenClient() {
 
                   {selected.email && !loadingOrders && orders.length > 0 && !openOrder && (
                     <ul className="divide-y divide-koopje-black/8 rounded-xl border border-koopje-black/10">
-                      {orders.map((order) => (
+                      {orders.map((order) => {
+                        const productenRegel = formatKlantOrderProductenLijst(
+                          order.producten
+                        );
+                        return (
                         <li key={order.id}>
                           <button
                             type="button"
@@ -409,6 +414,11 @@ export default function KlantenClient() {
                               <span className="block text-sm font-medium text-koopje-black">
                                 {order.typeLabel}
                               </span>
+                              {productenRegel && (
+                                <span className="mt-0.5 block text-xs text-koopje-black/70">
+                                  {productenRegel}
+                                </span>
+                              )}
                               <span className="mt-0.5 block text-xs text-koopje-black/50">
                                 {order.aangemaaktOp || "Aanmaaktijd onbekend"}
                               </span>
@@ -418,7 +428,8 @@ export default function KlantenClient() {
                             </span>
                           </button>
                         </li>
-                      ))}
+                        );
+                      })}
                     </ul>
                   )}
 
