@@ -676,7 +676,18 @@ function SortableOrderRow({
       >
         <OpmerkingKlantCell
           value={String(order.opmerkingen_klant ?? "")}
-          onSave={async (v) => onPatch(String(order.id), { opmerkingen_klant: v.trim() || null })}
+          onSave={async (v) =>
+            onPatch(String(order.id), { opmerkingen_klant: v.trim() || null })
+          }
+          {...(String(order.source ?? "").toLowerCase() === "reparatie"
+            ? {
+                achtergrondverhaal: String(order.achtergrondverhaal ?? ""),
+                onSaveAchtergrondverhaal: async (v: string) =>
+                  onPatch(String(order.id), {
+                    achtergrondverhaal: v.trim() || null,
+                  }),
+              }
+            : {})}
         />
       </td>
 
@@ -830,6 +841,13 @@ function TouchOrderRow({
         <OpmerkingKlantCell
           value={String(order.opmerkingen_klant ?? "")}
           onSave={async (v) => onPatch(id, { opmerkingen_klant: v.trim() || null })}
+          {...(String(order.source ?? "").toLowerCase() === "reparatie"
+            ? {
+                achtergrondverhaal: String(order.achtergrondverhaal ?? ""),
+                onSaveAchtergrondverhaal: async (v: string) =>
+                  onPatch(id, { achtergrondverhaal: v.trim() || null }),
+              }
+            : {})}
         />
       </td>
 

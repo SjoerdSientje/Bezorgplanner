@@ -188,7 +188,7 @@ function SidebarInner() {
       >
         <div className="sidebar-top">
           <Link
-            href="/bezorgplanner/ritjes-vandaag"
+            href="/"
             className="sidebar-brand"
             onClick={() => setMobileOpen(false)}
           >

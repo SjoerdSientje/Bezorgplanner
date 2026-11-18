@@ -14,6 +14,7 @@ const ALLOWED_KEYS = new Set([
   "nieuw_appje_sturen",
   "datum_opmerking",
   "opmerkingen_klant",
+  "achtergrondverhaal",
   "producten",
   "bestelling_totaal_prijs",
   "betaald",

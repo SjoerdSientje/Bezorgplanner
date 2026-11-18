@@ -22,6 +22,9 @@ export type AlleRittenOrder = {
   bestelling_totaal_prijs?: number | null;
   volledig_adres?: string | null;
   opmerkingen_klant?: string | null;
+  achtergrondverhaal?: string | null;
+  source?: string | null;
+  type?: string | null;
   telefoon_nummer?: string | null;
   telefoon_e164?: string | null;
   email?: string | null;
@@ -29,6 +32,8 @@ export type AlleRittenOrder = {
   al_betaald?: number | null;
   te_betalen?: number | null;
   bezorgtijd_voorkeur?: string | null;
+  /** MP / reparatie: wie de order aanmaakte. */
+  aangemaakt_door?: string | null;
   planning_kleur?: PlanningKleur;
   planning_opmerking?: string | null;
   aankomsttijd_slot?: string | null;
@@ -214,6 +219,7 @@ export default function AlleRittenTabel({
     "Telefoon",
     "Email",
     "Voorkeurstijd",
+    "Aangemaakt door",
     "", // delete
   ];
 
@@ -338,11 +344,24 @@ export default function AlleRittenTabel({
                     />
                   </td>
 
-                  {/* Opmerkingen klant */}
+                  {/* Opmerkingen klant (+ achtergrondverhaal bij reparatie) */}
                   <td className="border border-stone-200 p-0 min-w-[10rem] max-w-[16rem]">
                     <OpmerkingKlantCell
                       value={String(order.opmerkingen_klant ?? "")}
-                      onSave={async (v) => onPatch(order.id, { opmerkingen_klant: v.trim() || null })}
+                      onSave={async (v) =>
+                        onPatch(order.id, { opmerkingen_klant: v.trim() || null })
+                      }
+                      {...(String(order.source ?? "").toLowerCase() === "reparatie"
+                        ? {
+                            achtergrondverhaal: String(
+                              order.achtergrondverhaal ?? ""
+                            ),
+                            onSaveAchtergrondverhaal: async (v: string) =>
+                              onPatch(order.id, {
+                                achtergrondverhaal: v.trim() || null,
+                              }),
+                          }
+                        : {})}
                     />
                   </td>
 
@@ -435,6 +454,11 @@ export default function AlleRittenTabel({
                       placeholder="—"
                       className="text-stone-600"
                     />
+                  </td>
+
+                  {/* Aangemaakt door (MP / reparatie) */}
+                  <td className="border border-stone-200 px-2 py-1.5 whitespace-nowrap text-stone-600">
+                    {String(order.aangemaakt_door ?? "").trim() || "—"}
                   </td>
 
                   {/* Delete */}

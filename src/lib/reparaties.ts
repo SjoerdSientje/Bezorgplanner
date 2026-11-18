@@ -121,9 +121,31 @@ export function reparatieSoortProductenPrefix(soort: ReparatieSoort): string {
   }
 }
 
-/** Bouw productenkolom: altijd `Prefix: titel1, titel2` op één regel. */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Vaste kop van de productenkolom: `Ordertype: modelnaam -`
+ * Voorbeeld: `Ophalen: V20 -`
+ */
+export function reparatieProductenKolomHead(
+  soort: ReparatieSoort,
+  modelnaam: string | null | undefined
+): string {
+  const prefix = reparatieSoortProductenPrefix(soort);
+  const model = String(modelnaam ?? "").trim();
+  if (!model) return prefix;
+  return `${prefix} ${model} -`;
+}
+
+/**
+ * Bouw productenkolom: altijd `Ordertype: modelnaam -` (+ optionele rest).
+ * Voorbeeld: `Reparatie aan huis: V20 - Binnenband, Ketting`
+ */
 export function buildReparatieProductenKolom(params: {
   soort: ReparatieSoort;
+  modelnaam?: string | null;
   vrijeTekst?: string | null;
   regels?: Array<{
     kolom_tekst?: string | null;
@@ -131,20 +153,28 @@ export function buildReparatieProductenKolom(params: {
     onderdeel_naam?: string | null;
   }>;
 }): string {
+  const model = String(params.modelnaam ?? "").trim();
+  const head = reparatieProductenKolomHead(params.soort, model);
   const prefix = reparatieSoortProductenPrefix(params.soort);
-  const prefixRe = new RegExp(
-    `^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*`,
-    "i"
-  );
-  const vrij = String(params.vrijeTekst ?? "").trim().replace(prefixRe, "");
 
-  // Vrije tekst (ophalen / producten nog niet bekend) → "Prefix: tekst".
-  if (vrij) {
-    return `${prefix} ${vrij}`;
+  let vrij = String(params.vrijeTekst ?? "").trim();
+  // Strip volledige head / prefix / model- als gebruiker die meetypt.
+  vrij = vrij
+    .replace(new RegExp(`^${escapeRegExp(head)}\\s*`, "i"), "")
+    .replace(new RegExp(`^${escapeRegExp(prefix)}\\s*`, "i"), "")
+    .trim();
+  if (model) {
+    vrij = vrij
+      .replace(new RegExp(`^${escapeRegExp(model)}\\s*-\\s*`, "i"), "")
+      .trim();
   }
 
-  // Standaardreparaties + Shopify/custom: titels komma-gescheiden achter de prefix.
-  // Voorbeeld: "Reparatie aan huis: Binnen + buitenband Kenda (20x4), Ketting"
+  // Vrije tekst (ophalen / producten nog niet bekend / optionele override).
+  if (vrij) {
+    return model ? `${head} ${vrij}` : `${prefix} ${vrij}`;
+  }
+
+  // Standaardreparaties + Shopify/custom: titels komma-gescheiden achter de head.
   const titles: string[] = [];
   for (const r of params.regels ?? []) {
     const custom = String(r.kolom_tekst ?? "").trim();
@@ -156,24 +186,36 @@ export function buildReparatieProductenKolom(params: {
     if (fallback) titles.push(fallback);
   }
 
-  if (params.soort === "reparatie_ophalen") {
-    return titles.length ? `${prefix} ${titles.join(", ")}` : prefix;
+  if (titles.length) {
+    return model
+      ? `${head} ${titles.join(", ")}`
+      : `${prefix} ${titles.join(", ")}`;
   }
 
-  return titles.length ? `${prefix} ${titles.join(", ")}` : prefix;
+  return head;
 }
 
-/** Haal prefix weg om vrije tekst / rest terug te krijgen bij bewerken. */
+/** Haal prefix (+ optioneel model -) weg om resttekst terug te krijgen bij bewerken. */
 export function stripReparatieProductenPrefix(
   producten: string | null | undefined,
-  soort: ReparatieSoort
+  soort: ReparatieSoort,
+  modelnaam?: string | null
 ): string {
-  const raw = String(producten ?? "");
+  let raw = String(producten ?? "").trim();
+  const head = reparatieProductenKolomHead(soort, modelnaam);
   const prefix = reparatieSoortProductenPrefix(soort);
-  if (raw.startsWith(prefix)) {
-    return raw.slice(prefix.length).replace(/^[\s\n]+/, "").trim();
+  if (raw.toLowerCase().startsWith(head.toLowerCase())) {
+    raw = raw.slice(head.length).replace(/^[\s\n]+/, "").trim();
+  } else if (raw.startsWith(prefix)) {
+    raw = raw.slice(prefix.length).replace(/^[\s\n]+/, "").trim();
+    const model = String(modelnaam ?? "").trim();
+    if (model) {
+      raw = raw
+        .replace(new RegExp(`^${escapeRegExp(model)}\\s*-\\s*`, "i"), "")
+        .trim();
+    }
   }
-  return raw.trim();
+  return raw;
 }
 
 /** Pas totaalprijs-override toe op onderdelen zonder Shopify-ids te wijzigen. */

@@ -106,13 +106,11 @@ function toDetail(row: OrderRow): KlantOrderHistorieDetail {
 }
 
 /**
- * Orders in klantgeschiedenis:
- * - afgerond (bezorgd / mp_orders), of
- * - al een Moneybird-factuur (reparatie/Shopify concept) → meteen zichtbaar
- *   zodra de MB-klant bij orderaanmaak is aangemaakt.
+ * Orders in klantgeschiedenis: alleen afgeronde orders (bezorgd / mp_orders).
+ * Conceptfactuur maakt de klant wél vindbaar via Moneybird, maar orderdetails
+ * horen hier pas ná afronden in de Bezorgplanner (reparatie e.d. kan tot dan wijzigen).
  */
-const HISTORY_ORDER_FILTER =
-  "status.eq.bezorgd,status.eq.mp_orders,moneybird_invoice_id.not.is.null";
+const HISTORY_ORDER_FILTER = "status.eq.bezorgd,status.eq.mp_orders";
 
 /**
  * Ordergeschiedenis van een klant (op e-mail), terugwerkend uit `orders`.

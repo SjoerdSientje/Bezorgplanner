@@ -20,6 +20,7 @@ import {
   reparatieSoortHeeftProducten,
   reparatieSoortLabel,
   standaardReparatieTotaalIncl,
+  reparatieProductenKolomHead,
   stripReparatieProductenPrefix,
   type ReparatieBetaalwijze,
   type ReparatieSoort,
@@ -38,6 +39,7 @@ type OrderRow = {
   bezorgtijd_voorkeur: string | null;
   datum_opmerking: string | null;
   opmerkingen_klant: string | null;
+  model: string | null;
   producten: string | null;
   bestelling_totaal_prijs: number | null;
   reparatie_betaalwijze: ReparatieBetaalwijze | null;
@@ -77,6 +79,7 @@ type EditDraft = {
   woonplaats: string;
   bezorgtijd_voorkeur: string;
   datum_voorkeur: string;
+  model: string;
   opmerking: string;
   producten_nog_niet_bekend: boolean;
   producten_vrije_tekst: string;
@@ -300,13 +303,14 @@ export default function ReparatiesGeplandPage() {
       woonplaats: adres.woonplaats,
       bezorgtijd_voorkeur: o.bezorgtijd_voorkeur ?? "",
       datum_voorkeur: o.datum_opmerking ?? "",
+      model: o.model ?? "",
       opmerking: o.opmerkingen_klant ?? "",
       producten_nog_niet_bekend:
         soort === "reparatie_deur" && Boolean(o.producten_nog_niet_bekend),
       producten_vrije_tekst:
         soort === "reparatie_ophalen" ||
         (soort === "reparatie_deur" && Boolean(o.producten_nog_niet_bekend))
-          ? stripReparatieProductenPrefix(o.producten, soort)
+          ? stripReparatieProductenPrefix(o.producten, soort, o.model)
           : "",
       fiets_ook_opgehaald:
         soort === "reparatie_terugbrengen" && Boolean(o.fiets_ook_opgehaald),
@@ -396,6 +400,11 @@ export default function ReparatiesGeplandPage() {
       setConfirmOpen(false);
       return;
     }
+    if (!edit.model.trim()) {
+      setError("Vul het model van de fiets in.");
+      setConfirmOpen(false);
+      return;
+    }
     if (needsProducts && edit.regels.length === 0) {
       setError(
         edit.soort === "reparatie_deur"
@@ -480,6 +489,7 @@ export default function ReparatiesGeplandPage() {
           woonplaats: edit.woonplaats,
           bezorgtijd_voorkeur: edit.bezorgtijd_voorkeur,
           datum_voorkeur: edit.datum_voorkeur,
+          model: edit.model.trim(),
           opmerking: edit.opmerking,
           producten_nog_niet_bekend:
             edit.soort === "reparatie_deur" && edit.producten_nog_niet_bekend,
@@ -828,6 +838,18 @@ export default function ReparatiesGeplandPage() {
                     />
                   </label>
                   <label className="block">
+                    Model fiets
+                    <input
+                      className="mt-1 w-full rounded border px-2 py-2"
+                      value={edit.model}
+                      onChange={(e) =>
+                        setEdit({ ...edit, model: e.target.value })
+                      }
+                      placeholder="bijv. V20 Pro"
+                      required
+                    />
+                  </label>
+                  <label className="block">
                     Opmerking
                     <textarea
                       className="mt-1 w-full rounded border px-2 py-2"
@@ -844,7 +866,10 @@ export default function ReparatiesGeplandPage() {
                       Productenkolom
                       <div className="mt-1 flex overflow-hidden rounded border border-koopje-black/20 focus-within:ring-2 focus-within:ring-koopje-orange/40">
                         <span className="shrink-0 select-none border-r border-koopje-black/10 bg-stone-50 px-2 py-2 text-sm text-koopje-black/70">
-                          Ophalen:
+                          {reparatieProductenKolomHead(
+                            edit.soort,
+                            edit.model
+                          ) || "Ophalen: … -"}
                         </span>
                         <input
                           className="min-w-0 flex-1 px-2 py-2 text-sm outline-none"

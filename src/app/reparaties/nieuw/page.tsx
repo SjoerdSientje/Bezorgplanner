@@ -19,6 +19,7 @@ import {
   arbeidUrenFromPrijsIncl,
   buildReparatieProductenKolom,
   normalizeStandaardOnderdelen,
+  reparatieProductenKolomHead,
   reparatieSoortHeeftProducten,
   reparatieSoortProductenPrefix,
   standaardReparatieTotaalIncl,
@@ -83,6 +84,7 @@ export default function ReparatieNieuwPage() {
     useState<MoneybirdContactFormFill | null>(null);
   const [bezorgtijd, setBezorgtijd] = useState("");
   const [datumVoorkeur, setDatumVoorkeur] = useState("");
+  const [modelFiets, setModelFiets] = useState("");
   const [opmerking, setOpmerking] = useState("");
   const [achtergrondverhaal, setAchtergrondverhaal] = useState("");
   const [aangemaaktDoor, setAangemaaktDoor] = useState<OrderMedewerker | "">("");
@@ -252,16 +254,29 @@ export default function ReparatieNieuwPage() {
 
   const totaal = subtotaalRegels + (voorrijWeergave?.bedrag ?? 0);
 
+  const productenKolomHead = useMemo(
+    () => reparatieProductenKolomHead(soort, modelFiets),
+    [soort, modelFiets]
+  );
+
   const defaultProductenKolom = useMemo(() => {
-    if (!needsProducts) return "";
     return buildReparatieProductenKolom({
       soort,
-      regels: regels.map((r) => ({
-        naam: r.naam,
-        onderdeel_naam: r.onderdelen.map((o) => o.naam).filter(Boolean).join(" + "),
-      })),
+      modelnaam: modelFiets,
+      vrijeTekst:
+        soort === "reparatie_ophalen" ? vrijeTekst : productenKolomTekst || null,
+      regels:
+        soort === "reparatie_ophalen"
+          ? []
+          : regels.map((r) => ({
+              naam: r.naam,
+              onderdeel_naam: r.onderdelen
+                .map((o) => o.naam)
+                .filter(Boolean)
+                .join(" + "),
+            })),
     });
-  }, [needsProducts, soort, regels]);
+  }, [soort, modelFiets, vrijeTekst, productenKolomTekst, regels]);
 
   /** Zet gecombineerde arbeidskosten via bedrag → uren op de eerste regel. */
   function setArbeidBedrag(raw: string) {
@@ -422,6 +437,10 @@ export default function ReparatieNieuwPage() {
       setError("Kies wie deze order aanmaakt.");
       return;
     }
+    if (!modelFiets.trim()) {
+      setError("Vul het model van de fiets in.");
+      return;
+    }
     if (needsProducts && regels.length === 0) {
       setError("Voeg minstens één factuurregel toe.");
       return;
@@ -528,6 +547,7 @@ export default function ReparatieNieuwPage() {
           opmerking,
           achtergrondverhaal,
           aangemaakt_door: aangemaaktDoor,
+          model: modelFiets.trim(),
           regels: payloadRegels,
           voorrij_bedrag: voorrijTotaalParsed ?? 0,
         }),
@@ -748,6 +768,24 @@ export default function ReparatieNieuwPage() {
             />
 
             <label className="block text-sm">
+              Model fiets
+              <input
+                className="mt-1 w-full rounded-xl border border-koopje-black/20 px-3 py-2.5"
+                value={modelFiets}
+                onChange={(e) => setModelFiets(e.target.value)}
+                placeholder="bijv. V20 Pro"
+                required
+              />
+              <span className="mt-1 block text-xs text-koopje-black/50">
+                Komt in de productenkolom als:{" "}
+                <span className="font-medium text-koopje-black/70">
+                  {productenKolomHead ||
+                    `${reparatieSoortProductenPrefix(soort)} … -`}
+                </span>
+              </span>
+            </label>
+
+            <label className="block text-sm">
               Opmerking
               <textarea
                 className="mt-1 w-full rounded-xl border border-koopje-black/20 px-3 py-2.5"
@@ -776,13 +814,21 @@ export default function ReparatieNieuwPage() {
                 Productenkolom
                 <div className="mt-1 flex overflow-hidden rounded-xl border border-koopje-black/20 focus-within:ring-2 focus-within:ring-koopje-orange/40">
                   <span className="shrink-0 select-none border-r border-koopje-black/10 bg-stone-50 px-3 py-2.5 text-sm text-koopje-black/70">
-                    Ophalen:
+                    {productenKolomHead || "Ophalen: … -"}
                   </span>
                   <input
                     className="min-w-0 flex-1 px-3 py-2.5 text-sm outline-none"
                     value={vrijeTekst}
                     onChange={(e) =>
-                      setVrijeTekst(e.target.value.replace(/^ophalen:\s*/i, ""))
+                      setVrijeTekst(
+                        e.target.value.replace(/^ophalen:\s*/i, "").replace(
+                          new RegExp(
+                            `^${modelFiets.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*-\\s*`,
+                            "i"
+                          ),
+                          ""
+                        )
+                      )
                     }
                     placeholder="optioneel, bijv. kapotte band"
                   />
@@ -1128,23 +1174,34 @@ export default function ReparatieNieuwPage() {
                   </p>
                   <p className="rounded-lg border border-dashed border-koopje-black/15 bg-white px-3 py-2 text-sm text-koopje-black">
                     {defaultProductenKolom ||
-                      `${reparatieSoortProductenPrefix(soort)} …`}
+                      `${reparatieProductenKolomHead(soort, modelFiets || "…")}`}
                   </p>
                   <label className="block text-sm text-koopje-black/70">
                     Optioneel: andere tekst in productenkolom
                     <div className="mt-1 flex overflow-hidden rounded-xl border border-koopje-black/20 bg-white">
                       <span className="shrink-0 select-none border-r border-koopje-black/10 bg-stone-50 px-3 py-2.5 text-sm text-koopje-black/70">
-                        {reparatieSoortProductenPrefix(soort)}
+                        {productenKolomHead ||
+                          `${reparatieSoortProductenPrefix(soort)} … -`}
                       </span>
                       <input
                         className="min-w-0 flex-1 px-3 py-2.5 text-sm outline-none"
                         value={productenKolomTekst}
                         onChange={(e) =>
                           setProductenKolomTekst(
-                            e.target.value.replace(
-                              /^(reparatie aan huis|terugbrengen):\s*/i,
-                              ""
-                            )
+                            e.target.value
+                              .replace(
+                                /^(reparatie aan huis|terugbrengen|ophalen):\s*/i,
+                                ""
+                              )
+                              .replace(
+                                new RegExp(
+                                  `^${modelFiets
+                                    .trim()
+                                    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*-\\s*`,
+                                  "i"
+                                ),
+                                ""
+                              )
                           )
                         }
                         placeholder="leeg = standaard hierboven"

@@ -512,6 +512,8 @@ export default function RitjesVandaagPage() {
         if (sourceIndex == null || sourceIndex < 0) return null;
         const order = orders[sourceIndex];
         const id = order?.id as string | undefined;
+        const isReparatie =
+          String(order?.source ?? "").toLowerCase() === "reparatie";
         const handleSave = id
           ? async (nextValue: string) => {
               const payload = { opmerkingen_klant: nextValue.trim() || null };
@@ -523,7 +525,35 @@ export default function RitjesVandaagPage() {
               });
             }
           : undefined;
-        return <OpmerkingKlantCell value={String(value ?? "")} onSave={handleSave} />;
+        const handleSaveAchtergrond =
+          id && isReparatie
+            ? async (nextValue: string) => {
+                const payload = {
+                  achtergrondverhaal: nextValue.trim() || null,
+                };
+                patchOrderInState(sourceIndex, payload);
+                await fetch(`/api/orders/${id}`, {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(payload),
+                });
+              }
+            : undefined;
+        return (
+          <OpmerkingKlantCell
+            value={String(value ?? "")}
+            onSave={handleSave}
+            {...(isReparatie
+              ? {
+                  achtergrondverhaal: String(
+                    (order as { achtergrondverhaal?: string | null })
+                      ?.achtergrondverhaal ?? ""
+                  ),
+                  onSaveAchtergrondverhaal: handleSaveAchtergrond,
+                }
+              : {})}
+          />
+        );
       },
     }),
     [orders, visibleRows.sourceIndices, deleteOrder, patchOrderInState]

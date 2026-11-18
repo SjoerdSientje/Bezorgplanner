@@ -225,7 +225,12 @@ export async function POST(request: NextRequest) {
         .from("orders")
         .update({
           producten: buildReparatieProductenKolom({
-            soort: "reparatie_deur",
+            soort: (String(order.type ?? "reparatie_deur") ||
+              "reparatie_deur") as
+              | "reparatie_deur"
+              | "reparatie_ophalen"
+              | "reparatie_terugbrengen",
+            modelnaam: String((order as { model?: string | null }).model ?? "").trim() || null,
             regels: regelsForStore,
           }),
           line_items_json: buildReparatieLineItemsJson(lineItems),

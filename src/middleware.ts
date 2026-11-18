@@ -48,7 +48,7 @@ export function middleware(request: NextRequest) {
 
   if (loggedIn && isLoginPublicPath(pathname)) {
     const url = request.nextUrl.clone();
-    url.pathname = "/bezorgplanner/ritjes-vandaag";
+    url.pathname = "/";
     url.search = "";
     return NextResponse.redirect(url);
   }

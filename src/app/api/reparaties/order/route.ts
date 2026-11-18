@@ -278,6 +278,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const modelnaam = String(body.model ?? body.modelnaam ?? "").trim();
+    if (!modelnaam) {
+      return NextResponse.json(
+        { error: "Vul het model van de fiets in." },
+        { status: 400 }
+      );
+    }
+
     const fietsOokOpgehaald =
       soort === "reparatie_terugbrengen" && Boolean(body.fiets_ook_opgehaald);
 
@@ -369,6 +377,7 @@ export async function POST(request: NextRequest) {
     const totaal = sumLineItemsIncl(lineItems);
     const producten = buildReparatieProductenKolom({
       soort,
+      modelnaam,
       vrijeTekst:
         productenNogNietBekend || soort === "reparatie_ophalen"
           ? vrijeTekst
@@ -416,6 +425,7 @@ export async function POST(request: NextRequest) {
       opmerkingen_klant: String(body.opmerking ?? "").trim() || null,
       achtergrondverhaal: String(body.achtergrondverhaal ?? "").trim() || null,
       aangemaakt_door: aangemaaktDoor,
+      model: modelnaam,
       producten,
       line_items_json: lineItemsJson,
       bestelling_totaal_prijs: Math.round(totaal * 100) / 100,
@@ -789,9 +799,21 @@ export async function PATCH(request: NextRequest) {
       });
     }
 
+    const modelnaam =
+      body.model != null || body.modelnaam != null
+        ? String(body.model ?? body.modelnaam ?? "").trim()
+        : String(existing.model ?? "").trim();
+    if (!modelnaam) {
+      return NextResponse.json(
+        { error: "Vul het model van de fiets in." },
+        { status: 400 }
+      );
+    }
+
     const totaal = sumLineItemsIncl(lineItems);
     const producten = buildReparatieProductenKolom({
       soort,
+      modelnaam,
       vrijeTekst:
         productenNogNietBekend || soort === "reparatie_ophalen"
           ? vrijeTekst
@@ -830,6 +852,7 @@ export async function PATCH(request: NextRequest) {
         body.opmerking != null
           ? String(body.opmerking).trim() || null
           : existing.opmerkingen_klant,
+      model: modelnaam,
       producten,
       line_items_json: buildReparatieLineItemsJson(lineItems),
       bestelling_totaal_prijs: Math.round(totaal * 100) / 100,
