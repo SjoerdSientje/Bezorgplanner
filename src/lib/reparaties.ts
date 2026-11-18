@@ -139,6 +139,19 @@ export function reparatieProductenKolomHead(
   return `${prefix} ${model} -`;
 }
 
+/** Eindlabel na terugbrengen vanuit ophaal-wachtkamer. */
+export function buildOphalenTerugbrengenProductenKolom(params: {
+  modelnaam?: string | null;
+  rest?: string | null;
+}): string {
+  const model = String(params.modelnaam ?? "").trim();
+  const head = model
+    ? `Ophalen + terugbrengen: ${model} -`
+    : "Ophalen + terugbrengen:";
+  const rest = String(params.rest ?? "").trim();
+  return rest ? `${head} ${rest}` : head;
+}
+
 /**
  * Bouw productenkolom: altijd `Ordertype: modelnaam -` (+ optionele rest).
  * Voorbeeld: `Reparatie aan huis: V20 - Binnenband, Ketting`

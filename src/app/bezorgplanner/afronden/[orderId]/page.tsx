@@ -20,6 +20,12 @@ import {
   type ReparatieOnderdeel,
   type ReparatieStandaardItem,
 } from "@/lib/reparaties";
+import {
+  OPHAAL_MEEGENOMEN_ITEMS,
+  parseOphalenMeegenomenJson,
+  type OphaalMeegenomenAntwoord,
+  type OphaalMeegenomenItemId,
+} from "@/lib/ophalen-meegenomen";
 
 type PaymentOption =
   | "Was al betaald"
@@ -57,6 +63,8 @@ type OrderDetail = {
   moneybird_invoice_id?: string | null;
   geen_garantie?: boolean | null;
   achtergrondverhaal?: string | null;
+  gekoppeld_ophalen_order_id?: string | null;
+  ophalen_meegenomen_json?: unknown;
 };
 
 type ReparatieDraftRegel = {
@@ -246,8 +254,20 @@ export default function AfrondenVragenlijstPage({
   const [standaardLoading, setStandaardLoading] = useState(false);
   const [showAchtergrondToevoegen, setShowAchtergrondToevoegen] = useState(false);
   const [achtergrondToevoeging, setAchtergrondToevoeging] = useState("");
+  const [ophalenMeegenomen, setOphalenMeegenomen] = useState<
+    Partial<Record<OphaalMeegenomenItemId, OphaalMeegenomenAntwoord>>
+  >({});
+  const [meegenomenTerug, setMeegenomenTerug] = useState<Record<string, boolean>>(
+    {}
+  );
+  const [meegenomenVanOphaal, setMeegenomenVanOphaal] = useState<
+    OphaalMeegenomenItemId[]
+  >([]);
 
   const isReparatieDeur = order?.type === "reparatie_deur";
+  const isReparatieOphalen = order?.type === "reparatie_ophalen";
+  const isReparatieTerugbrengen = order?.type === "reparatie_terugbrengen";
+  const goesToOphaalWachtkamer = isReparatieOphalen || convertToOphalen;
   const isReparatieOrder =
     String(order?.source ?? "").toLowerCase() === "reparatie" ||
     String(order?.type ?? "").startsWith("reparatie_");
@@ -273,6 +293,43 @@ export default function AfrondenVragenlijstPage({
   useEffect(() => {
     fetchOrder();
   }, [fetchOrder]);
+
+  // Meegenomen items voor terugbreng-afronden (van order of gekoppelde ophaal).
+  useEffect(() => {
+    if (!order || !isReparatieTerugbrengen) {
+      setMeegenomenVanOphaal([]);
+      return;
+    }
+    let cancelled = false;
+    const local = parseOphalenMeegenomenJson(order.ophalen_meegenomen_json);
+    if (local.length > 0) {
+      setMeegenomenVanOphaal(local);
+      return;
+    }
+    const gekoppeld = String(order.gekoppeld_ophalen_order_id ?? "").trim();
+    if (!gekoppeld) {
+      setMeegenomenVanOphaal([]);
+      return;
+    }
+    fetch(`/api/orders/${gekoppeld}?t=${Date.now()}`, { cache: "no-store" })
+      .then((r) => r.json().catch(() => ({})))
+      .then((d) => {
+        if (cancelled) return;
+        setMeegenomenVanOphaal(
+          parseOphalenMeegenomenJson(d?.order?.ophalen_meegenomen_json)
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setMeegenomenVanOphaal([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [order, isReparatieTerugbrengen]);
+
+  useEffect(() => {
+    setMeegenomenTerug({});
+  }, [meegenomenVanOphaal]);
 
   const loadStandaard = useCallback(async () => {
     setStandaardLoading(true);
@@ -374,9 +431,11 @@ export default function AfrondenVragenlijstPage({
     ]);
   }
 
+  const showProductChecklist =
+    Boolean(order) && !isReparatieDeur && !goesToOphaalWachtkamer;
   const checklist = useMemo(
-    () => (order && !isReparatieDeur ? parseChecklist(order, productRules) : []),
-    [order, productRules, isReparatieDeur]
+    () => (showProductChecklist && order ? parseChecklist(order, productRules) : []),
+    [order, productRules, showProductChecklist]
   );
 
   // Init checked-state zodra checklist binnen is
@@ -395,7 +454,17 @@ export default function AfrondenVragenlijstPage({
     order?.source === "mp" || /^#mp/i.test(String(order?.order_nummer ?? "").trim());
   const geenGarantie = Boolean(order?.geen_garantie);
 
-  const allChecked = isReparatieDeur || checklist.every((i) => checked[i.label]);
+  const allChecked =
+    !showProductChecklist || checklist.every((i) => checked[i.label]);
+  const ophalenMeegenomenOk =
+    !goesToOphaalWachtkamer ||
+    OPHAAL_MEEGENOMEN_ITEMS.every(
+      (item) =>
+        ophalenMeegenomen[item.id] === "ja" || ophalenMeegenomen[item.id] === "nvt"
+    );
+  const meegenomenTerugOk =
+    !isReparatieTerugbrengen ||
+    meegenomenVanOphaal.every((id) => Boolean(meegenomenTerug[id]));
   const needsBedrag = betaalOptie === "Factuur betaling aan deur" || betaalOptie === "Contant aan deur";
   const parsedBedrag = parseFloat(betaalBedrag.trim().replace(",", "."));
   const bedragOk = !needsBedrag || (betaalBedrag.trim().length > 0 && !Number.isNaN(parsedBedrag));
@@ -442,6 +511,8 @@ export default function AfrondenVragenlijstPage({
     bezorgerNaam.trim().length > 0 &&
     paymentOk &&
     allChecked &&
+    ophalenMeegenomenOk &&
+    meegenomenTerugOk &&
     serienummerOk &&
     reparatieProductsOk &&
     reparatieFactuurOk &&
@@ -473,6 +544,13 @@ export default function AfrondenVragenlijstPage({
             isReparatieOrder && showAchtergrondToevoegen
               ? achtergrondToevoeging.trim() || undefined
               : undefined,
+          ophalen_meegenomen: goesToOphaalWachtkamer
+            ? ophalenMeegenomen
+            : undefined,
+          ophalen_meegenomen_teruggegeven:
+            isReparatieTerugbrengen && meegenomenVanOphaal.length > 0
+              ? meegenomenVanOphaal.filter((id) => meegenomenTerug[id])
+              : undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -485,7 +563,11 @@ export default function AfrondenVragenlijstPage({
       }
 
       console.log("[afronden] API response debug:", data?.debug);
-      window.location.href = "/bezorgplanner/planning";
+      if (data?.nextStatus === "opgehaald") {
+        window.location.href = "/reparaties/ophaal-orders";
+      } else {
+        window.location.href = "/bezorgplanner/planning";
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Afronden mislukt");
     } finally {
@@ -507,6 +589,11 @@ export default function AfrondenVragenlijstPage({
     isReparatieOrder,
     showAchtergrondToevoegen,
     achtergrondToevoeging,
+    goesToOphaalWachtkamer,
+    ophalenMeegenomen,
+    isReparatieTerugbrengen,
+    meegenomenVanOphaal,
+    meegenomenTerug,
   ]);
 
   return (
@@ -544,6 +631,14 @@ export default function AfrondenVragenlijstPage({
                 </span>
               </p>
 
+              {(isReparatieOphalen || convertToOphalen) && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  Na afronden verdwijnt deze ophaalrit uit de planning en komt hij
+                  onder <span className="font-semibold">Ophaal orders</span>{" "}
+                  (niet bij afgeronde/bezorgde orders).
+                </div>
+              )}
+
               {error && (
                 <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                   {error}
@@ -570,7 +665,8 @@ export default function AfrondenVragenlijstPage({
                         Omzetten naar ophalen-order
                       </span>
                       <span className="mt-0.5 block text-xs text-koopje-black/60">
-                        Geen reparatie uitgevoerd — bike opgehaald. Conceptfactuur
+                        Geen reparatie uitgevoerd — bike opgehaald. Gaat naar
+                        Ophaal orders (niet naar afgeronde orders). Conceptfactuur
                         {order.reparatie_betaalwijze === "contant"
                           ? " (n.v.t. bij contant)"
                           : " wordt verwijderd uit Moneybird"}
@@ -976,7 +1072,102 @@ export default function AfrondenVragenlijstPage({
                 </div>
               )}
 
-              {!isReparatieDeur && (
+              {goesToOphaalWachtkamer && (
+                <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
+                  <p className="mb-1 text-sm font-semibold text-koopje-black">
+                    Meegenomen bij ophalen?
+                  </p>
+                  <p className="mb-3 text-xs text-koopje-black/55">
+                    Per item: Ja (mee) of Niet van toepassing. Alleen “Ja” wordt
+                    later weer afgevinkt bij teruggeven.
+                  </p>
+                  <div className="space-y-3">
+                    {OPHAAL_MEEGENOMEN_ITEMS.map((item) => (
+                      <div
+                        key={item.id}
+                        className="rounded-xl border border-stone-200 px-3 py-2"
+                      >
+                        <p className="mb-2 text-sm text-koopje-black">
+                          {item.label}
+                        </p>
+                        <div className="flex flex-wrap gap-4 text-sm">
+                          <label className="inline-flex items-center gap-2">
+                            <input
+                              type="radio"
+                              name={`ophalen-mee-${item.id}`}
+                              checked={ophalenMeegenomen[item.id] === "ja"}
+                              onChange={() =>
+                                setOphalenMeegenomen((prev) => ({
+                                  ...prev,
+                                  [item.id]: "ja",
+                                }))
+                              }
+                            />
+                            Ja
+                          </label>
+                          <label className="inline-flex items-center gap-2">
+                            <input
+                              type="radio"
+                              name={`ophalen-mee-${item.id}`}
+                              checked={ophalenMeegenomen[item.id] === "nvt"}
+                              onChange={() =>
+                                setOphalenMeegenomen((prev) => ({
+                                  ...prev,
+                                  [item.id]: "nvt",
+                                }))
+                              }
+                            />
+                            Niet van toepassing
+                          </label>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {isReparatieTerugbrengen && meegenomenVanOphaal.length > 0 && (
+                <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
+                  <p className="mb-1 text-sm font-semibold text-koopje-black">
+                    Teruggegeven aan de klant?
+                  </p>
+                  <p className="mb-3 text-xs text-koopje-black/55">
+                    Bij ophalen meegegeven — vink af dat het weer is
+                    teruggegeven.
+                  </p>
+                  <div className="space-y-2">
+                    {meegenomenVanOphaal.map((id) => {
+                      const item = OPHAAL_MEEGENOMEN_ITEMS.find((i) => i.id === id);
+                      const label = item?.label ?? id;
+                      return (
+                        <label
+                          key={id}
+                          className={`flex cursor-pointer items-start gap-3 rounded-xl border px-3 py-2 text-sm ${
+                            meegenomenTerug[id]
+                              ? "border-green-200 bg-green-50"
+                              : "border-stone-200 bg-white hover:bg-stone-50"
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            className="mt-0.5 accent-koopje-orange"
+                            checked={Boolean(meegenomenTerug[id])}
+                            onChange={(e) =>
+                              setMeegenomenTerug((prev) => ({
+                                ...prev,
+                                [id]: e.target.checked,
+                              }))
+                            }
+                          />
+                          <span className="text-koopje-black">{label}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {showProductChecklist && (
                 <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
                   <p className="mb-3 text-sm font-semibold text-koopje-black">
                     Alles meegegeven?
@@ -1030,8 +1221,8 @@ export default function AfrondenVragenlijstPage({
               >
                 {saving
                   ? "Afronden…"
-                  : convertToOphalen
-                    ? "Afronden als ophalen"
+                  : convertToOphalen || isReparatieOphalen
+                    ? "Afronden → Ophaal orders"
                     : "Order afronden"}
               </button>
             </div>

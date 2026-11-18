@@ -3446,3 +3446,83 @@ export async function sendReparatieSalesInvoice(params: {
     error: lastError || "Factuur versturen mislukt",
   };
 }
+
+/** Zoek/maak Moneybird-contact voor reparatie (o.a. bij ophaal zonder factuur). */
+export async function ensureReparatieContact(
+  input: ReparatieInvoiceContactInput
+): Promise<MoneybirdContact | null> {
+  if (!isMoneybirdConfigured()) return null;
+  return findOrUpsertReparatieContact(input);
+}
+
+export type MoneybirdEstimate = {
+  id: string;
+  estimate_id?: string | null;
+  state?: string | null;
+  reference?: string | null;
+  contact_id?: string | null;
+  details?: MoneybirdSalesInvoiceDetail[] | null;
+};
+
+export function reparatieEstimateReferenceForOrderId(orderId: string): string {
+  return `reparatie-offerte:${String(orderId ?? "").trim()}`;
+}
+
+/**
+ * Conceptofferte (estimate) voor winkelafhaal na ophalen.
+ * Wordt als draft aangemaakt — niet verzonden.
+ */
+export async function createReparatieEstimate(params: {
+  orderId: string;
+  orderNummer: string;
+  contact: ReparatieInvoiceContactInput;
+  lines: ReparatieInvoiceLineInput[];
+}): Promise<MoneybirdEstimate | null> {
+  if (!isMoneybirdConfigured()) {
+    console.warn("[moneybird] niet geconfigureerd — reparatie-offerte overgeslagen.");
+    return null;
+  }
+
+  const orderId = String(params.orderId ?? "").trim();
+  if (!orderId) return null;
+
+  const details = buildInvoiceDetailsFromReparatieLines(
+    params.lines,
+    params.orderNummer || orderId
+  );
+  if (details.length === 0) {
+    const ledgerAccountId = process.env.MONEYBIRD_LEDGER_ACCOUNT_ID!.trim();
+    const { taxRateId } = resolveInvoiceTaxForTitle("Reparatie");
+    details.push({
+      description: `Reparatie (${params.orderNummer || orderId})`,
+      price: "0.00",
+      amount: "1",
+      tax_rate_id: taxRateId,
+      ledger_account_id: ledgerAccountId,
+    });
+  }
+
+  const contact = await findOrUpsertReparatieContact(params.contact);
+  const reference = reparatieEstimateReferenceForOrderId(orderId);
+
+  const created = await moneybirdFetch<MoneybirdEstimate>("/estimates.json", {
+    method: "POST",
+    body: JSON.stringify({
+      estimate: {
+        contact_id: contact.id,
+        reference,
+        currency: "EUR",
+        prices_are_incl_tax: false,
+        details_attributes: details,
+      },
+    }),
+  });
+
+  console.info(
+    "[moneybird] reparatie conceptofferte aangemaakt",
+    created.id,
+    created.estimate_id,
+    reference
+  );
+  return created;
+}

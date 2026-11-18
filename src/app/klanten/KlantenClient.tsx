@@ -462,6 +462,12 @@ export default function KlantenClient() {
                           label="Aangemaakt"
                           value={openOrder.aangemaaktOp || ""}
                         />
+                        {openOrder.opgehaaldOp && (
+                          <Field
+                            label="Opgehaald"
+                            value={openOrder.opgehaaldOp}
+                          />
+                        )}
                         <Field
                           label="Afgerond"
                           value={openOrder.afgerondOp || ""}
@@ -525,6 +531,12 @@ export default function KlantenClient() {
                             )}
                           </dd>
                         </div>
+                        {openOrder.offerteNummer && (
+                          <Field
+                            label="Offertenummer"
+                            value={openOrder.offerteNummer}
+                          />
+                        )}
                         <div className="sm:col-span-2">
                           <dt className="text-xs font-medium uppercase tracking-wide text-koopje-black/45">
                             Factuur / aankoopbewijs

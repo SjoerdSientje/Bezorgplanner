@@ -46,6 +46,7 @@ function buildGroups(mpPaused: boolean): NavGroup[] {
         { href: "/reparaties/prijzenlijst", label: "Prijzenlijst" },
         { href: "/reparaties/nieuw", label: "Reparatie aanmaken" },
         { href: "/reparaties/gepland", label: "Geplande reparaties" },
+        { href: "/reparaties/ophaal-orders", label: "Ophaal orders" },
       ],
     },
     {

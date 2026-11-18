@@ -59,6 +59,8 @@ export async function POST(request: NextRequest) {
     const achtergrondverhaalToevoeging = String(
       body.achtergrondverhaal_toevoeging ?? ""
     ).trim();
+    const ophalenMeegenomenAntwoorden = body.ophalen_meegenomen;
+    const ophalenMeegenomenTeruggegeven = body.ophalen_meegenomen_teruggegeven;
 
     if (!orderId) {
       return NextResponse.json({ error: "Order-id ontbreekt." }, { status: 400 });
@@ -136,6 +138,8 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      const modelnaam = String((order as { model?: string | null }).model ?? "").trim();
+      const { buildReparatieProductenKolom } = await import("@/lib/reparaties");
       const ophalenLineItems = [
         {
           name: "Ophalen",
@@ -151,7 +155,10 @@ export async function POST(request: NextRequest) {
           reparatie_betaalwijze: "contant",
           producten_nog_niet_bekend: false,
           reparatie_regels_json: [],
-          producten: "Ophalen:",
+          producten: buildReparatieProductenKolom({
+            soort: "reparatie_ophalen",
+            modelnaam: modelnaam || null,
+          }),
           line_items_json: buildReparatieLineItemsJson(ophalenLineItems as any),
           bestelling_totaal_prijs: 0,
           moneybird_invoice_id: null,
@@ -435,21 +442,75 @@ export async function POST(request: NextRequest) {
       orderSource === "mp" ||
       isMpOrderNummer((order as { order_nummer?: string }).order_nummer);
 
-    const nextStatus = inferCompletedStatus({
-      source: (order as { source?: string }).source,
-      type: (order as { type?: string }).type,
-      reparatie_betaalwijze:
-        orderSource === "reparatie"
-          ? String((order as { type?: string }).type ?? "") === "reparatie_ophalen"
-            ? "contant"
-            : reparatieWilFactuur
-              ? "factuur"
-              : "contant"
-          : (order as { reparatie_betaalwijze?: string | null }).reparatie_betaalwijze,
-      moneybird_invoice_id: reparatieInvoiceId,
-      mp_tags: (order as { mp_tags?: string | null }).mp_tags,
-      order_nummer: (order as { order_nummer?: string | null }).order_nummer,
-    });
+    const orderType = String((order as { type?: string }).type ?? "").trim();
+    const isOphaalWachtkamer =
+      orderSource === "reparatie" && orderType === "reparatie_ophalen";
+
+    const {
+      parseOphalenMeegenomenJson,
+      resolveMeegenomenFromAntwoorden,
+      assertMeegenomenTeruggegeven,
+    } = await import("@/lib/ophalen-meegenomen");
+
+    let meegenomenVoorOpslaan: string[] | null = null;
+    if (isOphaalWachtkamer) {
+      const resolved = resolveMeegenomenFromAntwoorden(ophalenMeegenomenAntwoorden);
+      if (!resolved.ok) {
+        return NextResponse.json({ error: resolved.error }, { status: 400 });
+      }
+      meegenomenVoorOpslaan = resolved.meegenomen;
+    }
+
+    // Terugbrengen vanuit ophaal: meegenomen items opnieuw afvinken.
+    if (
+      orderSource === "reparatie" &&
+      orderType === "reparatie_terugbrengen"
+    ) {
+      let expected = parseOphalenMeegenomenJson(
+        (order as { ophalen_meegenomen_json?: unknown }).ophalen_meegenomen_json
+      );
+      const gekoppeldId = String(
+        (order as { gekoppeld_ophalen_order_id?: string | null })
+          .gekoppeld_ophalen_order_id ?? ""
+      ).trim();
+      if (expected.length === 0 && gekoppeldId) {
+        const { data: srcOphaal } = await supabase
+          .from("orders")
+          .select("ophalen_meegenomen_json")
+          .eq("owner_email", ownerEmail)
+          .eq("id", gekoppeldId)
+          .maybeSingle();
+        expected = parseOphalenMeegenomenJson(
+          srcOphaal?.ophalen_meegenomen_json
+        );
+      }
+      if (expected.length > 0) {
+        const check = assertMeegenomenTeruggegeven(
+          expected,
+          ophalenMeegenomenTeruggegeven
+        );
+        if (!check.ok) {
+          return NextResponse.json({ error: check.error }, { status: 400 });
+        }
+      }
+    }
+
+    const nextStatus = isOphaalWachtkamer
+      ? ("opgehaald" as const)
+      : inferCompletedStatus({
+          source: (order as { source?: string }).source,
+          type: (order as { type?: string }).type,
+          reparatie_betaalwijze:
+            orderSource === "reparatie"
+              ? reparatieWilFactuur
+                ? "factuur"
+                : "contant"
+              : (order as { reparatie_betaalwijze?: string | null })
+                  .reparatie_betaalwijze,
+          moneybird_invoice_id: reparatieInvoiceId,
+          mp_tags: (order as { mp_tags?: string | null }).mp_tags,
+          order_nummer: (order as { order_nummer?: string | null }).order_nummer,
+        });
 
     // MP-orders: verstuur aankoopbewijs na afronden met het opgegeven serienummer.
     // (Niet voor reparatie-contant die toevallig ook in mp_orders belandt.)
@@ -505,15 +566,22 @@ export async function POST(request: NextRequest) {
     const bezorgdatum = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Amsterdam" });
 
     // Update order afrond-info + status.
-    // Status bezorgd/mp_orders → zichtbaar in afgeronde orders én (via e-mail)
-    // als klant + ordergeschiedenis in /klanten.
+    // Ophaal → wachtkamer (opgehaald). Overig bezorgd/mp_orders → afgeronde orders.
+    const nowIso = new Date().toISOString();
     const updatePayload: Record<string, unknown> = {
       bezorger_naam: bezorgerNaam,
       betaalmethode,
-      afgerond_at: new Date().toISOString(),
       datum: bezorgdatum,
       status: nextStatus,
     };
+    if (isOphaalWachtkamer) {
+      updatePayload.opgehaald_at = nowIso;
+      // Geen afgerond_at: de fiets is opgehaald, niet klaar.
+      updatePayload.afgerond_at = null;
+      updatePayload.ophalen_meegenomen_json = meegenomenVoorOpslaan ?? [];
+    } else {
+      updatePayload.afgerond_at = nowIso;
+    }
     if (needsBedrag && betaalBedragNum != null) {
       updatePayload.betaald_bedrag = betaalBedragNum;
     }
@@ -523,6 +591,33 @@ export async function POST(request: NextRequest) {
         (order as { achtergrondverhaal?: string | null }).achtergrondverhaal,
         achtergrondverhaalToevoeging
       );
+    }
+
+    // Terugbrengen vanuit ophaal-wachtkamer: productenkolom combineren.
+    if (
+      orderSource === "reparatie" &&
+      orderType === "reparatie_terugbrengen" &&
+      String(
+        (order as { gekoppeld_ophalen_order_id?: string | null })
+          .gekoppeld_ophalen_order_id ?? ""
+      ).trim()
+    ) {
+      const {
+        buildOphalenTerugbrengenProductenKolom,
+        stripReparatieProductenPrefix,
+      } = await import("@/lib/reparaties");
+      const modelnaam = String(
+        (order as { model?: string | null }).model ?? ""
+      ).trim();
+      const rest = stripReparatieProductenPrefix(
+        (order as { producten?: string | null }).producten,
+        "reparatie_terugbrengen",
+        modelnaam
+      );
+      updatePayload.producten = buildOphalenTerugbrengenProductenKolom({
+        modelnaam: modelnaam || null,
+        rest: rest || null,
+      });
     }
 
     const { error: updErr } = await supabase

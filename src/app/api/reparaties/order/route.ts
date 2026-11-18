@@ -457,6 +457,30 @@ export async function POST(request: NextRequest) {
 
     let moneybirdInvoiceId: string | null = null;
     const allowMoneybird = mayCreateMoneybirdInvoicesForOwner(ownerEmail);
+
+    // Ophaal: wel Moneybird-klant aanmaken (zonder factuur), zodat terugbreng/offerte
+    // later aan hetzelfde contact hangt ongeacht een ander bezorgadres.
+    if (allowMoneybird && soort === "reparatie_ophalen") {
+      try {
+        const { ensureReparatieContact } = await import("@/lib/moneybird");
+        const { first, last } = splitName(naam);
+        await ensureReparatieContact({
+          email: email || "onbekend@koopjefatbike.nl",
+          firstname: first,
+          lastname: last,
+          phone: e164 || telefoon,
+          address1: [straat, huisnr].filter(Boolean).join(" "),
+          zipcode: postcode,
+          city: woonplaats,
+        });
+      } catch (mbContactErr) {
+        console.warn(
+          "[reparaties] MB-contact bij ophalen mislukt:",
+          mbContactErr instanceof Error ? mbContactErr.message : mbContactErr
+        );
+      }
+    }
+
     if (
       allowMoneybird &&
       soort !== "reparatie_ophalen" &&

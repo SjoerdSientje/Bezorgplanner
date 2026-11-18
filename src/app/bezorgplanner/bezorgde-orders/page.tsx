@@ -24,6 +24,7 @@ const BEZORGDE_ORDERS_HEADERS = [
   "Betaalmethode",
   "Nummer in E.164 formaat",
   "Factuur",
+  "Offerte",
 ];
 
 export default function BezorgdeOrdersPage() {
@@ -46,6 +47,7 @@ export default function BezorgdeOrdersPage() {
     telefoon_e164: string | null;
     link_factuur?: string | null;
     moneybird_invoice_id?: string | null;
+    moneybird_estimate_number?: string | null;
   };
 
   const [orders, setOrders] = useState<BezorgdeOrder[]>([]);
@@ -130,6 +132,7 @@ export default function BezorgdeOrdersPage() {
       o.betaalmethode ?? "",
       o.telefoon_e164 ?? "",
       o.link_factuur ?? "",
+      o.moneybird_estimate_number ?? "",
     ]);
   }, [sortedOrders]);
 
@@ -168,6 +171,16 @@ export default function BezorgdeOrdersPage() {
               );
             }}
           />
+        );
+      },
+      Offerte: (rowIndex: number) => {
+        const order = sortedOrders[rowIndex];
+        const nr = String(order?.moneybird_estimate_number ?? "").trim();
+        if (!nr) {
+          return <span className="block px-2 py-1.5 text-sm text-stone-300">—</span>;
+        }
+        return (
+          <span className="block px-2 py-1.5 text-sm text-koopje-black">{nr}</span>
         );
       },
     }),

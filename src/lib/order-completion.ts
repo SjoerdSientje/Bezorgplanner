@@ -23,16 +23,21 @@ function isMpOrderNummer(orderNummer: unknown): boolean {
 
 /**
  * Bestemming na afronden:
- * - Reparatie ophalen → altijd bezorgd (afgeronde/bezorgde orders)
+ * - Reparatie ophalen → wachtkamer `opgehaald` (niet via deze helper; zie afronden-route)
  * - Reparatie deur/terugbrengen + factuur → bezorgd
  * - Reparatie deur/terugbrengen + contant → mp_orders
  * - Overige: MP-tag/nummer → mp_orders, anders bezorgd
+ *
+ * Let op: pure ophaalritten horen niet via `inferCompletedStatus` naar bezorgd;
+ * de afronden-route zet `status=opgehaald`.
  */
 export function inferCompletedStatus(row: CompletedStatusInput): CompletedOrderStatus {
   const source = String(row.source ?? "").trim().toLowerCase();
   const type = String(row.type ?? "").trim().toLowerCase();
 
   if (source === "reparatie") {
+    // Oude/corrupt pad: ophalen hoort niet meer "afgerond" te worden via deze helper.
+    // Callers voor ophaalritten moeten status opgehaald zetten i.p.v. deze functie.
     if (type === "reparatie_ophalen") return "bezorgd";
     if (type === "reparatie_deur" || type === "reparatie_terugbrengen") {
       const betaal = String(row.reparatie_betaalwijze ?? "").trim().toLowerCase();

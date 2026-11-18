@@ -58,6 +58,17 @@ export default function ReparatiesHubPage() {
                 </span>
               </Link>
             </li>
+            <li>
+              <Link
+                href="/reparaties/ophaal-orders"
+                className="block rounded-xl border border-koopje-black/10 bg-white p-5 shadow-sm transition hover:border-koopje-orange hover:shadow"
+              >
+                <span className="font-medium text-koopje-black">Ophaal orders</span>
+                <span className="mt-1 block text-sm text-koopje-black/60">
+                  Opgehaalde fietsen: terugbrengen of winkelafhaal
+                </span>
+              </Link>
+            </li>
           </ul>
         </div>
       </main>

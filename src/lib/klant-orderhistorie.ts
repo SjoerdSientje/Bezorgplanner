@@ -28,13 +28,16 @@ type OrderRow = {
   link_aankoopbewijs: string | null;
   created_at: string | null;
   afgerond_at: string | null;
+  opgehaald_at: string | null;
+  gekoppeld_ophalen_order_id: string | null;
+  moneybird_estimate_number: string | null;
   bezorger_naam: string | null;
   aangemaakt_door: string | null;
   achtergrondverhaal: string | null;
 };
 
 const ORDER_SELECT =
-  "id, source, type, status, order_nummer, email, producten, line_items_json, bestelling_totaal_prijs, opmerkingen_klant, link_factuur, link_aankoopbewijs, created_at, afgerond_at, bezorger_naam, aangemaakt_door, achtergrondverhaal";
+  "id, source, type, status, order_nummer, email, producten, line_items_json, bestelling_totaal_prijs, opmerkingen_klant, link_factuur, link_aankoopbewijs, created_at, afgerond_at, opgehaald_at, gekoppeld_ophalen_order_id, moneybird_estimate_number, bezorger_naam, aangemaakt_door, achtergrondverhaal";
 
 function parseProducten(
   producten: string | null | undefined,
@@ -79,19 +82,29 @@ function parseProducten(
     .map((naam) => ({ naam, prijs: null }));
 }
 
-function toDetail(row: OrderRow): KlantOrderHistorieDetail {
+function toDetail(
+  row: OrderRow,
+  linkedOphalen?: { created_at: string | null; opgehaald_at: string | null } | null
+): KlantOrderHistorieDetail {
   const totaal = row.bestelling_totaal_prijs;
   const orderNummer = String(row.order_nummer ?? "").trim() || null;
+  const createdFrom =
+    linkedOphalen?.created_at != null ? linkedOphalen.created_at : row.created_at;
+  const opgehaaldFrom =
+    linkedOphalen?.opgehaald_at != null
+      ? linkedOphalen.opgehaald_at
+      : row.opgehaald_at;
   return {
     id: String(row.id),
     source: String(row.source ?? "").trim().toLowerCase() || null,
-    aangemaaktOp: formatKlantOrderDateTime(row.created_at),
+    aangemaaktOp: formatKlantOrderDateTime(createdFrom),
     typeLabel: klantOrderTypeLabel({ source: row.source, type: row.type }),
     totaalPrijs:
       totaal != null && Number.isFinite(Number(totaal)) ? Number(totaal) : null,
     orderNummer,
     opmerking: String(row.opmerkingen_klant ?? "").trim() || null,
     afgerondOp: formatKlantOrderDateTime(row.afgerond_at),
+    opgehaaldOp: formatKlantOrderDateTime(opgehaaldFrom),
     bezorger: formatKlantOrderBezorger({
       type: row.type,
       bezorgerNaam: row.bezorger_naam,
@@ -102,19 +115,53 @@ function toDetail(row: OrderRow): KlantOrderHistorieDetail {
     producten: parseProducten(row.producten, row.line_items_json),
     linkFactuur: String(row.link_factuur ?? "").trim() || null,
     linkAankoopbewijs: String(row.link_aankoopbewijs ?? "").trim() || null,
+    offerteNummer: String(row.moneybird_estimate_number ?? "").trim() || null,
   };
 }
 
 /**
  * Orders in klantgeschiedenis: alleen afgeronde orders (bezorgd / mp_orders).
- * Conceptfactuur maakt de klant wél vindbaar via Moneybird, maar orderdetails
- * horen hier pas ná afronden in de Bezorgplanner (reparatie e.d. kan tot dan wijzigen).
+ * Ophaal-wachtkamer (status opgehaald) komt hier niet in.
  */
 const HISTORY_ORDER_FILTER = "status.eq.bezorgd,status.eq.mp_orders";
 
+async function enrichWithLinkedOphalen(
+  ownerEmail: string,
+  rows: OrderRow[]
+): Promise<KlantOrderHistorieDetail[]> {
+  const supabase = createServerSupabaseClient();
+  const linkIds = Array.from(
+    new Set(
+      rows
+        .map((r) => String(r.gekoppeld_ophalen_order_id ?? "").trim())
+        .filter(Boolean)
+    )
+  );
+  const linked = new Map<
+    string,
+    { created_at: string | null; opgehaald_at: string | null }
+  >();
+  if (linkIds.length > 0) {
+    const { data } = await supabase
+      .from("orders")
+      .select("id, created_at, opgehaald_at")
+      .eq("owner_email", ownerEmail)
+      .in("id", linkIds);
+    for (const r of data ?? []) {
+      linked.set(String(r.id), {
+        created_at: r.created_at ?? null,
+        opgehaald_at: r.opgehaald_at ?? null,
+      });
+    }
+  }
+  return rows.map((row) => {
+    const lid = String(row.gekoppeld_ophalen_order_id ?? "").trim();
+    return toDetail(row, lid ? linked.get(lid) ?? null : null);
+  });
+}
+
 /**
  * Ordergeschiedenis van een klant (op e-mail), terugwerkend uit `orders`.
- * Ontbrekende velden blijven null — order wordt toch meegenomen.
  */
 export async function listKlantOrderHistorie(
   ownerEmail: string,
@@ -140,12 +187,10 @@ export async function listKlantOrderHistorie(
     return [];
   }
 
-  // Extra guard: ilike zonder % is case-insensitive equality, maar filter strikt.
-  return (data as OrderRow[])
-    .filter(
-      (row) => String(row.email ?? "").trim().toLowerCase() === email
-    )
-    .map(toDetail);
+  const rows = (data as OrderRow[]).filter(
+    (row) => String(row.email ?? "").trim().toLowerCase() === email
+  );
+  return enrichWithLinkedOphalen(ownerEmail, rows);
 }
 
 export async function getKlantOrderHistorieItem(
@@ -170,5 +215,6 @@ export async function getKlantOrderHistorieItem(
   if (error || !data) return null;
   const row = data as OrderRow;
   if (String(row.email ?? "").trim().toLowerCase() !== email) return null;
-  return toDetail(row);
+  const [detail] = await enrichWithLinkedOphalen(ownerEmail, [row]);
+  return detail ?? null;
 }

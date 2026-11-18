@@ -9,7 +9,13 @@ export type OrderType =
   | 'reparatie_terugbrengen'
   | 'reparatie_deur'
   | 'mp_winkel';
-export type OrderStatus = 'ritjes_vandaag' | 'gepland' | 'bezorgd' | 'mp_orders';
+export type OrderStatus =
+  | 'ritjes_vandaag'
+  | 'gepland'
+  | 'bezorgd'
+  | 'mp_orders'
+  /** Ophaalrit gereden; wacht op terugbrengen of winkelafhaal. */
+  | 'opgehaald';
 export type SlotStatus = 'gepland' | 'onderweg' | 'afgerond';
 
 /** Orders-tabel (basis voor alle sheets) */
@@ -62,6 +68,18 @@ export interface Order {
   betaalmethode: string | null;
   betaald_bedrag: number | null;
   afgerond_at: string | null;
+  /** Moment waarop de ophaalrit is afgerond (wachtkamer). */
+  opgehaald_at?: string | null;
+  /** Terugbreng-order → bron-ophalen. */
+  gekoppeld_ophalen_order_id?: string | null;
+  /** Moneybird estimate (interne id). */
+  moneybird_estimate_id?: string | null;
+  /** Offertenummer (bijv. 2026-0001). */
+  moneybird_estimate_number?: string | null;
+  /** Ophaalrij afgehandeld via terugbrengen | winkelafhaal. */
+  ophalen_afgehandeld_via?: 'terugbrengen' | 'winkelafhaal' | null;
+  /** Ids van meegenomen sleutels/NFC bij ophaal (alleen "Ja"-items). */
+  ophalen_meegenomen_json?: string[] | null;
   reparatie_betaalwijze?: 'contant' | 'factuur' | null;
   producten_nog_niet_bekend?: boolean;
   moneybird_invoice_id?: string | null;

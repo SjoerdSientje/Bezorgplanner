@@ -68,10 +68,10 @@ export default async function Home() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 0 016 0z" />
                 </svg>
               </span>
-              <span className="mt-4 font-medium text-koopje-black">Reparaties</span>
-              <span className="mt-1 text-sm text-koopje-black/60">
-                Prijzenlijst, aanmaken en geplande reparaties
-              </span>
+                <span className="mt-4 font-medium text-koopje-black">Reparaties</span>
+                <span className="mt-1 text-sm text-koopje-black/60">
+                  Prijzenlijst, aanmaken, gepland en ophaalorders
+                </span>
             </Link>
           </li>
 

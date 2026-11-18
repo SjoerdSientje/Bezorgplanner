@@ -19,6 +19,8 @@ export type KlantOrderHistorieDetail = KlantOrderHistorieSamenvatting & {
   opmerking: string | null;
   /** DD-MM-JJJJ UU:mm of null. */
   afgerondOp: string | null;
+  /** Moment ophaalrit afgerond (ophalen → terugbrengen/winkelafhaal). */
+  opgehaaldOp: string | null;
   /** Bezorgernaam, of "Afgehaald" bij winkelafhaal. */
   bezorger: string | null;
   /** Alleen MP/reparatie: wie de order aanmaakte. */
@@ -28,6 +30,8 @@ export type KlantOrderHistorieDetail = KlantOrderHistorieSamenvatting & {
   producten: KlantOrderHistorieProduct[];
   linkFactuur: string | null;
   linkAankoopbewijs: string | null;
+  /** Moneybird-conceptoffertenummer (winkelafhaal). */
+  offerteNummer: string | null;
 };
 
 /** Weergave bezorger: afhaal → "Afgehaald", anders bezorgernaam. */
