@@ -7,6 +7,20 @@ ALTER TABLE orders
   ADD COLUMN IF NOT EXISTS moneybird_estimate_number text,
   ADD COLUMN IF NOT EXISTS ophalen_afgehandeld_via text;
 
+-- status 'opgehaald' toestaan (CHECK uit 001_sheets.sql).
+ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_check;
+ALTER TABLE orders
+  ADD CONSTRAINT orders_status_check
+  CHECK (
+    status IN (
+      'ritjes_vandaag',
+      'gepland',
+      'bezorgd',
+      'mp_orders',
+      'opgehaald'
+    )
+  );
+
 -- ophalen_afgehandeld_via: 'terugbrengen' | 'winkelafhaal'
 DO $$
 BEGIN

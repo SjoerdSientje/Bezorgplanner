@@ -628,7 +628,15 @@ export async function POST(request: NextRequest) {
 
     if (updErr) {
       console.error("[api/afronden] update", updErr);
-      return NextResponse.json({ error: "Order bijwerken mislukt." }, { status: 500 });
+      const detail = String(updErr.message ?? "").trim();
+      return NextResponse.json(
+        {
+          error: detail
+            ? `Order bijwerken mislukt: ${detail}`
+            : "Order bijwerken mislukt.",
+        },
+        { status: 500 }
+      );
     }
 
     // Niet-MP bezorgde orders: Moneybird-factuur-PDF ophalen en koppelen (best-effort).
