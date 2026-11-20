@@ -181,6 +181,14 @@ export default function ProductAutocomplete({
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    // Voorkom impliciete form-submit bij Enter in zoekveld.
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (showSuggestions && suggestions.length > 0 && activeIndex >= 0) {
+        selectSuggestion(suggestions[activeIndex]);
+      }
+      return;
+    }
     if (!showSuggestions || suggestions.length === 0) return;
     if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -188,9 +196,6 @@ export default function ProductAutocomplete({
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setActiveIndex((i) => Math.max(i - 1, -1));
-    } else if (e.key === "Enter" && activeIndex >= 0) {
-      e.preventDefault();
-      selectSuggestion(suggestions[activeIndex]);
     } else if (e.key === "Escape") {
       setShowSuggestions(false);
     }

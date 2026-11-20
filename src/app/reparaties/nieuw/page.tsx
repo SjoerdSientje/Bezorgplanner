@@ -968,14 +968,19 @@ export default function ReparatieNieuwPage() {
                         ];
                       }
 
-                      if (r.mode === "custom" && !r.onderdelen[0]?.naam) {
+                      // Zoekveld open houden tot een Shopify-product is gekozen.
+                      // (Alleen op naam switchen voelde als Enter bij elke letter.)
+                      if (
+                        r.mode === "custom" &&
+                        !r.onderdelen[0]?.shopify_product_id
+                      ) {
                         return [
                           <li key={r.key} className="space-y-2 px-4 py-3">
                             <div className="flex items-start justify-between gap-2">
                               <div className="min-w-0 flex-1">
                                 <ProductAutocomplete
                                   label="Product zoeken"
-                                  value=""
+                                  value={r.onderdelen[0]?.naam ?? ""}
                                   searchSource="shopify"
                                   productKind="extra"
                                   onChange={(title, prijs, meta) => {
