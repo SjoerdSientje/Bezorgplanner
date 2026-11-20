@@ -275,8 +275,17 @@ export default function ReparatieNieuwPage() {
                 .filter(Boolean)
                 .join(" + "),
             })),
+      voorrijBedrag: voorrijWeergave?.bedrag ?? voorrijTotaalParsed ?? null,
     });
-  }, [soort, modelFiets, vrijeTekst, productenKolomTekst, regels]);
+  }, [
+    soort,
+    modelFiets,
+    vrijeTekst,
+    productenKolomTekst,
+    regels,
+    voorrijWeergave?.bedrag,
+    voorrijTotaalParsed,
+  ]);
 
   /** Zet gecombineerde arbeidskosten via bedrag → uren op de eerste regel. */
   function setArbeidBedrag(raw: string) {

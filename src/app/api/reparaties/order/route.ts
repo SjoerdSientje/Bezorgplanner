@@ -386,6 +386,7 @@ export async function POST(request: NextRequest) {
         productenNogNietBekend || soort === "reparatie_ophalen"
           ? []
           : stripVoorrijFromRegels(expanded),
+      voorrijBedrag,
     });
     const lineItemsJson = buildReparatieLineItemsJson(lineItems);
 
@@ -846,6 +847,7 @@ export async function PATCH(request: NextRequest) {
         productenNogNietBekend || soort === "reparatie_ophalen"
           ? []
           : stripVoorrijFromRegels(expanded),
+      voorrijBedrag,
     });
     const e164 = parsePhoneE164(telefoon);
     const mapsUrl = volledigAdres

@@ -3505,6 +3505,7 @@ export async function createReparatieEstimate(params: {
   const contact = await findOrUpsertReparatieContact(params.contact);
   const reference = reparatieEstimateReferenceForOrderId(orderId);
 
+  // Geen send_estimate → blijft concept (draft) voor handmatige/latere facturatie.
   const created = await moneybirdFetch<MoneybirdEstimate>("/estimates.json", {
     method: "POST",
     body: JSON.stringify({
@@ -3518,11 +3519,76 @@ export async function createReparatieEstimate(params: {
     }),
   });
 
-  console.info(
-    "[moneybird] reparatie conceptofferte aangemaakt",
-    created.id,
-    created.estimate_id,
-    reference
-  );
+  const state = String(created.state ?? "").trim().toLowerCase();
+  if (state && state !== "draft") {
+    console.warn(
+      "[moneybird] reparatie-offerte onverwachte state (verwacht draft)",
+      created.id,
+      created.estimate_id,
+      state,
+      reference
+    );
+  } else {
+    console.info(
+      "[moneybird] reparatie conceptofferte aangemaakt (draft, niet verzonden)",
+      created.id,
+      created.estimate_id,
+      state || "draft",
+      reference
+    );
+  }
   return created;
+}
+
+/** Verwijder conceptofferte (alleen draft). */
+export async function deleteReparatieEstimate(params: {
+  orderId: string;
+  estimateId?: string | null;
+}): Promise<{ deleted: boolean; estimateId?: string; skipped?: string }> {
+  if (!isMoneybirdConfigured()) {
+    return { deleted: false, skipped: "moneybird_not_configured" };
+  }
+  const orderId = String(params.orderId ?? "").trim();
+  const estimateId = String(params.estimateId ?? "").trim();
+  let id = estimateId;
+  if (!id && orderId) {
+    const reference = reparatieEstimateReferenceForOrderId(orderId);
+    try {
+      const list = await moneybirdFetch<MoneybirdEstimate[]>(
+        `/estimates.json?filter=reference:${encodeURIComponent(reference)}&per_page=10`
+      );
+      const match = (list ?? []).find(
+        (e) =>
+          String(e.reference ?? "").trim() === reference ||
+          String(e.id) === estimateId
+      );
+      id = String(match?.id ?? "").trim();
+      if (match && String(match.state ?? "").toLowerCase() !== "draft") {
+        return {
+          deleted: false,
+          estimateId: match.id,
+          skipped: `state_${String(match.state ?? "unknown").toLowerCase()}`,
+        };
+      }
+    } catch (err) {
+      console.warn("[moneybird] estimate zoeken mislukt", err);
+    }
+  }
+  if (!id) return { deleted: false, skipped: "no_estimate" };
+
+  try {
+    const full = await moneybirdFetch<MoneybirdEstimate>(
+      `/estimates/${id}.json`
+    );
+    const state = String(full.state ?? "").toLowerCase();
+    if (state && state !== "draft") {
+      return { deleted: false, estimateId: id, skipped: `state_${state}` };
+    }
+  } catch {
+    /* delete proberen */
+  }
+
+  await moneybirdFetch<unknown>(`/estimates/${id}.json`, { method: "DELETE" });
+  console.info("[moneybird] reparatie conceptofferte verwijderd", id, orderId);
+  return { deleted: true, estimateId: id };
 }

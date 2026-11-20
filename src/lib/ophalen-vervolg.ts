@@ -5,7 +5,11 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { mayCreateMoneybirdInvoicesForOwner } from "@/lib/account";
 import { defaultMeenemenInPlanning } from "@/lib/planning-date";
-import { formatPostcodeNl, formatVolledigAdres } from "@/lib/adres-fields";
+import {
+  formatPostcodeNl,
+  formatVolledigAdres,
+  splitVolledigAdres,
+} from "@/lib/adres-fields";
 import { resolveDutchAddressParts } from "@/lib/pdok-geocode";
 import {
   deductInventoryForReparatieOrder,
@@ -24,10 +28,12 @@ import {
 } from "@/lib/reparaties";
 import {
   createReparatieEstimate,
+  deleteReparatieEstimate,
   sendReparatieSalesInvoice,
   upsertReparatieSalesInvoice,
   type ReparatieInvoiceLineInput,
 } from "@/lib/moneybird";
+import { attachMoneybirdFactuurForOrder } from "@/lib/order-factuur";
 import { parseOrderMedewerker } from "@/lib/order-medewerker";
 import type { ShopifyLineItem } from "@/lib/shopify-order";
 import {
@@ -267,6 +273,7 @@ export async function createTerugbrengenFromOphalen(
     modelnaam: model,
     vrijeTekst: productenKolomTekst || null,
     regels: productenKolomTekst ? [] : stripVoorrijFromRegels(expanded),
+    voorrijBedrag: voorrijTotaal,
   });
 
   const e164 = parsePhoneE164(telefoon);
@@ -434,11 +441,16 @@ export async function completeWinkelafhaalFromOphalen(
   const lineItems = buildReparatieShopifyLineItems(expanded);
   const totaal = sumLineItemsIncl(lineItems);
   const productenKolomTekst = String(body.producten_kolom_tekst ?? "").trim();
+  const voorrijBedrag =
+    src.voorrij_bedrag != null && Number.isFinite(Number(src.voorrij_bedrag))
+      ? Number(src.voorrij_bedrag)
+      : null;
   const producten = buildReparatieProductenKolom({
     soort: "reparatie_ophalen",
     modelnaam: model,
     vrijeTekst: productenKolomTekst || null,
     regels: productenKolomTekst ? [] : stripVoorrijFromRegels(expanded),
+    voorrijBedrag,
   });
 
   const achtergrond =
@@ -507,4 +519,279 @@ export async function completeWinkelafhaalFromOphalen(
     order: updated,
     estimateNumber,
   };
+}
+
+const WINKELAFHAAL_REVIEW_DAYS = 7;
+
+function parseStoredLineItems(raw: unknown): ShopifyLineItem[] {
+  if (!raw) return [];
+  try {
+    const parsed =
+      typeof raw === "string" ? (JSON.parse(raw) as unknown) : raw;
+    if (!Array.isArray(parsed)) return [];
+    const out: ShopifyLineItem[] = [];
+    for (const entry of parsed) {
+      if (!entry || typeof entry !== "object") continue;
+      const r = entry as Record<string, unknown>;
+      const name = String(r.name ?? r.title ?? "").trim();
+      if (!name) continue;
+      const priceRaw = r.price;
+      const price =
+        typeof priceRaw === "number" || typeof priceRaw === "string"
+          ? priceRaw
+          : 0;
+      out.push({
+        name,
+        price,
+        quantity: Math.max(1, Math.floor(Number(r.quantity ?? 1) || 1)),
+        product_id:
+          typeof r.product_id === "number" || typeof r.product_id === "string"
+            ? r.product_id
+            : null,
+        variant_id:
+          typeof r.variant_id === "number" || typeof r.variant_id === "string"
+            ? r.variant_id
+            : null,
+        properties: Array.isArray(r.properties)
+          ? (r.properties as ShopifyLineItem["properties"])
+          : [],
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** Winkelafhaal ≤7 dagen geleden, nog zonder factuur (conceptofferte open). */
+export async function listRecenteWinkelafhaal(
+  supabase: SupabaseClient,
+  ownerEmail: string
+) {
+  const since = new Date();
+  since.setDate(since.getDate() - WINKELAFHAAL_REVIEW_DAYS);
+  const sinceIso = since.toISOString();
+
+  const { data, error } = await supabase
+    .from("orders")
+    .select(
+      "id, order_nummer, naam, email, telefoon_nummer, producten, model, afgerond_at, moneybird_estimate_id, moneybird_estimate_number, moneybird_invoice_id, bestelling_totaal_prijs, volledig_adres"
+    )
+    .eq("owner_email", ownerEmail)
+    .eq("source", "reparatie")
+    .eq("type", "reparatie_ophalen")
+    .eq("status", "bezorgd")
+    .eq("ophalen_afgehandeld_via", "winkelafhaal")
+    .is("moneybird_invoice_id", null)
+    .gte("afgerond_at", sinceIso)
+    .order("afgerond_at", { ascending: false, nullsFirst: false });
+
+  if (error) throw new Error(error.message);
+  return data ?? [];
+}
+
+async function assertRecentWinkelafhaalOrder(
+  supabase: SupabaseClient,
+  ownerEmail: string,
+  orderId: string
+): Promise<SrcOrder> {
+  const { data, error } = await supabase
+    .from("orders")
+    .select("*")
+    .eq("id", orderId)
+    .eq("owner_email", ownerEmail)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) throw new Error("Order niet gevonden.");
+  if (String(data.source) !== "reparatie" || String(data.type) !== "reparatie_ophalen") {
+    throw new Error("Alleen ophaal/winkelafhaal-orders.");
+  }
+  if (String(data.status) !== "bezorgd") {
+    throw new Error("Order staat niet als winkelafhaal/bezorgd.");
+  }
+  if (String(data.ophalen_afgehandeld_via ?? "") !== "winkelafhaal") {
+    throw new Error("Geen recente winkelafhaal-order.");
+  }
+  if (data.moneybird_invoice_id) {
+    throw new Error("Deze order is al gefactureerd.");
+  }
+  const afgerond = data.afgerond_at ? new Date(String(data.afgerond_at)) : null;
+  if (!afgerond || Number.isNaN(afgerond.getTime())) {
+    throw new Error("Afronddatum ontbreekt.");
+  }
+  const ageMs = Date.now() - afgerond.getTime();
+  if (ageMs > WINKELAFHAAL_REVIEW_DAYS * 24 * 60 * 60 * 1000) {
+    throw new Error(
+      `Deze winkelafhaal is ouder dan ${WINKELAFHAAL_REVIEW_DAYS} dagen — handel af in Moneybird.`
+    );
+  }
+  return data as SrcOrder;
+}
+
+/**
+ * Conceptofferte → echte factuur + verzenden (zelfde pad als reparatie-factuur).
+ * Conceptofferte wordt daarna verwijderd indien nog draft.
+ */
+export async function factureerWinkelafhaalEstimate(
+  supabase: SupabaseClient,
+  ownerEmail: string,
+  orderId: string
+) {
+  const order = await assertRecentWinkelafhaalOrder(supabase, ownerEmail, orderId);
+  if (!mayCreateMoneybirdInvoicesForOwner(ownerEmail)) {
+    throw new Error("Moneybird-facturen niet beschikbaar voor dit account.");
+  }
+
+  const lineItems = parseStoredLineItems(order.line_items_json);
+  if (lineItems.length === 0) {
+    throw new Error("Geen factuurregels op de order.");
+  }
+
+  const naam = String(order.naam ?? "").trim() || "Klant";
+  const email = String(order.email ?? "").trim().toLowerCase();
+  const telefoon = String(order.telefoon_nummer ?? "").trim();
+  const e164 = parsePhoneE164(telefoon);
+  const { first, last } = splitName(naam);
+  const adres = splitVolledigAdres(String(order.volledig_adres ?? ""));
+
+  const inv = await upsertReparatieSalesInvoice({
+    orderId: order.id,
+    orderNummer: String(order.order_nummer ?? order.id),
+    contact: {
+      email: email || "onbekend@koopjefatbike.nl",
+      firstname: first,
+      lastname: last,
+      phone: e164 || telefoon,
+      address1: adres.straatnaam
+        ? `${adres.straatnaam} ${adres.huisnummer}`.trim()
+        : String(order.volledig_adres ?? "").split(",")[0]?.trim() || "",
+      zipcode: adres.postcode,
+      city: adres.woonplaats,
+    },
+    lines: lineItemsToInvoiceLines(lineItems),
+  });
+  if (!inv?.id) throw new Error("Factuur aanmaken mislukt.");
+
+  const sent = await sendReparatieSalesInvoice({
+    orderId: order.id,
+    invoiceId: inv.id,
+    email: email || null,
+  });
+  if (!sent.sent && !String(sent.skipped ?? "").startsWith("state_")) {
+    throw new Error(
+      sent.error || sent.skipped || "Factuur verzenden mislukt."
+    );
+  }
+
+  try {
+    await deductInventoryForReparatieOrder(
+      supabase,
+      ownerEmail,
+      order.id,
+      String(order.order_nummer ?? order.id),
+      reparatieLineItemsForInventoryDeduction(lineItems)
+    );
+  } catch (invErr) {
+    console.error("[ophalen-vervolg] inventory deduct bij factuur:", invErr);
+  }
+
+  try {
+    await deleteReparatieEstimate({
+      orderId: order.id,
+      estimateId: order.moneybird_estimate_id
+        ? String(order.moneybird_estimate_id)
+        : null,
+    });
+  } catch (err) {
+    console.warn("[ophalen-vervolg] estimate delete na factuur:", err);
+  }
+
+  const { data: updated, error } = await supabase
+    .from("orders")
+    .update({
+      moneybird_invoice_id: inv.id,
+      reparatie_betaalwijze: "factuur",
+    })
+    .eq("id", order.id)
+    .eq("owner_email", ownerEmail)
+    .select("*")
+    .single();
+  if (error) throw new Error(error.message);
+
+  try {
+    await attachMoneybirdFactuurForOrder(supabase, {
+      id: order.id,
+      owner_email: ownerEmail,
+      source: "reparatie",
+      type: "reparatie_ophalen",
+      status: "bezorgd",
+      order_nummer: String(order.order_nummer ?? ""),
+      email,
+      moneybird_invoice_id: inv.id,
+      link_factuur: null,
+      mp_tags: null,
+    });
+  } catch (err) {
+    console.warn("[ophalen-vervolg] factuur-pdf koppelen:", err);
+  }
+
+  return { order: updated, invoiceId: inv.id, sent };
+}
+
+/**
+ * Winkelafhaal terugdraaien → weer in ophaal-wachtkamer (conceptofferte weg).
+ * Daarna kan normaal "Fiets terugbrengen" gekozen worden.
+ */
+export async function heropenWinkelafhaalNaarOphalen(
+  supabase: SupabaseClient,
+  ownerEmail: string,
+  orderId: string
+) {
+  const order = await assertRecentWinkelafhaalOrder(supabase, ownerEmail, orderId);
+
+  try {
+    await deleteReparatieEstimate({
+      orderId: order.id,
+      estimateId: order.moneybird_estimate_id
+        ? String(order.moneybird_estimate_id)
+        : null,
+    });
+  } catch (err) {
+    console.warn("[ophalen-vervolg] estimate delete bij heropenen:", err);
+  }
+
+  const model = String(order.model ?? "").trim();
+  const voorrijBedrag =
+    order.voorrij_bedrag != null && Number.isFinite(Number(order.voorrij_bedrag))
+      ? Number(order.voorrij_bedrag)
+      : null;
+  const producten = buildReparatieProductenKolom({
+    soort: "reparatie_ophalen",
+    modelnaam: model || null,
+    voorrijBedrag,
+  });
+
+  const { data: updated, error } = await supabase
+    .from("orders")
+    .update({
+      status: "opgehaald",
+      afgerond_at: null,
+      ophalen_afgehandeld_via: null,
+      moneybird_estimate_id: null,
+      moneybird_estimate_number: null,
+      moneybird_invoice_id: null,
+      producten,
+      line_items_json: buildReparatieLineItemsJson([]),
+      reparatie_regels_json: [],
+      bestelling_totaal_prijs: voorrijBedrag ?? 0,
+      te_betalen: voorrijBedrag ?? 0,
+      reparatie_betaalwijze: "contant",
+    })
+    .eq("id", order.id)
+    .eq("owner_email", ownerEmail)
+    .select("*")
+    .single();
+  if (error) throw new Error(error.message);
+
+  return { order: updated };
 }

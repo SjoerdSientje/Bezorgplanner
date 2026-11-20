@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAccountEmail } from "@/lib/account";
 import { createServerSupabaseClient } from "@/lib/supabase";
+import { listRecenteWinkelafhaal } from "@/lib/ophalen-vervolg";
 
 export const dynamic = "force-dynamic";
 
-/** Lijst ophaalorders in de wachtkamer (status=opgehaald, nog niet afgehandeld). */
+/** Lijst ophaal-wachtkamer + recente winkelafhaal (≤7 dagen, nog open offerte). */
 export async function GET(request: NextRequest) {
   try {
     const ownerEmail = requireAccountEmail(request);
@@ -22,10 +23,26 @@ export async function GET(request: NextRequest) {
       .order("opgehaald_at", { ascending: false, nullsFirst: false });
 
     if (error) throw new Error(error.message);
-    return NextResponse.json({ orders: data ?? [] });
+
+    let recenteWinkelafhaal: Awaited<
+      ReturnType<typeof listRecenteWinkelafhaal>
+    > = [];
+    try {
+      recenteWinkelafhaal = await listRecenteWinkelafhaal(supabase, ownerEmail);
+    } catch (e) {
+      console.error("[ophaal-orders] recente winkelafhaal", e);
+    }
+
+    return NextResponse.json({
+      orders: data ?? [],
+      recenteWinkelafhaal,
+    });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Laden mislukt.";
     const status = /niet ingelogd|unauthorized|401/i.test(message) ? 401 : 500;
-    return NextResponse.json({ error: message, orders: [] }, { status });
+    return NextResponse.json(
+      { error: message, orders: [], recenteWinkelafhaal: [] },
+      { status }
+    );
   }
 }

@@ -29,6 +29,17 @@ type OphaalListItem = {
   opgehaald_at: string | null;
 };
 
+type WinkelafhaalRecent = {
+  id: string;
+  order_nummer: string | null;
+  naam: string | null;
+  producten: string | null;
+  model: string | null;
+  afgerond_at: string | null;
+  moneybird_estimate_number: string | null;
+  bestelling_totaal_prijs: number | null;
+};
+
 type OphaalDetail = OphaalListItem & {
   email: string | null;
   telefoon_nummer: string | null;
@@ -65,12 +76,16 @@ type Mode = "list" | "keuze" | "terugbrengen" | "winkelafhaal";
 export default function OphaalOrdersPage() {
   const router = useRouter();
   const [orders, setOrders] = useState<OphaalListItem[]>([]);
+  const [recenteWinkelafhaal, setRecenteWinkelafhaal] = useState<
+    WinkelafhaalRecent[]
+  >([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>("list");
   const [selected, setSelected] = useState<OphaalDetail | null>(null);
   const [standaard, setStandaard] = useState<ReparatieStandaardItem[]>([]);
   const [saving, setSaving] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   // Shared form state
@@ -107,12 +122,62 @@ export default function OphaalOrdersPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Laden mislukt");
       setOrders(data.orders ?? []);
+      setRecenteWinkelafhaal(data.recenteWinkelafhaal ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Laden mislukt");
     } finally {
       setLoading(false);
     }
   }, []);
+
+  async function factureerWinkelafhaal(id: string) {
+    setBusyId(id);
+    setError(null);
+    setSuccessMsg(null);
+    try {
+      const res = await fetch(
+        `/api/reparaties/ophaal-orders/${id}/factureer`,
+        { method: "POST" }
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Factureren mislukt");
+      setSuccessMsg("Factuur aangemaakt en verzonden.");
+      await loadList();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Factureren mislukt");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function heropenVoorTerugbrengen(id: string) {
+    if (
+      !window.confirm(
+        "Conceptofferte wissen en order terugzetten naar ophaal-wachtkamer? Daarna kun je Fiets terugbrengen kiezen."
+      )
+    ) {
+      return;
+    }
+    setBusyId(id);
+    setError(null);
+    setSuccessMsg(null);
+    try {
+      const res = await fetch(`/api/reparaties/ophaal-orders/${id}/heropen`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Heropenen mislukt");
+      setSuccessMsg(
+        "Order staat weer bij ophaalorders — kies Fiets terugbrengen."
+      );
+      await loadList();
+      await openOrder(id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Heropenen mislukt");
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   useEffect(() => {
     void loadList();
@@ -416,6 +481,73 @@ export default function OphaalOrdersPage() {
                 ))}
               </ul>
             )}
+
+            <section className="mt-10 space-y-3">
+              <div>
+                <h2 className="text-base font-semibold text-koopje-black">
+                  Recente winkelafhaal (7 dagen)
+                </h2>
+                <p className="mt-1 text-sm text-koopje-black/55">
+                  Conceptofferte open — factureer &amp; verstuur, of zet terug
+                  naar ophalen als de fiets toch moet worden teruggebracht.
+                </p>
+              </div>
+              {loading ? null : recenteWinkelafhaal.length === 0 ? (
+                <p className="text-sm text-koopje-black/45">
+                  Geen openstaande winkelafhaal-offertes.
+                </p>
+              ) : (
+                <ul className="divide-y divide-koopje-black/10 rounded-xl border border-koopje-black/10">
+                  {recenteWinkelafhaal.map((o) => (
+                    <li
+                      key={o.id}
+                      className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-start sm:justify-between"
+                    >
+                      <div className="min-w-0">
+                        <p className="font-medium text-koopje-black">
+                          {o.naam || "Naamloos"}
+                          {o.order_nummer ? (
+                            <span className="ml-2 text-sm font-normal text-koopje-black/50">
+                              {o.order_nummer}
+                            </span>
+                          ) : null}
+                        </p>
+                        <p className="mt-0.5 text-sm text-koopje-black/70">
+                          {o.producten || "—"}
+                        </p>
+                        <p className="mt-1 text-xs text-koopje-black/50">
+                          Offerte:{" "}
+                          {o.moneybird_estimate_number?.trim() || "—"}
+                          {o.bestelling_totaal_prijs != null
+                            ? ` · €${Number(o.bestelling_totaal_prijs).toFixed(2)}`
+                            : ""}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 flex-wrap gap-2">
+                        <button
+                          type="button"
+                          disabled={busyId === o.id}
+                          onClick={() => void factureerWinkelafhaal(o.id)}
+                          className="rounded-lg bg-koopje-orange px-3 py-1.5 text-sm font-medium text-white hover:bg-koopje-orange/90 disabled:opacity-60"
+                        >
+                          {busyId === o.id
+                            ? "Bezig…"
+                            : "Factureer & verstuur"}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busyId === o.id}
+                          onClick={() => void heropenVoorTerugbrengen(o.id)}
+                          className="rounded-lg border border-koopje-black/20 px-3 py-1.5 text-sm text-koopje-black hover:border-koopje-orange disabled:opacity-60"
+                        >
+                          Toch terugbrengen
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
           </>
         )}
 

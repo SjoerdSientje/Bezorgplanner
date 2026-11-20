@@ -139,27 +139,58 @@ export function reparatieProductenKolomHead(
   return `${prefix} ${model} -`;
 }
 
+/** Trailing ` voorrijkosten: 12.50` in de productenkolom. */
+const VOORRIJ_SUFFIX_RE = /\s*voorrijkosten:\s*€?\s*[\d.,]+\s*$/i;
+
+export function formatReparatieVoorrijSuffix(
+  voorrijBedrag: number | null | undefined
+): string {
+  if (voorrijBedrag == null || !Number.isFinite(Number(voorrijBedrag))) {
+    return "";
+  }
+  const n = Math.round(Number(voorrijBedrag) * 100) / 100;
+  return ` voorrijkosten: ${n.toFixed(2)}`;
+}
+
+export function stripReparatieVoorrijSuffix(text: string): string {
+  return String(text ?? "")
+    .replace(VOORRIJ_SUFFIX_RE, "")
+    .trim();
+}
+
+function withVoorrijSuffix(
+  body: string,
+  voorrijBedrag: number | null | undefined
+): string {
+  const base = stripReparatieVoorrijSuffix(body);
+  const suffix = formatReparatieVoorrijSuffix(voorrijBedrag);
+  return suffix ? `${base}${suffix}` : base;
+}
+
 /** Eindlabel na terugbrengen vanuit ophaal-wachtkamer. */
 export function buildOphalenTerugbrengenProductenKolom(params: {
   modelnaam?: string | null;
   rest?: string | null;
+  voorrijBedrag?: number | null;
 }): string {
   const model = String(params.modelnaam ?? "").trim();
   const head = model
     ? `Ophalen + terugbrengen: ${model} -`
     : "Ophalen + terugbrengen:";
-  const rest = String(params.rest ?? "").trim();
-  return rest ? `${head} ${rest}` : head;
+  const rest = stripReparatieVoorrijSuffix(String(params.rest ?? "").trim());
+  const body = rest ? `${head} ${rest}` : head;
+  return withVoorrijSuffix(body, params.voorrijBedrag);
 }
 
 /**
- * Bouw productenkolom: altijd `Ordertype: modelnaam -` (+ optionele rest).
- * Voorbeeld: `Reparatie aan huis: V20 - Binnenband, Ketting`
+ * Bouw productenkolom: `Ordertype: modelnaam - … voorrijkosten: X.XX`
+ * Voorbeeld: `Reparatie aan huis: V20 - Binnenband, Ketting voorrijkosten: 25.00`
  */
 export function buildReparatieProductenKolom(params: {
   soort: ReparatieSoort;
   modelnaam?: string | null;
   vrijeTekst?: string | null;
+  voorrijBedrag?: number | null;
   regels?: Array<{
     kolom_tekst?: string | null;
     naam?: string | null;
@@ -170,7 +201,7 @@ export function buildReparatieProductenKolom(params: {
   const head = reparatieProductenKolomHead(params.soort, model);
   const prefix = reparatieSoortProductenPrefix(params.soort);
 
-  let vrij = String(params.vrijeTekst ?? "").trim();
+  let vrij = stripReparatieVoorrijSuffix(String(params.vrijeTekst ?? "").trim());
   // Strip volledige head / prefix / model- als gebruiker die meetypt.
   vrij = vrij
     .replace(new RegExp(`^${escapeRegExp(head)}\\s*`, "i"), "")
@@ -181,40 +212,44 @@ export function buildReparatieProductenKolom(params: {
       .replace(new RegExp(`^${escapeRegExp(model)}\\s*-\\s*`, "i"), "")
       .trim();
   }
+  vrij = stripReparatieVoorrijSuffix(vrij);
 
+  let body: string;
   // Vrije tekst (ophalen / producten nog niet bekend / optionele override).
   if (vrij) {
-    return model ? `${head} ${vrij}` : `${prefix} ${vrij}`;
-  }
-
-  // Standaardreparaties + Shopify/custom: titels komma-gescheiden achter de head.
-  const titles: string[] = [];
-  for (const r of params.regels ?? []) {
-    const custom = String(r.kolom_tekst ?? "").trim();
-    if (custom) {
-      titles.push(custom);
-      continue;
+    body = model ? `${head} ${vrij}` : `${prefix} ${vrij}`;
+  } else {
+    // Standaardreparaties + Shopify/custom: titels komma-gescheiden achter de head.
+    const titles: string[] = [];
+    for (const r of params.regels ?? []) {
+      const custom = String(r.kolom_tekst ?? "").trim();
+      if (custom) {
+        titles.push(custom);
+        continue;
+      }
+      const fallback = String(r.naam || r.onderdeel_naam || "").trim();
+      if (fallback) titles.push(fallback);
     }
-    const fallback = String(r.naam || r.onderdeel_naam || "").trim();
-    if (fallback) titles.push(fallback);
+
+    if (titles.length) {
+      body = model
+        ? `${head} ${titles.join(", ")}`
+        : `${prefix} ${titles.join(", ")}`;
+    } else {
+      body = head;
+    }
   }
 
-  if (titles.length) {
-    return model
-      ? `${head} ${titles.join(", ")}`
-      : `${prefix} ${titles.join(", ")}`;
-  }
-
-  return head;
+  return withVoorrijSuffix(body, params.voorrijBedrag);
 }
 
-/** Haal prefix (+ optioneel model -) weg om resttekst terug te krijgen bij bewerken. */
+/** Haal prefix (+ optioneel model -) en voorrij-suffix weg om resttekst terug te krijgen. */
 export function stripReparatieProductenPrefix(
   producten: string | null | undefined,
   soort: ReparatieSoort,
   modelnaam?: string | null
 ): string {
-  let raw = String(producten ?? "").trim();
+  let raw = stripReparatieVoorrijSuffix(String(producten ?? "").trim());
   const head = reparatieProductenKolomHead(soort, modelnaam);
   const prefix = reparatieSoortProductenPrefix(soort);
   if (raw.toLowerCase().startsWith(head.toLowerCase())) {
@@ -228,7 +263,7 @@ export function stripReparatieProductenPrefix(
         .trim();
     }
   }
-  return raw;
+  return stripReparatieVoorrijSuffix(raw);
 }
 
 /** Pas totaalprijs-override toe op onderdelen zonder Shopify-ids te wijzigen. */

@@ -239,6 +239,10 @@ export async function POST(request: NextRequest) {
               | "reparatie_terugbrengen",
             modelnaam: String((order as { model?: string | null }).model ?? "").trim() || null,
             regels: regelsForStore,
+            voorrijBedrag:
+              order.voorrij_bedrag != null && Number.isFinite(Number(order.voorrij_bedrag))
+                ? Number(order.voorrij_bedrag)
+                : null,
           }),
           line_items_json: buildReparatieLineItemsJson(lineItems),
           bestelling_totaal_prijs: Math.round(totaal * 100) / 100,
@@ -614,9 +618,17 @@ export async function POST(request: NextRequest) {
         "reparatie_terugbrengen",
         modelnaam
       );
+      const voorrijBedrag =
+        (order as { voorrij_bedrag?: number | null }).voorrij_bedrag != null &&
+        Number.isFinite(
+          Number((order as { voorrij_bedrag?: number | null }).voorrij_bedrag)
+        )
+          ? Number((order as { voorrij_bedrag?: number | null }).voorrij_bedrag)
+          : null;
       updatePayload.producten = buildOphalenTerugbrengenProductenKolom({
         modelnaam: modelnaam || null,
         rest: rest || null,
+        voorrijBedrag,
       });
     }
 
