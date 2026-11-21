@@ -75,6 +75,17 @@ function fuzzyOk(queryToken: string, hayToken: string): boolean {
   return editDistance(queryToken, hayToken) <= 1;
 }
 
+/**
+ * Fuzzy voor modelcodes: cijfers moeten exact gelijk zijn.
+ * Voorkomt o.a. v8ultra ≈ 28ultra (ADO Air 28 Ultra bij zoeken op V8 Ultra).
+ */
+function fuzzyOkModelCode(queryToken: string, hayToken: string): boolean {
+  const digitsA = queryToken.replace(/\D/g, "");
+  const digitsB = hayToken.replace(/\D/g, "");
+  if (digitsA !== digitsB) return false;
+  return fuzzyOk(queryToken, hayToken);
+}
+
 /** Alle aaneengesloten joins van tokens: gt + 2000 → gt2000. */
 function adjacentJoins(tokens: string[]): string[] {
   const out: string[] = [];
@@ -98,7 +109,10 @@ function tokenMatches(queryToken: string, hayToken: string): boolean {
 
   if (isModelCodeToken(queryToken) || isModelCodeToken(hayToken)) {
     // Modelcodes: exact of 1 typfout — géén prefix/substring (voorkomt gt20 ⊂ gt2000).
-    return fuzzyOk(queryToken, hayToken);
+    // Cijfers moeten gelijk blijven (voorkomt v8 ≈ 28).
+    return (
+      hayToken === queryToken || fuzzyOkModelCode(queryToken, hayToken)
+    );
   }
 
   // Prefix: typ-as-you-go ("achte" → achtervering).
@@ -126,7 +140,15 @@ function queryTokenCovered(
   if (hayTokens.some((h) => tokenMatches(queryToken, h))) return true;
 
   // "gt2000" tegen hay ["gt","2000"] via join
-  if (hayJoins.some((j) => j === queryToken || fuzzyOk(queryToken, j))) {
+  if (
+    hayJoins.some(
+      (j) =>
+        j === queryToken ||
+        (isModelCodeToken(queryToken)
+          ? fuzzyOkModelCode(queryToken, j)
+          : fuzzyOk(queryToken, j))
+    )
+  ) {
     return true;
   }
 
@@ -164,7 +186,7 @@ export function matchesSearchQuery(haystack: string, query: string): boolean {
   if (
     qCompact.length >= 4 &&
     isModelCodeToken(qCompact) &&
-    hayJoins.some((j) => fuzzyOk(qCompact, j))
+    hayJoins.some((j) => fuzzyOkModelCode(qCompact, j))
   ) {
     return true;
   }

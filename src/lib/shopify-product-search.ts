@@ -1,4 +1,5 @@
 import {
+  fetchActiveFatbikeProductsCached,
   fetchAllShopifyProducts,
   fetchFatbikeCollectionProductIds,
   searchShopifyProducts,
@@ -62,7 +63,8 @@ function uniqueSearchTerms(query: string, tokens: string[]): string[] {
 
 async function collectProductsForTokens(
   query: string,
-  tokens: string[]
+  tokens: string[],
+  kind?: ShopifyProductSearchKind
 ): Promise<Map<number, ShopifyAdminProduct>> {
   const productMap = new Map<number, ShopifyAdminProduct>();
 
@@ -72,7 +74,16 @@ async function collectProductsForTokens(
     if (productMap.size >= 60) break;
   }
 
-  if (productMap.size < 8) {
+  // Fiets: altijd ook lokaal in alle-fatbikes zoeken. Shopify title-search op
+  // "V8 ultra" vult anders met ADO Air 28 Ultra e.d. en mist OUXI V8 Ultra.
+  if (kind === "fiets") {
+    const fatbikes = await fetchActiveFatbikeProductsCached();
+    for (const p of fatbikes) {
+      if (matchesSearchQuery(productHaystack(p), query)) {
+        productMap.set(p.id, p);
+      }
+    }
+  } else if (productMap.size < 8) {
     const all = await fetchAllShopifyProducts({ maxPages: 5, status: "active" });
     for (const p of all) {
       if (matchesSearchQuery(productHaystack(p), query)) {
@@ -104,7 +115,7 @@ export async function searchShopifyProductsForOrderForm(
   if (tokens.length === 0) return [];
 
   const [products, fatbikeIds] = await Promise.all([
-    collectProductsForTokens(q, tokens),
+    collectProductsForTokens(q, tokens, kind),
     kind ? fetchFatbikeCollectionProductIds() : Promise.resolve(null),
   ]);
   const results: ShopifyProductSearchResult[] = [];
