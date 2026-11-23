@@ -22,8 +22,12 @@ import {
 } from "@/lib/reparaties";
 import {
   OPHAAL_MEEGENOMEN_ITEMS,
+  ophaalMeegenomenAantalOpties,
+  ophaalMeegenomenEntryLabel,
   parseOphalenMeegenomenJson,
+  type OphaalMeegenomenAantal,
   type OphaalMeegenomenAntwoord,
+  type OphaalMeegenomenEntry,
   type OphaalMeegenomenItemId,
 } from "@/lib/ophalen-meegenomen";
 
@@ -257,11 +261,14 @@ export default function AfrondenVragenlijstPage({
   const [ophalenMeegenomen, setOphalenMeegenomen] = useState<
     Partial<Record<OphaalMeegenomenItemId, OphaalMeegenomenAntwoord>>
   >({});
+  const [ophalenMeegenomenAantal, setOphalenMeegenomenAantal] = useState<
+    Partial<Record<OphaalMeegenomenItemId, OphaalMeegenomenAantal>>
+  >({});
   const [meegenomenTerug, setMeegenomenTerug] = useState<Record<string, boolean>>(
     {}
   );
   const [meegenomenVanOphaal, setMeegenomenVanOphaal] = useState<
-    OphaalMeegenomenItemId[]
+    OphaalMeegenomenEntry[]
   >([]);
 
   const isReparatieDeur = order?.type === "reparatie_deur";
@@ -458,13 +465,18 @@ export default function AfrondenVragenlijstPage({
     !showProductChecklist || checklist.every((i) => checked[i.label]);
   const ophalenMeegenomenOk =
     !goesToOphaalWachtkamer ||
-    OPHAAL_MEEGENOMEN_ITEMS.every(
-      (item) =>
-        ophalenMeegenomen[item.id] === "ja" || ophalenMeegenomen[item.id] === "nvt"
-    );
+    OPHAAL_MEEGENOMEN_ITEMS.every((item) => {
+      const antw = ophalenMeegenomen[item.id];
+      if (antw === "nvt") return true;
+      if (antw === "ja") {
+        const n = ophalenMeegenomenAantal[item.id];
+        return n === 1 || n === 2;
+      }
+      return false;
+    });
   const meegenomenTerugOk =
     !isReparatieTerugbrengen ||
-    meegenomenVanOphaal.every((id) => Boolean(meegenomenTerug[id]));
+    meegenomenVanOphaal.every((e) => Boolean(meegenomenTerug[e.id]));
   const needsBedrag = betaalOptie === "Factuur betaling aan deur" || betaalOptie === "Contant aan deur";
   const parsedBedrag = parseFloat(betaalBedrag.trim().replace(",", "."));
   const bedragOk = !needsBedrag || (betaalBedrag.trim().length > 0 && !Number.isNaN(parsedBedrag));
@@ -547,9 +559,14 @@ export default function AfrondenVragenlijstPage({
           ophalen_meegenomen: goesToOphaalWachtkamer
             ? ophalenMeegenomen
             : undefined,
+          ophalen_meegenomen_aantal: goesToOphaalWachtkamer
+            ? ophalenMeegenomenAantal
+            : undefined,
           ophalen_meegenomen_teruggegeven:
             isReparatieTerugbrengen && meegenomenVanOphaal.length > 0
-              ? meegenomenVanOphaal.filter((id) => meegenomenTerug[id])
+              ? meegenomenVanOphaal
+                  .filter((e) => meegenomenTerug[e.id])
+                  .map((e) => e.id)
               : undefined,
         }),
       });
@@ -591,6 +608,7 @@ export default function AfrondenVragenlijstPage({
     achtergrondToevoeging,
     goesToOphaalWachtkamer,
     ophalenMeegenomen,
+    ophalenMeegenomenAantal,
     isReparatieTerugbrengen,
     meegenomenVanOphaal,
     meegenomenTerug,
@@ -1078,50 +1096,86 @@ export default function AfrondenVragenlijstPage({
                     Meegenomen bij ophalen?
                   </p>
                   <p className="mb-3 text-xs text-koopje-black/55">
-                    Per item: Ja (mee) of Niet van toepassing. Alleen “Ja” wordt
-                    later weer afgevinkt bij teruggeven.
+                    Per item: Ja (mee) of Niet van toepassing. Bij Ja kies je
+                    hoeveel er meegenomen zijn. Alleen “Ja” wordt later weer
+                    afgevinkt bij teruggeven.
                   </p>
                   <div className="space-y-3">
-                    {OPHAAL_MEEGENOMEN_ITEMS.map((item) => (
-                      <div
-                        key={item.id}
-                        className="rounded-xl border border-stone-200 px-3 py-2"
-                      >
-                        <p className="mb-2 text-sm text-koopje-black">
-                          {item.label}
-                        </p>
-                        <div className="flex flex-wrap gap-4 text-sm">
-                          <label className="inline-flex items-center gap-2">
-                            <input
-                              type="radio"
-                              name={`ophalen-mee-${item.id}`}
-                              checked={ophalenMeegenomen[item.id] === "ja"}
-                              onChange={() =>
-                                setOphalenMeegenomen((prev) => ({
-                                  ...prev,
-                                  [item.id]: "ja",
-                                }))
-                              }
-                            />
-                            Ja
-                          </label>
-                          <label className="inline-flex items-center gap-2">
-                            <input
-                              type="radio"
-                              name={`ophalen-mee-${item.id}`}
-                              checked={ophalenMeegenomen[item.id] === "nvt"}
-                              onChange={() =>
-                                setOphalenMeegenomen((prev) => ({
-                                  ...prev,
-                                  [item.id]: "nvt",
-                                }))
-                              }
-                            />
-                            Niet van toepassing
-                          </label>
+                    {OPHAAL_MEEGENOMEN_ITEMS.map((item) => {
+                      const isJa = ophalenMeegenomen[item.id] === "ja";
+                      const aantalOpties = ophaalMeegenomenAantalOpties(item.id);
+                      return (
+                        <div
+                          key={item.id}
+                          className="rounded-xl border border-stone-200 px-3 py-2"
+                        >
+                          <p className="mb-2 text-sm text-koopje-black">
+                            {item.label}
+                          </p>
+                          <div className="flex flex-wrap gap-4 text-sm">
+                            <label className="inline-flex items-center gap-2">
+                              <input
+                                type="radio"
+                                name={`ophalen-mee-${item.id}`}
+                                checked={isJa}
+                                onChange={() =>
+                                  setOphalenMeegenomen((prev) => ({
+                                    ...prev,
+                                    [item.id]: "ja",
+                                  }))
+                                }
+                              />
+                              Ja
+                            </label>
+                            <label className="inline-flex items-center gap-2">
+                              <input
+                                type="radio"
+                                name={`ophalen-mee-${item.id}`}
+                                checked={ophalenMeegenomen[item.id] === "nvt"}
+                                onChange={() => {
+                                  setOphalenMeegenomen((prev) => ({
+                                    ...prev,
+                                    [item.id]: "nvt",
+                                  }));
+                                  setOphalenMeegenomenAantal((prev) => {
+                                    const next = { ...prev };
+                                    delete next[item.id];
+                                    return next;
+                                  });
+                                }}
+                              />
+                              Niet van toepassing
+                            </label>
+                          </div>
+                          {isJa && (
+                            <div className="mt-2 flex flex-wrap gap-4 border-t border-stone-100 pt-2 text-sm">
+                              {aantalOpties.map((opt) => (
+                                <label
+                                  key={opt.value}
+                                  className="inline-flex items-center gap-2"
+                                >
+                                  <input
+                                    type="radio"
+                                    name={`ophalen-mee-aantal-${item.id}`}
+                                    checked={
+                                      ophalenMeegenomenAantal[item.id] ===
+                                      opt.value
+                                    }
+                                    onChange={() =>
+                                      setOphalenMeegenomenAantal((prev) => ({
+                                        ...prev,
+                                        [item.id]: opt.value,
+                                      }))
+                                    }
+                                  />
+                                  {opt.label}
+                                </label>
+                              ))}
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -1136,14 +1190,13 @@ export default function AfrondenVragenlijstPage({
                     teruggegeven.
                   </p>
                   <div className="space-y-2">
-                    {meegenomenVanOphaal.map((id) => {
-                      const item = OPHAAL_MEEGENOMEN_ITEMS.find((i) => i.id === id);
-                      const label = item?.label ?? id;
+                    {meegenomenVanOphaal.map((entry) => {
+                      const label = ophaalMeegenomenEntryLabel(entry);
                       return (
                         <label
-                          key={id}
+                          key={entry.id}
                           className={`flex cursor-pointer items-start gap-3 rounded-xl border px-3 py-2 text-sm ${
-                            meegenomenTerug[id]
+                            meegenomenTerug[entry.id]
                               ? "border-green-200 bg-green-50"
                               : "border-stone-200 bg-white hover:bg-stone-50"
                           }`}
@@ -1151,11 +1204,11 @@ export default function AfrondenVragenlijstPage({
                           <input
                             type="checkbox"
                             className="mt-0.5 accent-koopje-orange"
-                            checked={Boolean(meegenomenTerug[id])}
+                            checked={Boolean(meegenomenTerug[entry.id])}
                             onChange={(e) =>
                               setMeegenomenTerug((prev) => ({
                                 ...prev,
-                                [id]: e.target.checked,
+                                [entry.id]: e.target.checked,
                               }))
                             }
                           />

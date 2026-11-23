@@ -80,8 +80,10 @@ export interface Order {
   moneybird_estimate_number?: string | null;
   /** Ophaalrij afgehandeld via terugbrengen | winkelafhaal. */
   ophalen_afgehandeld_via?: 'terugbrengen' | 'winkelafhaal' | null;
-  /** Ids van meegenomen sleutels/NFC bij ophaal (alleen "Ja"-items). */
-  ophalen_meegenomen_json?: string[] | null;
+  /** Meegenomen sleutels/NFC bij ophaal (alleen "Ja"-items; id + aantal 1|2). */
+  ophalen_meegenomen_json?:
+    | Array<{ id: string; aantal: 1 | 2 } | string>
+    | null;
   reparatie_betaalwijze?: 'contant' | 'factuur' | null;
   producten_nog_niet_bekend?: boolean;
   moneybird_invoice_id?: string | null;

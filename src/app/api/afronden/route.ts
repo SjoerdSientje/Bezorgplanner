@@ -456,9 +456,14 @@ export async function POST(request: NextRequest) {
       assertMeegenomenTeruggegeven,
     } = await import("@/lib/ophalen-meegenomen");
 
-    let meegenomenVoorOpslaan: string[] | null = null;
+    let meegenomenVoorOpslaan: unknown[] | null = null;
     if (isOphaalWachtkamer) {
-      const resolved = resolveMeegenomenFromAntwoorden(ophalenMeegenomenAntwoorden);
+      const aantallenRaw =
+        (body as { ophalen_meegenomen_aantal?: unknown }).ophalen_meegenomen_aantal;
+      const resolved = resolveMeegenomenFromAntwoorden(
+        ophalenMeegenomenAntwoorden,
+        aantallenRaw
+      );
       if (!resolved.ok) {
         return NextResponse.json({ error: resolved.error }, { status: 400 });
       }

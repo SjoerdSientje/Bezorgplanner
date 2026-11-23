@@ -19,9 +19,9 @@ import {
   type ReparatieStandaardItem,
 } from "@/lib/reparaties";
 import {
-  OPHAAL_MEEGENOMEN_ITEMS,
+  ophaalMeegenomenEntryLabel,
   parseOphalenMeegenomenJson,
-  type OphaalMeegenomenItemId,
+  type OphaalMeegenomenEntry,
 } from "@/lib/ophalen-meegenomen";
 import {
   formatKlantOrderDateTime,
@@ -179,9 +179,9 @@ export default function OphaalOrdersPage() {
   const [voorrijTerug, setVoorrijTerug] = useState("");
   const [arbeidBedragStr, setArbeidBedragStr] = useState("");
   const [arbeidManual, setArbeidManual] = useState(false);
-  const [meegenomenIds, setMeegenomenIds] = useState<OphaalMeegenomenItemId[]>(
-    []
-  );
+  const [meegenomenItems, setMeegenomenItems] = useState<
+    OphaalMeegenomenEntry[]
+  >([]);
   const [meegenomenTerug, setMeegenomenTerug] = useState<
     Record<string, boolean>
   >({});
@@ -297,13 +297,13 @@ export default function OphaalOrdersPage() {
     setBetaalwijze("");
     setAangemaaktDoor("");
     const mee = parseOphalenMeegenomenJson(o.ophalen_meegenomen_json);
-    setMeegenomenIds(mee);
+    setMeegenomenItems(mee);
     setMeegenomenTerug({});
     setMode("keuze");
   }
 
   function meegenomenTerugOk() {
-    return meegenomenIds.every((id) => Boolean(meegenomenTerug[id]));
+    return meegenomenItems.every((e) => Boolean(meegenomenTerug[e.id]));
   }
 
   function setArbeidBedrag(raw: string) {
@@ -600,9 +600,9 @@ export default function OphaalOrdersPage() {
             voorrij_ophalen_bedrag: voorrijOphalen,
             voorrij_terugbrengen_bedrag: voorrijTerug,
             regels: buildRegelsPayload(),
-            ophalen_meegenomen_teruggegeven: meegenomenIds.filter(
-              (id) => meegenomenTerug[id]
-            ),
+            ophalen_meegenomen_teruggegeven: meegenomenItems
+              .filter((e) => meegenomenTerug[e.id])
+              .map((e) => e.id),
           }),
         }
       );
@@ -647,9 +647,9 @@ export default function OphaalOrdersPage() {
             producten_kolom_tekst: productenKolomTekst.trim() || undefined,
             voorrij_ophalen_bedrag: voorrijOphalen,
             regels: buildRegelsPayload(),
-            ophalen_meegenomen_teruggegeven: meegenomenIds.filter(
-              (id) => meegenomenTerug[id]
-            ),
+            ophalen_meegenomen_teruggegeven: meegenomenItems
+              .filter((e) => meegenomenTerug[e.id])
+              .map((e) => e.id),
           }),
         }
       );
@@ -1274,7 +1274,7 @@ export default function OphaalOrdersPage() {
               </div>
             </section>
 
-            {meegenomenIds.length > 0 && (
+            {meegenomenItems.length > 0 && (
               <section className="space-y-3 rounded-xl border border-koopje-black/10 p-4">
                 <h2 className="text-sm font-medium text-koopje-black">
                   {mode === "terugbrengen"
@@ -1285,14 +1285,13 @@ export default function OphaalOrdersPage() {
                   Bij ophalen meegegeven — vink af dat dit weer meegaat.
                 </p>
                 <div className="space-y-2">
-                  {meegenomenIds.map((id) => {
-                    const item = OPHAAL_MEEGENOMEN_ITEMS.find((i) => i.id === id);
-                    const label = item?.label ?? id;
+                  {meegenomenItems.map((entry) => {
+                    const label = ophaalMeegenomenEntryLabel(entry);
                     return (
                       <label
-                        key={id}
+                        key={entry.id}
                         className={`flex cursor-pointer items-start gap-3 rounded-xl border px-3 py-2 text-sm ${
-                          meegenomenTerug[id]
+                          meegenomenTerug[entry.id]
                             ? "border-green-200 bg-green-50"
                             : "border-stone-200 bg-white hover:bg-stone-50"
                         }`}
@@ -1300,11 +1299,11 @@ export default function OphaalOrdersPage() {
                         <input
                           type="checkbox"
                           className="mt-0.5 accent-koopje-orange"
-                          checked={Boolean(meegenomenTerug[id])}
+                          checked={Boolean(meegenomenTerug[entry.id])}
                           onChange={(e) =>
                             setMeegenomenTerug((prev) => ({
                               ...prev,
-                              [id]: e.target.checked,
+                              [entry.id]: e.target.checked,
                             }))
                           }
                         />
