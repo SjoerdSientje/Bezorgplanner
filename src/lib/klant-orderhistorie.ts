@@ -29,15 +29,24 @@ type OrderRow = {
   created_at: string | null;
   afgerond_at: string | null;
   opgehaald_at: string | null;
+  opgehaald_door: string | null;
   gekoppeld_ophalen_order_id: string | null;
+  ophalen_afgehandeld_via: string | null;
   moneybird_estimate_number: string | null;
   bezorger_naam: string | null;
   aangemaakt_door: string | null;
   achtergrondverhaal: string | null;
 };
 
+type LinkedOphalen = {
+  created_at: string | null;
+  opgehaald_at: string | null;
+  opgehaald_door: string | null;
+  aangemaakt_door: string | null;
+};
+
 const ORDER_SELECT =
-  "id, source, type, status, order_nummer, email, producten, line_items_json, bestelling_totaal_prijs, opmerkingen_klant, link_factuur, link_aankoopbewijs, created_at, afgerond_at, opgehaald_at, gekoppeld_ophalen_order_id, moneybird_estimate_number, bezorger_naam, aangemaakt_door, achtergrondverhaal";
+  "id, source, type, status, order_nummer, email, producten, line_items_json, bestelling_totaal_prijs, opmerkingen_klant, link_factuur, link_aankoopbewijs, created_at, afgerond_at, opgehaald_at, opgehaald_door, gekoppeld_ophalen_order_id, ophalen_afgehandeld_via, moneybird_estimate_number, bezorger_naam, aangemaakt_door, achtergrondverhaal";
 
 function parseProducten(
   producten: string | null | undefined,
@@ -84,33 +93,72 @@ function parseProducten(
 
 function toDetail(
   row: OrderRow,
-  linkedOphalen?: { created_at: string | null; opgehaald_at: string | null } | null
+  linkedOphalen?: LinkedOphalen | null
 ): KlantOrderHistorieDetail {
   const totaal = row.bestelling_totaal_prijs;
   const orderNummer = String(row.order_nummer ?? "").trim() || null;
-  const createdFrom =
-    linkedOphalen?.created_at != null ? linkedOphalen.created_at : row.created_at;
-  const opgehaaldFrom =
-    linkedOphalen?.opgehaald_at != null
-      ? linkedOphalen.opgehaald_at
-      : row.opgehaald_at;
+  const type = String(row.type ?? "").trim();
+  const via = String(row.ophalen_afgehandeld_via ?? "").trim().toLowerCase();
+  const hasLinked = Boolean(linkedOphalen);
+  const isWinkelafhaal =
+    type === "reparatie_ophalen" && via === "winkelafhaal";
+  const isTerugbrengFlow =
+    type === "reparatie_terugbrengen" &&
+    (hasLinked || Boolean(String(row.gekoppeld_ophalen_order_id ?? "").trim()));
+
+  const ophaalCreated = linkedOphalen?.created_at ?? row.created_at;
+  const ophaalDoor =
+    String(linkedOphalen?.aangemaakt_door ?? row.aangemaakt_door ?? "").trim() ||
+    null;
+  const opgehaaldAt = linkedOphalen?.opgehaald_at ?? row.opgehaald_at;
+  const opgehaaldDoor =
+    String(linkedOphalen?.opgehaald_door ?? row.opgehaald_door ?? "").trim() ||
+    null;
+
   return {
     id: String(row.id),
     source: String(row.source ?? "").trim().toLowerCase() || null,
-    aangemaaktOp: formatKlantOrderDateTime(createdFrom),
-    typeLabel: klantOrderTypeLabel({ source: row.source, type: row.type }),
+    type: type || null,
+    aangemaaktOp: formatKlantOrderDateTime(
+      isTerugbrengFlow ? ophaalCreated : row.created_at
+    ),
+    typeLabel: klantOrderTypeLabel({
+      source: row.source,
+      type: row.type,
+      ophalenAfgehandeldVia: row.ophalen_afgehandeld_via,
+      gekoppeldOphalen: isTerugbrengFlow,
+    }),
     totaalPrijs:
       totaal != null && Number.isFinite(Number(totaal)) ? Number(totaal) : null,
     orderNummer,
     opmerking: String(row.opmerkingen_klant ?? "").trim() || null,
     afgerondOp: formatKlantOrderDateTime(row.afgerond_at),
-    opgehaaldOp: formatKlantOrderDateTime(opgehaaldFrom),
+    opgehaaldOp: formatKlantOrderDateTime(opgehaaldAt),
+    opgehaaldDoor,
     bezorger: formatKlantOrderBezorger({
       type: row.type,
       bezorgerNaam: row.bezorger_naam,
       orderNummer,
     }),
-    aangemaaktDoor: String(row.aangemaakt_door ?? "").trim() || null,
+    aangemaaktDoor: isTerugbrengFlow
+      ? ophaalDoor
+      : String(row.aangemaakt_door ?? "").trim() || null,
+    terugbrengAangemaaktOp: isTerugbrengFlow
+      ? formatKlantOrderDateTime(row.created_at)
+      : null,
+    terugbrengAangemaaktDoor: isTerugbrengFlow
+      ? String(row.aangemaakt_door ?? "").trim() || null
+      : null,
+    teruggebrachtOp: isTerugbrengFlow
+      ? formatKlantOrderDateTime(row.afgerond_at)
+      : null,
+    teruggebrachtDoor: isTerugbrengFlow
+      ? String(row.bezorger_naam ?? "").trim() || null
+      : null,
+    fietsAfgerondOp: isWinkelafhaal
+      ? formatKlantOrderDateTime(row.afgerond_at)
+      : null,
+    ophalenAfgehandeldVia: via || null,
     achtergrondverhaal: String(row.achtergrondverhaal ?? "").trim() || null,
     producten: parseProducten(row.producten, row.line_items_json),
     linkFactuur: String(row.link_factuur ?? "").trim() || null,
@@ -137,20 +185,19 @@ async function enrichWithLinkedOphalen(
         .filter(Boolean)
     )
   );
-  const linked = new Map<
-    string,
-    { created_at: string | null; opgehaald_at: string | null }
-  >();
+  const linked = new Map<string, LinkedOphalen>();
   if (linkIds.length > 0) {
     const { data } = await supabase
       .from("orders")
-      .select("id, created_at, opgehaald_at")
+      .select("id, created_at, opgehaald_at, opgehaald_door, aangemaakt_door")
       .eq("owner_email", ownerEmail)
       .in("id", linkIds);
     for (const r of data ?? []) {
       linked.set(String(r.id), {
         created_at: r.created_at ?? null,
         opgehaald_at: r.opgehaald_at ?? null,
+        opgehaald_door: r.opgehaald_door ?? null,
+        aangemaakt_door: r.aangemaakt_door ?? null,
       });
     }
   }

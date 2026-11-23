@@ -580,6 +580,7 @@ export async function POST(request: NextRequest) {
     };
     if (isOphaalWachtkamer) {
       updatePayload.opgehaald_at = nowIso;
+      updatePayload.opgehaald_door = bezorgerNaam;
       // Geen afgerond_at: de fiets is opgehaald, niet klaar.
       updatePayload.afgerond_at = null;
       updatePayload.ophalen_meegenomen_json = meegenomenVoorOpslaan ?? [];

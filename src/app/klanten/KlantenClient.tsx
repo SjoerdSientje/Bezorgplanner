@@ -459,30 +459,72 @@ export default function KlantenClient() {
 
                       <dl className="grid gap-5 sm:grid-cols-2">
                         <Field
-                          label="Aangemaakt"
+                          label="Order aangemaakt op"
                           value={openOrder.aangemaaktOp || ""}
-                        />
-                        {openOrder.opgehaaldOp && (
-                          <Field
-                            label="Opgehaald"
-                            value={openOrder.opgehaaldOp}
-                          />
-                        )}
-                        <Field
-                          label="Afgerond"
-                          value={openOrder.afgerondOp || ""}
-                        />
-                        <Field
-                          label="Bezorger"
-                          value={openOrder.bezorger || ""}
                         />
                         {(openOrder.source === "mp" ||
                           openOrder.source === "reparatie") && (
                           <Field
-                            label="Aangemaakt door"
+                            label="Order aangemaakt door"
                             value={openOrder.aangemaaktDoor || ""}
                           />
                         )}
+                        {openOrder.opgehaaldOp && (
+                          <Field
+                            label="Order opgehaald op"
+                            value={openOrder.opgehaaldOp}
+                          />
+                        )}
+                        {openOrder.opgehaaldDoor && (
+                          <Field
+                            label="Order opgehaald door"
+                            value={openOrder.opgehaaldDoor}
+                          />
+                        )}
+                        {openOrder.terugbrengAangemaaktOp && (
+                          <Field
+                            label="Terugbreng-order aangemaakt op"
+                            value={openOrder.terugbrengAangemaaktOp}
+                          />
+                        )}
+                        {openOrder.terugbrengAangemaaktDoor && (
+                          <Field
+                            label="Terugbreng-order aangemaakt door"
+                            value={openOrder.terugbrengAangemaaktDoor}
+                          />
+                        )}
+                        {openOrder.teruggebrachtOp && (
+                          <Field
+                            label="Teruggebracht op"
+                            value={openOrder.teruggebrachtOp}
+                          />
+                        )}
+                        {openOrder.teruggebrachtDoor && (
+                          <Field
+                            label="Teruggebracht door"
+                            value={openOrder.teruggebrachtDoor}
+                          />
+                        )}
+                        {openOrder.fietsAfgerondOp && (
+                          <Field
+                            label="Fiets afgerond op"
+                            value={openOrder.fietsAfgerondOp}
+                          />
+                        )}
+                        {!openOrder.teruggebrachtOp &&
+                          !openOrder.fietsAfgerondOp && (
+                            <Field
+                              label="Afgerond"
+                              value={openOrder.afgerondOp || ""}
+                            />
+                          )}
+                        {!openOrder.teruggebrachtDoor &&
+                          !openOrder.fietsAfgerondOp && (
+                            <Field
+                              label="Bezorger"
+                              value={openOrder.bezorger || ""}
+                            />
+                          )}
                         <Field
                           label="Totaalprijs"
                           value={formatKlantOrderPrijs(openOrder.totaalPrijs)}

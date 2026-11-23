@@ -19,6 +19,10 @@ import {
   parseOphalenMeegenomenJson,
   type OphaalMeegenomenItemId,
 } from "@/lib/ophalen-meegenomen";
+import {
+  formatKlantOrderDateTime,
+  formatKlantOrderPrijs,
+} from "@/lib/klant-orderhistorie-shared";
 
 type OphaalListItem = {
   id: string;
@@ -27,6 +31,20 @@ type OphaalListItem = {
   producten: string | null;
   model: string | null;
   opgehaald_at: string | null;
+  opgehaald_door?: string | null;
+  aangemaakt_door?: string | null;
+  created_at?: string | null;
+  email?: string | null;
+  telefoon_nummer?: string | null;
+  volledig_adres?: string | null;
+  achtergrondverhaal?: string | null;
+  opmerkingen_klant?: string | null;
+  voorrij_bedrag?: number | null;
+  voorrij_km?: number | null;
+  line_items_json?: string | null;
+  reparatie_regels_json?: unknown;
+  bestelling_totaal_prijs?: number | null;
+  bezorger_naam?: string | null;
 };
 
 type WinkelafhaalRecent = {
@@ -54,6 +72,38 @@ type OphaalDetail = OphaalListItem & {
   postcode?: string;
   woonplaats?: string;
 };
+
+function parseLineItemsForGegevens(
+  lineItemsJson: string | null | undefined
+): Array<{ naam: string; prijs: number | null }> {
+  if (!lineItemsJson) return [];
+  try {
+    const items = JSON.parse(lineItemsJson) as Array<{
+      name?: string | null;
+      price?: number | string | null;
+    }>;
+    if (!Array.isArray(items)) return [];
+    return items
+      .map((item) => {
+        const naam = String(item?.name ?? "").trim();
+        if (!naam) return null;
+        const raw = item?.price;
+        const prijs =
+          typeof raw === "number"
+            ? raw
+            : typeof raw === "string"
+              ? parseFloat(raw.replace(",", "."))
+              : NaN;
+        return {
+          naam,
+          prijs: Number.isFinite(prijs) ? prijs : null,
+        };
+      })
+      .filter((x): x is { naam: string; prijs: number | null } => x != null);
+  } catch {
+    return [];
+  }
+}
 
 type DraftRegel = {
   key: string;
@@ -87,6 +137,9 @@ export default function OphaalOrdersPage() {
   const [saving, setSaving] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [gegevensOrder, setGegevensOrder] = useState<OphaalListItem | null>(
+    null
+  );
 
   // Shared form state
   const [regels, setRegels] = useState<DraftRegel[]>([]);
@@ -457,26 +510,56 @@ export default function OphaalOrdersPage() {
                 Geen openstaande ophaalorders.
               </p>
             ) : (
-              <ul className="divide-y divide-koopje-black/10 rounded-xl border border-koopje-black/10">
+              <ul className="space-y-3">
                 {orders.map((o) => (
-                  <li key={o.id}>
-                    <button
-                      type="button"
-                      onClick={() => void openOrder(o.id)}
-                      className="flex w-full flex-col gap-0.5 px-4 py-3 text-left hover:bg-stone-50"
-                    >
-                      <span className="font-medium text-koopje-black">
-                        {o.naam || "Naamloos"}
-                        {o.order_nummer ? (
-                          <span className="ml-2 text-sm font-normal text-koopje-black/50">
-                            {o.order_nummer}
+                  <li
+                    key={o.id}
+                    className="rounded-xl border border-koopje-black/10 bg-white px-4 py-3 shadow-sm"
+                  >
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <button
+                        type="button"
+                        onClick={() => void openOrder(o.id)}
+                        className="min-w-0 flex-1 text-left"
+                      >
+                        <span className="font-medium text-koopje-black">
+                          {o.naam || "Naamloos"}
+                          {o.order_nummer ? (
+                            <span className="ml-2 text-sm font-normal text-koopje-black/50">
+                              {o.order_nummer}
+                            </span>
+                          ) : null}
+                        </span>
+                        <span className="mt-0.5 block text-sm text-koopje-black/70">
+                          {o.producten || "—"}
+                        </span>
+                        {o.opgehaald_at && (
+                          <span className="mt-1 block text-xs text-koopje-black/45">
+                            Opgehaald{" "}
+                            {formatKlantOrderDateTime(o.opgehaald_at) || "—"}
+                            {o.opgehaald_door
+                              ? ` · door ${o.opgehaald_door}`
+                              : ""}
                           </span>
-                        ) : null}
-                      </span>
-                      <span className="text-sm text-koopje-black/70">
-                        {o.producten || "—"}
-                      </span>
-                    </button>
+                        )}
+                      </button>
+                      <div className="flex shrink-0 flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setGegevensOrder(o)}
+                          className="rounded-lg border border-koopje-black/20 px-3 py-1.5 text-sm text-koopje-black hover:border-koopje-orange"
+                        >
+                          Gegevens
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void openOrder(o.id)}
+                          className="rounded-lg bg-koopje-orange px-3 py-1.5 text-sm font-medium text-white hover:bg-koopje-orange/90"
+                        >
+                          Vervolg
+                        </button>
+                      </div>
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -848,6 +931,170 @@ export default function OphaalOrdersPage() {
           </p>
         )}
       </div>
+
+      {gegevensOrder && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Ordergegevens"
+          onClick={() => setGegevensOrder(null)}
+        >
+          <div
+            className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-koopje-black">
+                  Gegevens
+                </h2>
+                <p className="text-sm text-koopje-black/55">
+                  {gegevensOrder.order_nummer || gegevensOrder.id}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setGegevensOrder(null)}
+                className="rounded-lg px-2 py-1 text-sm text-koopje-black/50 hover:bg-stone-100 hover:text-koopje-black"
+              >
+                Sluiten
+              </button>
+            </div>
+            <dl className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <dt className="text-xs font-medium uppercase tracking-wide text-koopje-black/45">
+                  Naam
+                </dt>
+                <dd className="mt-1 text-sm text-koopje-black">
+                  {gegevensOrder.naam || "—"}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs font-medium uppercase tracking-wide text-koopje-black/45">
+                  Telefoon
+                </dt>
+                <dd className="mt-1 text-sm text-koopje-black">
+                  {gegevensOrder.telefoon_nummer || "—"}
+                </dd>
+              </div>
+              <div className="sm:col-span-2">
+                <dt className="text-xs font-medium uppercase tracking-wide text-koopje-black/45">
+                  Adres
+                </dt>
+                <dd className="mt-1 text-sm text-koopje-black">
+                  {gegevensOrder.volledig_adres || "—"}
+                </dd>
+              </div>
+              <div className="sm:col-span-2">
+                <dt className="text-xs font-medium uppercase tracking-wide text-koopje-black/45">
+                  E-mail
+                </dt>
+                <dd className="mt-1 text-sm text-koopje-black">
+                  {gegevensOrder.email || "—"}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs font-medium uppercase tracking-wide text-koopje-black/45">
+                  Fiets opgehaald op
+                </dt>
+                <dd className="mt-1 text-sm text-koopje-black">
+                  {formatKlantOrderDateTime(gegevensOrder.opgehaald_at) || "—"}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs font-medium uppercase tracking-wide text-koopje-black/45">
+                  Order opgehaald door
+                </dt>
+                <dd className="mt-1 text-sm text-koopje-black">
+                  {gegevensOrder.opgehaald_door ||
+                    gegevensOrder.bezorger_naam ||
+                    "—"}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs font-medium uppercase tracking-wide text-koopje-black/45">
+                  Order aangemaakt door
+                </dt>
+                <dd className="mt-1 text-sm text-koopje-black">
+                  {gegevensOrder.aangemaakt_door || "—"}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs font-medium uppercase tracking-wide text-koopje-black/45">
+                  Voorrijkosten
+                </dt>
+                <dd className="mt-1 text-sm text-koopje-black">
+                  {gegevensOrder.voorrij_bedrag != null
+                    ? formatKlantOrderPrijs(Number(gegevensOrder.voorrij_bedrag))
+                    : "—"}
+                  {gegevensOrder.voorrij_km != null
+                    ? ` (${gegevensOrder.voorrij_km} km)`
+                    : ""}
+                </dd>
+              </div>
+              <div className="sm:col-span-2">
+                <dt className="text-xs font-medium uppercase tracking-wide text-koopje-black/45">
+                  Producten / arbeid + kosten
+                </dt>
+                <dd className="mt-2 space-y-1.5 text-sm text-koopje-black">
+                  {(() => {
+                    const items = parseLineItemsForGegevens(
+                      gegevensOrder.line_items_json
+                    );
+                    if (items.length > 0) {
+                      return (
+                        <ul className="space-y-1.5">
+                          {items.map((p, idx) => (
+                            <li
+                              key={`${p.naam}-${idx}`}
+                              className="flex justify-between gap-3"
+                            >
+                              <span>{p.naam}</span>
+                              <span className="shrink-0 text-koopje-black/60">
+                                {formatKlantOrderPrijs(p.prijs)}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      );
+                    }
+                    return (
+                      <p className="whitespace-pre-wrap">
+                        {gegevensOrder.producten || "—"}
+                      </p>
+                    );
+                  })()}
+                  {gegevensOrder.bestelling_totaal_prijs != null && (
+                    <p className="pt-1 font-medium">
+                      Totaal{" "}
+                      {formatKlantOrderPrijs(
+                        Number(gegevensOrder.bestelling_totaal_prijs)
+                      )}
+                    </p>
+                  )}
+                </dd>
+              </div>
+              <div className="sm:col-span-2">
+                <dt className="text-xs font-medium uppercase tracking-wide text-koopje-black/45">
+                  Opmerking
+                </dt>
+                <dd className="mt-1 whitespace-pre-wrap text-sm text-koopje-black">
+                  {gegevensOrder.opmerkingen_klant?.trim() || "—"}
+                </dd>
+              </div>
+              <div className="sm:col-span-2">
+                <dt className="text-xs font-medium uppercase tracking-wide text-koopje-black/45">
+                  Achtergrondverhaal
+                </dt>
+                <dd className="mt-1 whitespace-pre-wrap text-sm text-koopje-black">
+                  {gegevensOrder.achtergrondverhaal?.trim() || "—"}
+                </dd>
+              </div>
+            </dl>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

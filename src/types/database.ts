@@ -70,6 +70,8 @@ export interface Order {
   afgerond_at: string | null;
   /** Moment waarop de ophaalrit is afgerond (wachtkamer). */
   opgehaald_at?: string | null;
+  /** Wie de ophaalrit afrondde (bezorger bij afronden ophalen). */
+  opgehaald_door?: string | null;
   /** Terugbreng-order → bron-ophalen. */
   gekoppeld_ophalen_order_id?: string | null;
   /** Moneybird estimate (interne id). */

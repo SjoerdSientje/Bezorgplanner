@@ -15,16 +15,29 @@ export type KlantOrderHistorieProduct = {
 
 export type KlantOrderHistorieDetail = KlantOrderHistorieSamenvatting & {
   source: string | null;
+  type: string | null;
   orderNummer: string | null;
   opmerking: string | null;
   /** DD-MM-JJJJ UU:mm of null. */
   afgerondOp: string | null;
-  /** Moment ophaalrit afgerond (ophalen → terugbrengen/winkelafhaal). */
+  /** Moment ophaalrit afgerond. */
   opgehaaldOp: string | null;
+  /** Wie ophaalrit afrondde. */
+  opgehaaldDoor: string | null;
   /** Bezorgernaam, of "Afgehaald" bij winkelafhaal. */
   bezorger: string | null;
   /** Alleen MP/reparatie: wie de order aanmaakte. */
   aangemaaktDoor: string | null;
+  /** Terugbreng-order aangemaakt (alleen bij gekoppeld ophalen→terugbrengen). */
+  terugbrengAangemaaktOp: string | null;
+  terugbrengAangemaaktDoor: string | null;
+  /** Terugbreng afgerond. */
+  teruggebrachtOp: string | null;
+  teruggebrachtDoor: string | null;
+  /** Winkelafhaal: fiets afgerond (afgerond_at). */
+  fietsAfgerondOp: string | null;
+  /** ophalen_afgehandeld_via */
+  ophalenAfgehandeldVia: string | null;
   /** Alleen reparatie: uitgebreid verhaal. */
   achtergrondverhaal: string | null;
   producten: KlantOrderHistorieProduct[];
@@ -110,9 +123,12 @@ export function formatKlantOrderProductenLijst(
 export function klantOrderTypeLabel(input: {
   source?: string | null;
   type?: string | null;
+  ophalenAfgehandeldVia?: string | null;
+  gekoppeldOphalen?: boolean;
 }): string {
   const source = String(input.source ?? "").trim().toLowerCase();
   const type = String(input.type ?? "").trim().toLowerCase();
+  const via = String(input.ophalenAfgehandeldVia ?? "").trim().toLowerCase();
 
   if (source === "shopify") return "Shopify order";
   if (source === "mp") {
@@ -120,6 +136,12 @@ export function klantOrderTypeLabel(input: {
     return "MP bezorg order";
   }
   if (source === "reparatie") {
+    if (type === "reparatie_terugbrengen" && input.gekoppeldOphalen) {
+      return "Ophalen + terugbrengen";
+    }
+    if (type === "reparatie_ophalen" && via === "winkelafhaal") {
+      return "Ophalen (winkelafhaal)";
+    }
     if (type === "reparatie_ophalen") return "Ophalen";
     if (type === "reparatie_terugbrengen") return "Terugbrengen";
     if (type === "reparatie_deur") return "Reparatie aan huis";

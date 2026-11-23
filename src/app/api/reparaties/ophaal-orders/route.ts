@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
     const { data, error } = await supabase
       .from("orders")
       .select(
-        "id, order_nummer, naam, email, telefoon_nummer, volledig_adres, producten, model, achtergrondverhaal, opgehaald_at, created_at, voorrij_bedrag, voorrij_km, opmerkingen_klant"
+        "id, order_nummer, naam, email, telefoon_nummer, volledig_adres, producten, model, achtergrondverhaal, opgehaald_at, opgehaald_door, aangemaakt_door, created_at, voorrij_bedrag, voorrij_km, opmerkingen_klant, line_items_json, reparatie_regels_json, bestelling_totaal_prijs, bezorger_naam"
       )
       .eq("owner_email", ownerEmail)
       .eq("source", "reparatie")
