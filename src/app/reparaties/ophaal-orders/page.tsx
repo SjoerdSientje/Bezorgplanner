@@ -8,10 +8,14 @@ import OrderMedewerkerPicker from "@/components/OrderMedewerkerPicker";
 import ProductAutocomplete from "@/components/ProductAutocomplete";
 import type { OrderMedewerker } from "@/lib/order-medewerker";
 import {
+  arbeidPrijsIncl,
+  arbeidUrenFromPrijsIncl,
+  buildReparatieProductenKolom,
   normalizeStandaardOnderdelen,
   reparatieProductenKolomHead,
   standaardReparatieTotaalIncl,
   type ReparatieBetaalwijze,
+  type ReparatieOnderdeel,
   type ReparatieStandaardItem,
 } from "@/lib/reparaties";
 import {
@@ -105,20 +109,35 @@ function parseLineItemsForGegevens(
   }
 }
 
-type DraftRegel = {
+type RegelMode = "standaard" | "custom" | "vrij";
+
+type DraftOnderdeel = {
   key: string;
-  mode: "standaard" | "custom";
-  standaard_id?: string;
   naam: string;
-  onderdeel_naam: string;
-  onderdeel_prijs_incl: string;
+  prijs_incl: string;
   shopify_product_id?: number | null;
   shopify_variant_id?: number | null;
+};
+
+type DraftRegel = {
+  key: string;
+  mode: RegelMode;
+  standaard_id?: string;
+  naam: string;
+  onderdelen: DraftOnderdeel[];
   arbeid_uren: string;
 };
 
 function mkKey() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function patchRegel(
+  prev: DraftRegel[],
+  key: string,
+  patch: Partial<DraftRegel>
+): DraftRegel[] {
+  return prev.map((x) => (x.key === key ? { ...x, ...patch } : x));
 }
 
 type Mode = "list" | "keuze" | "terugbrengen" | "winkelafhaal";
@@ -158,6 +177,8 @@ export default function OphaalOrdersPage() {
   });
   const [voorrijOphalen, setVoorrijOphalen] = useState("");
   const [voorrijTerug, setVoorrijTerug] = useState("");
+  const [arbeidBedragStr, setArbeidBedragStr] = useState("");
+  const [arbeidManual, setArbeidManual] = useState(false);
   const [meegenomenIds, setMeegenomenIds] = useState<OphaalMeegenomenItemId[]>(
     []
   );
@@ -271,6 +292,8 @@ export default function OphaalOrdersPage() {
     setVoorrijTerug(basis);
     setRegels([]);
     setProductenKolomTekst("");
+    setArbeidBedragStr("");
+    setArbeidManual(false);
     setBetaalwijze("");
     setAangemaaktDoor("");
     const mee = parseOphalenMeegenomenJson(o.ophalen_meegenomen_json);
@@ -283,11 +306,25 @@ export default function OphaalOrdersPage() {
     return meegenomenIds.every((id) => Boolean(meegenomenTerug[id]));
   }
 
-  function addStandaard(id: string) {
+  function setArbeidBedrag(raw: string) {
+    setArbeidManual(true);
+    setArbeidBedragStr(raw);
+    const bedrag = parseFloat(raw.replace(",", ".")) || 0;
+    const uren = arbeidUrenFromPrijsIncl(bedrag);
+    const urenStr = uren > 0 ? String(Math.round(uren * 10000) / 10000) : "0";
+    setRegels((prev) => {
+      if (prev.length === 0) return prev;
+      return prev.map((r, i) =>
+        i === 0 ? { ...r, arbeid_uren: urenStr } : { ...r, arbeid_uren: "0" }
+      );
+    });
+  }
+
+  function addStandaardRegel(id: string) {
     const s = standaard.find((i) => i.id === id);
     if (!s) return;
     const onderdelen = normalizeStandaardOnderdelen(s);
-    const prijs = standaardReparatieTotaalIncl(s);
+    setArbeidManual(false);
     setRegels((prev) => [
       ...prev,
       {
@@ -295,61 +332,223 @@ export default function OphaalOrdersPage() {
         mode: "standaard",
         standaard_id: s.id,
         naam: s.naam,
-        onderdeel_naam: onderdelen.map((o) => o.naam).join(" + ") || s.naam,
-        onderdeel_prijs_incl: String(prijs),
-        shopify_product_id: onderdelen[0]?.shopify_product_id ?? null,
-        shopify_variant_id: onderdelen[0]?.shopify_variant_id ?? null,
+        onderdelen: (onderdelen.length
+          ? onderdelen
+          : [{ naam: s.naam, prijs_incl: 0 } as ReparatieOnderdeel]
+        ).map((o) => ({
+          key: mkKey(),
+          naam: o.naam,
+          prijs_incl: String(o.prijs_incl ?? 0),
+          shopify_product_id: o.shopify_product_id ?? null,
+          shopify_variant_id: o.shopify_variant_id ?? null,
+        })),
         arbeid_uren: String(s.arbeid_uren ?? 0),
       },
     ]);
   }
 
-  function addCustom() {
+  function addCustomRegel() {
     setRegels((prev) => [
       ...prev,
       {
         key: mkKey(),
         mode: "custom",
         naam: "",
-        onderdeel_naam: "",
-        onderdeel_prijs_incl: "0",
+        onderdelen: [
+          {
+            key: mkKey(),
+            naam: "",
+            prijs_incl: "",
+            shopify_product_id: null,
+            shopify_variant_id: null,
+          },
+        ],
         arbeid_uren: "0",
       },
     ]);
   }
 
+  function addVrijeTekstRegel() {
+    setRegels((prev) => [
+      ...prev,
+      {
+        key: mkKey(),
+        mode: "vrij",
+        naam: "",
+        onderdelen: [
+          {
+            key: mkKey(),
+            naam: "",
+            prijs_incl: "",
+            shopify_product_id: null,
+            shopify_variant_id: null,
+          },
+        ],
+        arbeid_uren: "0",
+      },
+    ]);
+  }
+
+  function removeRegel(key: string) {
+    setRegels((prev) => {
+      const victim = prev.find((r) => r.key === key);
+      const rest = prev.filter((r) => r.key !== key);
+      if (!victim || rest.length === 0) return rest;
+      const victimUren = parseFloat(victim.arbeid_uren.replace(",", ".")) || 0;
+      if (victimUren <= 0) return rest;
+      const othersHaveUren = rest.some(
+        (r) => (parseFloat(r.arbeid_uren.replace(",", ".")) || 0) > 0
+      );
+      if (othersHaveUren) return rest;
+      return rest.map((r, i) =>
+        i === 0 ? { ...r, arbeid_uren: victim.arbeid_uren } : r
+      );
+    });
+  }
+
+  function patchOnderdeel(
+    regelKey: string,
+    onderdeelKey: string,
+    patch: Partial<DraftOnderdeel>
+  ) {
+    setRegels((prev) =>
+      prev.map((r) =>
+        r.key !== regelKey
+          ? r
+          : {
+              ...r,
+              onderdelen: r.onderdelen.map((o) =>
+                o.key === onderdeelKey ? { ...o, ...patch } : o
+              ),
+              ...(patch.naam != null && r.mode === "custom"
+                ? { naam: patch.naam || r.naam }
+                : {}),
+            }
+      )
+    );
+  }
+
   const model = String(selected?.model ?? "").trim();
+  const factuurSoort =
+    mode === "winkelafhaal" ? "reparatie_ophalen" : "reparatie_terugbrengen";
   const productenHead = useMemo(
-    () =>
-      reparatieProductenKolomHead(
-        mode === "winkelafhaal" ? "reparatie_ophalen" : "reparatie_terugbrengen",
-        model || "…"
-      ),
-    [mode, model]
+    () => reparatieProductenKolomHead(factuurSoort, model || "…"),
+    [factuurSoort, model]
   );
 
-  function buildRegelsPayload() {
-    return regels.map((r) =>
-      r.mode === "standaard"
-        ? {
-            kind: "standaard" as const,
-            standaard_id: r.standaard_id,
-            naam: r.naam,
-            onderdeel_prijs_incl:
-              parseFloat(r.onderdeel_prijs_incl.replace(",", ".")) || 0,
-            arbeid_uren: parseFloat(r.arbeid_uren.replace(",", ".")) || 0,
-          }
-        : {
-            kind: "custom" as const,
-            naam: r.naam || r.onderdeel_naam || "Reparatie",
-            onderdeel_naam: r.onderdeel_naam || r.naam || "Reparatie",
-            onderdeel_prijs_incl:
-              parseFloat(r.onderdeel_prijs_incl.replace(",", ".")) || 0,
-            shopify_product_id: r.shopify_product_id ?? null,
-            shopify_variant_id: r.shopify_variant_id ?? null,
-            arbeid_uren: parseFloat(r.arbeid_uren.replace(",", ".")) || 0,
-          }
+  const autoArbeidBedrag = useMemo(() => {
+    const uren = regels.reduce(
+      (sum, r) => sum + (parseFloat(r.arbeid_uren.replace(",", ".")) || 0),
+      0
     );
+    return arbeidPrijsIncl(uren);
+  }, [regels]);
+
+  useEffect(() => {
+    if (arbeidManual) return;
+    setArbeidBedragStr(
+      autoArbeidBedrag > 0 ? autoArbeidBedrag.toFixed(2) : ""
+    );
+  }, [autoArbeidBedrag, arbeidManual]);
+
+  const arbeidBedragParsed = parseFloat(arbeidBedragStr.replace(",", ".")) || 0;
+
+  const subtotaalRegels = useMemo(() => {
+    const producten = regels.reduce((sum, r) => {
+      return (
+        sum +
+        r.onderdelen.reduce(
+          (s, o) => s + (parseFloat(o.prijs_incl.replace(",", ".")) || 0),
+          0
+        )
+      );
+    }, 0);
+    return producten + arbeidBedragParsed;
+  }, [regels, arbeidBedragParsed]);
+
+  const voorrijOphalenNum = parseFloat(voorrijOphalen.replace(",", ".")) || 0;
+  const voorrijTerugNum = parseFloat(voorrijTerug.replace(",", ".")) || 0;
+  const voorrijTotaal =
+    mode === "terugbrengen"
+      ? voorrijOphalenNum + voorrijTerugNum
+      : voorrijOphalenNum;
+  const totaal = subtotaalRegels + voorrijTotaal;
+
+  const defaultProductenKolom = useMemo(() => {
+    return buildReparatieProductenKolom({
+      soort: factuurSoort,
+      modelnaam: model,
+      vrijeTekst: productenKolomTekst || null,
+      regels: productenKolomTekst
+        ? []
+        : regels.map((r) => ({
+            naam: r.naam,
+            onderdeel_naam: r.onderdelen
+              .map((o) => o.naam)
+              .filter(Boolean)
+              .join(" + "),
+          })),
+      voorrijBedrag: voorrijTotaal > 0 ? voorrijTotaal : null,
+    });
+  }, [
+    factuurSoort,
+    model,
+    productenKolomTekst,
+    regels,
+    voorrijTotaal,
+  ]);
+
+  function buildRegelsPayload() {
+    const arbeidUren = arbeidUrenFromPrijsIncl(arbeidBedragParsed);
+    return regels.map((r, i) => {
+      const uren = i === 0 ? arbeidUren : 0;
+      if (r.mode === "vrij") {
+        const naam = r.naam.trim();
+        const prijs =
+          parseFloat((r.onderdelen[0]?.prijs_incl ?? "0").replace(",", ".")) ||
+          0;
+        return {
+          kind: "custom" as const,
+          naam,
+          onderdeel_naam: naam,
+          onderdeel_prijs_incl: prijs,
+          shopify_product_id: null,
+          shopify_variant_id: null,
+          onderdelen: [{ naam, prijs_incl: prijs }],
+          arbeid_uren: uren,
+        };
+      }
+      const onderdelen = r.onderdelen
+        .filter((o) => o.naam.trim())
+        .map((o) => ({
+          naam: o.naam.trim(),
+          prijs_incl: parseFloat(o.prijs_incl.replace(",", ".")) || 0,
+          shopify_product_id: o.shopify_product_id ?? null,
+          shopify_variant_id: o.shopify_variant_id ?? null,
+        }));
+      const onderdeelPrijs = onderdelen.reduce((s, o) => s + o.prijs_incl, 0);
+      if (r.mode === "standaard") {
+        return {
+          kind: "standaard" as const,
+          standaard_id: r.standaard_id,
+          naam: r.naam,
+          onderdeel_prijs_incl: onderdeelPrijs,
+          onderdelen,
+          arbeid_uren: uren,
+        };
+      }
+      const first = onderdelen[0];
+      return {
+        kind: "custom" as const,
+        naam: r.naam || first?.naam || "Reparatie",
+        onderdeel_naam: first?.naam || r.naam || "Reparatie",
+        onderdeel_prijs_incl: first?.prijs_incl ?? 0,
+        shopify_product_id: first?.shopify_product_id ?? null,
+        shopify_variant_id: first?.shopify_variant_id ?? null,
+        onderdelen,
+        arbeid_uren: uren,
+      };
+    });
   }
 
   async function submitTerugbrengen() {
@@ -363,7 +562,11 @@ export default function OphaalOrdersPage() {
       return;
     }
     if (regels.length === 0) {
-      setError("Voeg minstens één reparatieregel toe.");
+      setError("Voeg minstens één factuurregel toe.");
+      return;
+    }
+    if (regels.some((r) => r.mode === "vrij" && !r.naam.trim())) {
+      setError("Vul een omschrijving in bij elke vrije tekstregel.");
       return;
     }
     if (!meegenomenTerugOk()) {
@@ -416,7 +619,11 @@ export default function OphaalOrdersPage() {
   async function submitWinkelafhaal() {
     if (!selected) return;
     if (regels.length === 0) {
-      setError("Voeg minstens één reparatieregel toe.");
+      setError("Voeg minstens één factuurregel toe.");
+      return;
+    }
+    if (regels.some((r) => r.mode === "vrij" && !r.naam.trim())) {
+      setError("Vul een omschrijving in bij elke vrije tekstregel.");
       return;
     }
     if (!meegenomenTerugOk()) {
@@ -438,6 +645,7 @@ export default function OphaalOrdersPage() {
             model,
             achtergrondverhaal,
             producten_kolom_tekst: productenKolomTekst.trim() || undefined,
+            voorrij_ophalen_bedrag: voorrijOphalen,
             regels: buildRegelsPayload(),
             ophalen_meegenomen_teruggegeven: meegenomenIds.filter(
               (id) => meegenomenTerug[id]
@@ -717,25 +925,6 @@ export default function OphaalOrdersPage() {
                     onChange={(e) => setOpmerking(e.target.value)}
                   />
                 </label>
-
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="block text-sm">
-                    Voorrijkosten ophalen (€)
-                    <input
-                      className="mt-1 w-full rounded-xl border border-koopje-black/20 px-3 py-2"
-                      value={voorrijOphalen}
-                      onChange={(e) => setVoorrijOphalen(e.target.value)}
-                    />
-                  </label>
-                  <label className="block text-sm">
-                    Voorrijkosten terugbrengen (€)
-                    <input
-                      className="mt-1 w-full rounded-xl border border-koopje-black/20 px-3 py-2"
-                      value={voorrijTerug}
-                      onChange={(e) => setVoorrijTerug(e.target.value)}
-                    />
-                  </label>
-                </div>
               </>
             )}
 
@@ -750,116 +939,339 @@ export default function OphaalOrdersPage() {
             </label>
 
             <section className="space-y-3">
-              <h2 className="text-sm font-medium">
-                {mode === "winkelafhaal" ? "Offerteconcept" : "Factuurconcept"}
+              <h2 className="text-sm font-medium text-koopje-black">
+                {mode === "winkelafhaal" ? "Offerte (concept)" : "Factuur (concept)"}
               </h2>
-              <div className="flex flex-wrap gap-2">
+
+              <div className="flex flex-wrap items-center gap-2">
                 <select
                   className="rounded-lg border border-koopje-black/20 px-2 py-1.5 text-sm"
                   defaultValue=""
                   onChange={(e) => {
-                    if (e.target.value) addStandaard(e.target.value);
-                    e.target.value = "";
+                    if (e.target.value) {
+                      addStandaardRegel(e.target.value);
+                      e.target.value = "";
+                    }
                   }}
                 >
-                  <option value="">+ Standaardreparatie</option>
+                  <option value="">
+                    {standaard.length === 0
+                      ? "Geen standaardreparaties"
+                      : "+ Standaardreparatie…"}
+                  </option>
                   {standaard.map((s) => (
                     <option key={s.id} value={s.id}>
-                      {s.naam}
+                      {s.naam} — €{standaardReparatieTotaalIncl(s).toFixed(2)}
                     </option>
                   ))}
                 </select>
                 <button
                   type="button"
-                  onClick={addCustom}
+                  onClick={addCustomRegel}
                   className="rounded-lg border border-koopje-black/20 px-3 py-1.5 text-sm"
                 >
-                  + Custom
+                  + Shopify-product
+                </button>
+                <button
+                  type="button"
+                  onClick={addVrijeTekstRegel}
+                  className="rounded-lg border border-koopje-black/20 px-3 py-1.5 text-sm"
+                >
+                  + Vrije tekstregel
                 </button>
               </div>
 
-              <ul className="space-y-2">
-                {regels.map((r) => (
-                  <li
-                    key={r.key}
-                    className="rounded-xl border border-koopje-black/10 p-3"
-                  >
-                    {r.mode === "custom" ? (
-                      <div className="space-y-2">
-                        <ProductAutocomplete
-                          label="Product"
-                          value={r.onderdeel_naam}
-                          onChange={(naam, prijs, meta) =>
-                            setRegels((prev) =>
-                              prev.map((x) =>
-                                x.key === r.key
-                                  ? {
-                                      ...x,
-                                      onderdeel_naam: naam,
-                                      naam: naam || x.naam,
-                                      shopify_product_id:
-                                        meta?.shopify_product_id ?? null,
-                                      shopify_variant_id:
-                                        meta?.shopify_variant_id ?? null,
-                                      onderdeel_prijs_incl:
-                                        prijs != null && prijs !== ""
-                                          ? prijs
-                                          : x.onderdeel_prijs_incl,
-                                    }
-                                  : x
-                              )
-                            )
-                          }
-                          placeholder="Product zoeken…"
-                        />
-                        <input
-                          className="w-28 rounded border px-2 py-1 text-sm"
-                          value={r.onderdeel_prijs_incl}
-                          onChange={(e) =>
-                            setRegels((prev) =>
-                              prev.map((x) =>
-                                x.key === r.key
-                                  ? {
-                                      ...x,
-                                      onderdeel_prijs_incl: e.target.value,
-                                    }
-                                  : x
-                              )
-                            )
-                          }
-                          placeholder="€"
-                        />
-                      </div>
-                    ) : (
-                      <p className="text-sm font-medium">{r.naam}</p>
-                    )}
-                    <button
-                      type="button"
-                      className="mt-2 text-xs text-red-600"
-                      onClick={() =>
-                        setRegels((prev) => prev.filter((x) => x.key !== r.key))
-                      }
-                    >
-                      Verwijderen
-                    </button>
-                  </li>
-                ))}
-              </ul>
-
-              <label className="block text-sm text-koopje-black/70">
-                Optioneel: tekst in productenkolom
-                <div className="mt-1 flex overflow-hidden rounded-xl border border-koopje-black/20">
-                  <span className="shrink-0 border-r border-koopje-black/10 bg-stone-50 px-3 py-2 text-sm">
-                    {productenHead}
-                  </span>
-                  <input
-                    className="min-w-0 flex-1 px-3 py-2 text-sm outline-none"
-                    value={productenKolomTekst}
-                    onChange={(e) => setProductenKolomTekst(e.target.value)}
-                    placeholder="leeg = standaardregels"
-                  />
+              <div className="overflow-hidden rounded-xl border border-koopje-black/15 bg-white">
+                <div className="grid grid-cols-[1fr_auto] gap-3 border-b border-koopje-black/10 bg-stone-50 px-4 py-2 text-xs font-medium text-koopje-black/45">
+                  <span>Omschrijving</span>
+                  <span className="w-24 text-right">Bedrag</span>
                 </div>
-              </label>
+                <ul className="divide-y divide-stone-100">
+                  {regels.length === 0 && (
+                    <li className="px-4 py-6 text-center text-sm text-koopje-black/40">
+                      Nog geen factuurregels — voeg een product toe
+                    </li>
+                  )}
+
+                  {regels.flatMap((r) => {
+                    if (r.mode === "vrij") {
+                      const o = r.onderdelen[0];
+                      return [
+                        <li
+                          key={r.key}
+                          className="grid grid-cols-[1fr_auto_auto] items-center gap-2 px-4 py-2.5 text-sm"
+                        >
+                          <input
+                            type="text"
+                            className="min-w-0 border-0 bg-transparent p-0 text-sm text-koopje-black outline-none placeholder:text-koopje-black/30"
+                            value={r.naam}
+                            placeholder="Omschrijving…"
+                            onChange={(e) => {
+                              const naam = e.target.value;
+                              setRegels((prev) =>
+                                prev.map((x) =>
+                                  x.key !== r.key
+                                    ? x
+                                    : {
+                                        ...x,
+                                        naam,
+                                        onderdelen: x.onderdelen.map((oo, i) =>
+                                          i === 0 ? { ...oo, naam } : oo
+                                        ),
+                                      }
+                                )
+                              );
+                            }}
+                            aria-label="Vrije tekstregel omschrijving"
+                          />
+                          <label className="flex w-24 items-center justify-end gap-1 tabular-nums text-koopje-black">
+                            <span className="text-koopje-black/40">€</span>
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              className="w-16 border-0 bg-transparent p-0 text-right text-sm outline-none focus:ring-0"
+                              value={o?.prijs_incl ?? ""}
+                              onChange={(e) => {
+                                if (!o) return;
+                                patchOnderdeel(r.key, o.key, {
+                                  prijs_incl: e.target.value,
+                                });
+                              }}
+                              aria-label="Bedrag vrije tekstregel"
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            className="text-koopje-black/30 hover:text-red-600"
+                            title="Regel verwijderen"
+                            onClick={() => removeRegel(r.key)}
+                          >
+                            ×
+                          </button>
+                        </li>,
+                      ];
+                    }
+
+                    if (
+                      r.mode === "custom" &&
+                      !r.onderdelen[0]?.shopify_product_id
+                    ) {
+                      return [
+                        <li key={r.key} className="space-y-2 px-4 py-3">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <ProductAutocomplete
+                                label="Product zoeken"
+                                value={r.onderdelen[0]?.naam ?? ""}
+                                searchSource="shopify"
+                                productKind="extra"
+                                onChange={(title, prijs, meta) => {
+                                  const oKey = r.onderdelen[0]?.key;
+                                  if (!oKey) return;
+                                  patchOnderdeel(r.key, oKey, {
+                                    naam: title,
+                                    ...(prijs != null
+                                      ? { prijs_incl: prijs }
+                                      : {}),
+                                    ...(meta !== undefined
+                                      ? {
+                                          shopify_product_id:
+                                            meta.shopify_product_id ?? null,
+                                          shopify_variant_id:
+                                            meta.shopify_variant_id ?? null,
+                                        }
+                                      : {}),
+                                  });
+                                  setRegels((prev) =>
+                                    patchRegel(prev, r.key, {
+                                      naam: title || "Reparatie",
+                                    })
+                                  );
+                                }}
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              className="mt-6 text-xs text-red-600 hover:underline"
+                              onClick={() => removeRegel(r.key)}
+                            >
+                              ×
+                            </button>
+                          </div>
+                        </li>,
+                      ];
+                    }
+
+                    return r.onderdelen.map((o) => (
+                      <li
+                        key={`${r.key}-${o.key}`}
+                        className="grid grid-cols-[1fr_auto_auto] items-center gap-2 px-4 py-2.5 text-sm"
+                      >
+                        <span className="min-w-0 text-koopje-black">
+                          {o.naam || "—"}
+                        </span>
+                        <label className="flex w-24 items-center justify-end gap-1 tabular-nums text-koopje-black">
+                          <span className="text-koopje-black/40">€</span>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            className="w-16 border-0 bg-transparent p-0 text-right text-sm outline-none focus:ring-0"
+                            value={o.prijs_incl}
+                            onChange={(e) =>
+                              patchOnderdeel(r.key, o.key, {
+                                prijs_incl: e.target.value,
+                              })
+                            }
+                            aria-label={`Prijs ${o.naam}`}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          className="text-koopje-black/30 hover:text-red-600"
+                          title="Regel verwijderen"
+                          onClick={() => {
+                            if (r.onderdelen.length <= 1) {
+                              removeRegel(r.key);
+                              return;
+                            }
+                            setRegels((prev) =>
+                              prev.map((x) =>
+                                x.key !== r.key
+                                  ? x
+                                  : {
+                                      ...x,
+                                      onderdelen: x.onderdelen.filter(
+                                        (oo) => oo.key !== o.key
+                                      ),
+                                    }
+                              )
+                            );
+                          }}
+                        >
+                          ×
+                        </button>
+                      </li>
+                    ));
+                  })}
+
+                  {regels.length > 0 && (
+                    <li className="grid grid-cols-[1fr_auto_auto] items-center gap-2 px-4 py-2.5 text-sm">
+                      <span className="text-koopje-black">Arbeidskosten</span>
+                      <label className="flex w-24 items-center justify-end gap-1 tabular-nums text-koopje-black">
+                        <span className="text-koopje-black/40">€</span>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          className="w-16 border-0 bg-transparent p-0 text-right text-sm outline-none focus:ring-0"
+                          value={arbeidBedragStr}
+                          onChange={(e) => setArbeidBedrag(e.target.value)}
+                          aria-label="Arbeidskosten"
+                        />
+                      </label>
+                      <span className="w-4" />
+                    </li>
+                  )}
+
+                  {mode === "terugbrengen" ? (
+                    <>
+                      <li className="grid grid-cols-[1fr_auto_auto] items-center gap-2 px-4 py-2.5 text-sm">
+                        <span className="text-koopje-black">
+                          Voorrijkosten ophalen
+                        </span>
+                        <label className="flex w-24 items-center justify-end gap-1 tabular-nums text-koopje-black">
+                          <span className="text-koopje-black/40">€</span>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            className="w-16 border-0 bg-transparent p-0 text-right text-sm outline-none"
+                            value={voorrijOphalen}
+                            onChange={(e) => setVoorrijOphalen(e.target.value)}
+                            aria-label="Voorrijkosten ophalen"
+                          />
+                        </label>
+                        <span className="w-4" />
+                      </li>
+                      <li className="grid grid-cols-[1fr_auto_auto] items-center gap-2 px-4 py-2.5 text-sm">
+                        <span className="text-koopje-black">
+                          Voorrijkosten terugbrengen
+                        </span>
+                        <label className="flex w-24 items-center justify-end gap-1 tabular-nums text-koopje-black">
+                          <span className="text-koopje-black/40">€</span>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            className="w-16 border-0 bg-transparent p-0 text-right text-sm outline-none"
+                            value={voorrijTerug}
+                            onChange={(e) => setVoorrijTerug(e.target.value)}
+                            aria-label="Voorrijkosten terugbrengen"
+                          />
+                        </label>
+                        <span className="w-4" />
+                      </li>
+                    </>
+                  ) : (
+                    <li className="grid grid-cols-[1fr_auto_auto] items-center gap-2 px-4 py-2.5 text-sm">
+                      <span className="text-koopje-black">Voorrijkosten</span>
+                      <label className="flex w-24 items-center justify-end gap-1 tabular-nums text-koopje-black">
+                        <span className="text-koopje-black/40">€</span>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          className="w-16 border-0 bg-transparent p-0 text-right text-sm outline-none"
+                          value={voorrijOphalen}
+                          onChange={(e) => setVoorrijOphalen(e.target.value)}
+                          aria-label="Voorrijkosten"
+                        />
+                      </label>
+                      <span className="w-4" />
+                    </li>
+                  )}
+                </ul>
+                <div className="flex items-center justify-between border-t border-koopje-black/15 px-4 py-3 text-sm font-semibold text-koopje-black">
+                  <span>Totaal incl. btw</span>
+                  <span className="tabular-nums">€{totaal.toFixed(2)}</span>
+                </div>
+              </div>
+
+              <div className="space-y-2 rounded-xl border border-koopje-black/10 bg-stone-50/40 p-4">
+                <p className="text-xs font-medium uppercase tracking-wide text-koopje-black/45">
+                  Productenkolom (standaard)
+                </p>
+                <p className="rounded-lg border border-dashed border-koopje-black/15 bg-white px-3 py-2 text-sm text-koopje-black">
+                  {defaultProductenKolom || productenHead}
+                </p>
+                <label className="block text-sm text-koopje-black/70">
+                  Optioneel: andere tekst in productenkolom
+                  <div className="mt-1 flex overflow-hidden rounded-xl border border-koopje-black/20 bg-white">
+                    <span className="shrink-0 select-none border-r border-koopje-black/10 bg-stone-50 px-3 py-2.5 text-sm text-koopje-black/70">
+                      {productenHead}
+                    </span>
+                    <input
+                      className="min-w-0 flex-1 px-3 py-2.5 text-sm outline-none"
+                      value={productenKolomTekst}
+                      onChange={(e) =>
+                        setProductenKolomTekst(
+                          e.target.value
+                            .replace(
+                              /^(reparatie aan huis|terugbrengen|ophalen):\s*/i,
+                              ""
+                            )
+                            .replace(
+                              new RegExp(
+                                `^${model
+                                  .trim()
+                                  .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*-\\s*`,
+                                "i"
+                              ),
+                              ""
+                            )
+                        )
+                      }
+                      placeholder="leeg = standaardregels"
+                    />
+                  </div>
+                </label>
+              </div>
             </section>
 
             {meegenomenIds.length > 0 && (

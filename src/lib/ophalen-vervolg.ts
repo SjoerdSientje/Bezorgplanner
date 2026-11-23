@@ -438,19 +438,28 @@ export async function completeWinkelafhaalFromOphalen(
     throw new Error("Voeg minstens één reparatieregel toe.");
   }
 
+  const defaultVoorrij = voorrijBasis(src);
+  const voorrijBedrag = parseMoney(
+    body.voorrij_ophalen_bedrag ?? body.voorrij_bedrag,
+    defaultVoorrij
+  );
+  if (voorrijBedrag >= 0.01) {
+    expanded.push({
+      kind: "voorrijkosten",
+      naam: "Voorrijkosten",
+      voorrij_bedrag: Math.round(voorrijBedrag * 100) / 100,
+    });
+  }
+
   const lineItems = buildReparatieShopifyLineItems(expanded);
   const totaal = sumLineItemsIncl(lineItems);
   const productenKolomTekst = String(body.producten_kolom_tekst ?? "").trim();
-  const voorrijBedrag =
-    src.voorrij_bedrag != null && Number.isFinite(Number(src.voorrij_bedrag))
-      ? Number(src.voorrij_bedrag)
-      : null;
   const producten = buildReparatieProductenKolom({
     soort: "reparatie_ophalen",
     modelnaam: model,
     vrijeTekst: productenKolomTekst || null,
     regels: productenKolomTekst ? [] : stripVoorrijFromRegels(expanded),
-    voorrijBedrag,
+    voorrijBedrag: voorrijBedrag > 0 ? voorrijBedrag : null,
   });
 
   const achtergrond =
@@ -502,6 +511,7 @@ export async function completeWinkelafhaalFromOphalen(
       line_items_json: buildReparatieLineItemsJson(lineItems),
       bestelling_totaal_prijs: Math.round(totaal * 100) / 100,
       te_betalen: Math.round(totaal * 100) / 100,
+      voorrij_bedrag: voorrijBedrag > 0 ? voorrijBedrag : null,
       reparatie_regels_json: stripVoorrijFromRegels(expanded),
       achtergrondverhaal: achtergrond,
       ophalen_afgehandeld_via: "winkelafhaal",
