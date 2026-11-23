@@ -2,6 +2,7 @@
 
 import { usePathname } from "next/navigation";
 import { Sidebar } from "@/components/Sidebar";
+import PlanningAgentChat from "@/components/PlanningAgentChat";
 
 const PUBLIC_PREFIXES = [
   "/login",
@@ -26,6 +27,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <main className="app-main">
         <div className="app-scale">{children}</div>
       </main>
+      <PlanningAgentChat />
     </div>
   );
 }

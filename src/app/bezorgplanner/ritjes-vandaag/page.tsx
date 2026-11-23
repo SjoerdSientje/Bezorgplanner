@@ -6,8 +6,13 @@ import Header from "@/components/Header";
 import EditableSheetTable from "@/components/EditableSheetTable";
 import RitjesRouteControls from "@/components/RitjesRouteControls";
 import type { RoutePickOrder } from "@/components/RouteOrderPicker";
-import SparrenMetSientje from "@/components/SparrenMetSientje";
 import ProductenCell from "@/components/ProductenCell";
+import {
+  PLANNING_AGENT_ACTION_EVENT,
+  clearPlanningAgentRitjesContext,
+  setPlanningAgentRitjesContext,
+  type PlanningAgentActionDetail,
+} from "@/lib/agent/client-bridge";
 import OpmerkingKlantCell from "@/components/OpmerkingKlantCell";
 import JaNeeCell from "@/components/JaNeeCell";
 import AlleRittenTabel, { type AlleRittenOrder } from "@/components/AlleRittenTabel";
@@ -29,7 +34,10 @@ import StuurAppjesButton from "@/components/StuurAppjesButton";
 import EditableRouteName from "@/components/EditableRouteName";
 import DepotReturnBanner from "@/components/DepotReturnBanner";
 import { routeDisplayLabel, routeNaamFromOrders } from "@/lib/route-colors";
-import { updateSavedRouteNaam } from "@/lib/route-vertrektijden";
+import {
+  formatRouteVertrektijdenContext,
+  updateSavedRouteNaam,
+} from "@/lib/route-vertrektijden";
 import {
   orderLegNummerValue,
   segmentsFromOrderLegs,
@@ -253,6 +261,19 @@ export default function RitjesVandaagPage() {
     fetchRitjes();
   }, [fetchRitjes]);
 
+  useEffect(() => {
+    const onAgentAction = (ev: Event) => {
+      const detail = (ev as CustomEvent<PlanningAgentActionDetail>).detail;
+      if (detail?.action === "slotsUpdated") {
+        void fetchRitjes();
+      }
+    };
+    window.addEventListener(PLANNING_AGENT_ACTION_EVENT, onAgentAction);
+    return () => {
+      window.removeEventListener(PLANNING_AGENT_ACTION_EVENT, onAgentAction);
+    };
+  }, [fetchRitjes]);
+
   const visibleRows = useMemo(() => {
     let filtered =
       activeTab === "morgen"
@@ -277,6 +298,16 @@ export default function RitjesVandaagPage() {
       sourceIndices: filtered.map((x) => x.idx),
     };
   }, [orders, activeTab]);
+
+  useEffect(() => {
+    setPlanningAgentRitjesContext(
+      visibleRows.orders,
+      formatRouteVertrektijdenContext()
+    );
+    return () => {
+      clearPlanningAgentRitjesContext();
+    };
+  }, [visibleRows.orders]);
 
   const tableRows = useMemo(
     () => ordersToTableRows(visibleRows.orders),
@@ -622,10 +653,6 @@ export default function RitjesVandaagPage() {
           </div>
 
           <div className="mb-4 flex flex-wrap items-center gap-3">
-            <SparrenMetSientje
-              ritjesOrders={visibleRows.orders}
-              onSlotsUpdated={fetchRitjes}
-            />
             <StuurAppjesButton
               huidigeRitjesOrders={
                 orders.filter(
