@@ -301,9 +301,18 @@ export async function createTerugbrengenFromOphalen(
     volledig_adres: enriched.volledigAdres,
     adres_url: mapsUrl,
     bel_link: e164 ? `https://call.ctrlq.org/${e164}` : null,
-    bezorgtijd_voorkeur: String(body.bezorgtijd_voorkeur ?? "").trim() || null,
-    datum_opmerking: String(body.datum_voorkeur ?? "").trim() || null,
-    opmerkingen_klant: String(body.opmerking ?? "").trim() || null,
+    bezorgtijd_voorkeur:
+      String(body.bezorgtijd_voorkeur ?? "").trim().toLowerCase() === "x"
+        ? "geen"
+        : String(body.bezorgtijd_voorkeur ?? "").trim() || null,
+    datum_opmerking:
+      String(body.datum_voorkeur ?? "").trim().toLowerCase() === "x"
+        ? "vandaag"
+        : String(body.datum_voorkeur ?? "").trim() || null,
+    opmerkingen_klant:
+      String(body.opmerking ?? "").trim().toLowerCase() === "x"
+        ? "geen opmerking"
+        : String(body.opmerking ?? "").trim() || null,
     achtergrondverhaal:
       String(body.achtergrondverhaal ?? src.achtergrondverhaal ?? "").trim() || null,
     aangemaakt_door: aangemaaktDoor,
