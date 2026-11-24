@@ -447,6 +447,14 @@ export async function POST(request: NextRequest) {
       datum: datumDb,
       mp_tags: null,
       moneybird_invoice_id: null as string | null,
+      moneybird_estimate_id:
+        soort === "reparatie_terugbrengen"
+          ? String(body.moneybird_estimate_id ?? "").trim() || null
+          : null,
+      moneybird_estimate_number:
+        soort === "reparatie_terugbrengen"
+          ? String(body.moneybird_estimate_number ?? "").trim() || null
+          : null,
     };
 
     const { data: order, error } = await supabase

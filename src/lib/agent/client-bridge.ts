@@ -7,7 +7,7 @@ import type { RitjesOrderFromApi } from "@/lib/ritjes-mapping";
 export const PLANNING_AGENT_ACTION_EVENT = "planning-agent:action";
 
 export type PlanningAgentActionDetail = {
-  action: "slotsUpdated" | "invoiceSent" | string;
+  action: "slotsUpdated" | "invoiceSent" | "invoiceCreated" | string;
 };
 
 type RitjesCtx = {

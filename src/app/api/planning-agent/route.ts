@@ -20,7 +20,17 @@ import {
   sendSalesInvoiceByEmail,
   fetchSalesInvoiceById,
   isDraftMoneybirdInvoice,
+  upsertReparatieSalesInvoice,
+  createSalesInvoiceFromShopifyOrder,
+  type ReparatieInvoiceLineInput,
 } from "@/lib/moneybird";
+import { fetchShopifyOrderById } from "@/lib/shopify-admin";
+import {
+  buildReparatieShopifyLineItems,
+  parseStoredReparatieRegels,
+  type ReparatieRegelInput,
+} from "@/lib/reparaties";
+import type { ShopifyLineItem } from "@/lib/shopify-order";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = SupabaseClient<any>;
@@ -188,9 +198,39 @@ function toolDefs(): OpenAI.Chat.Completions.ChatCompletionTool[] {
     {
       type: "function",
       function: {
+        name: "maak_moneybird_factuur",
+        description:
+          "Maak of werk een Moneybird-conceptfactuur bij voor een bestaande Bezorgplanner-order (reparatie of Shopify). Alleen na bevestiging. Optioneel meteen versturen per e-mail.",
+        parameters: {
+          type: "object",
+          properties: {
+            order_nummer: {
+              type: "string",
+              description: "Ordernummer (met of zonder #)",
+            },
+            order_id: {
+              type: "string",
+              description: "Optioneel intern order-id",
+            },
+            ook_versturen: {
+              type: "boolean",
+              description:
+                "true = na aanmaken meteen per e-mail versturen (alleen na bevestiging)",
+            },
+            email: {
+              type: "string",
+              description: "Optioneel e-mailadres override bij versturen",
+            },
+          },
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
         name: "stuur_moneybird_factuur",
         description:
-          "Verstuur de bestaande Moneybird-factuur van een order per e-mail. Alleen na bevestiging. Order moet moneybird_invoice_id hebben.",
+          "Verstuur de bestaande Moneybird-factuur van een order per e-mail. Alleen na bevestiging. Order moet moneybird_invoice_id hebben (anders eerst maak_moneybird_factuur).",
         parameters: {
           type: "object",
           properties: {
@@ -211,6 +251,128 @@ function toolDefs(): OpenAI.Chat.Completions.ChatCompletionTool[] {
       },
     },
   ];
+}
+
+type OrderForInvoice = {
+  id: string;
+  order_nummer: string | null;
+  order_id: string | null;
+  naam: string | null;
+  email: string | null;
+  telefoon_nummer: string | null;
+  telefoon_e164: string | null;
+  volledig_adres: string | null;
+  moneybird_invoice_id: string | null;
+  source: string | null;
+  type: string | null;
+  voorrij_bedrag: number | null;
+  reparatie_regels_json: unknown;
+  line_items_json: unknown;
+};
+
+const ORDER_INVOICE_SELECT =
+  "id, order_nummer, order_id, naam, email, telefoon_nummer, telefoon_e164, volledig_adres, moneybird_invoice_id, source, type, voorrij_bedrag, reparatie_regels_json, line_items_json";
+
+async function findOrderForInvoice(
+  supabase: Db,
+  ownerEmail: string,
+  args: { order_nummer?: string; order_id?: string }
+): Promise<OrderForInvoice | null> {
+  const orderIdRaw = String(args.order_id ?? "").trim();
+  const onr = String(args.order_nummer ?? "").trim();
+  if (orderIdRaw) {
+    const { data } = await supabase
+      .from("orders")
+      .select(ORDER_INVOICE_SELECT)
+      .eq("owner_email", ownerEmail)
+      .eq("id", orderIdRaw)
+      .maybeSingle();
+    return (data as OrderForInvoice | null) ?? null;
+  }
+  if (!onr) return null;
+  const alt = onr.startsWith("#") ? onr.slice(1) : `#${onr}`;
+  const { data } = await supabase
+    .from("orders")
+    .select(ORDER_INVOICE_SELECT)
+    .eq("owner_email", ownerEmail)
+    .or(`order_nummer.eq.${onr},order_nummer.eq.${alt}`)
+    .limit(1)
+    .maybeSingle();
+  return (data as OrderForInvoice | null) ?? null;
+}
+
+function parseStoredLineItems(raw: unknown): ShopifyLineItem[] {
+  if (!raw) return [];
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!Array.isArray(parsed)) return [];
+    const out: ShopifyLineItem[] = [];
+    for (const entry of parsed) {
+      if (!entry || typeof entry !== "object") continue;
+      const r = entry as Record<string, unknown>;
+      const name = String(r.name ?? r.title ?? "").trim();
+      if (!name) continue;
+      const priceRaw = r.price;
+      const price =
+        typeof priceRaw === "number" || typeof priceRaw === "string"
+          ? priceRaw
+          : 0;
+      out.push({
+        name,
+        price,
+        quantity: Math.max(1, Math.floor(Number(r.quantity ?? 1) || 1)),
+        product_id:
+          typeof r.product_id === "number" || typeof r.product_id === "string"
+            ? r.product_id
+            : undefined,
+        variant_id:
+          typeof r.variant_id === "number" || typeof r.variant_id === "string"
+            ? r.variant_id
+            : undefined,
+        properties: [],
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+function reparatieLinesFromOrder(order: OrderForInvoice): ReparatieInvoiceLineInput[] {
+  let lineItems = parseStoredLineItems(order.line_items_json);
+  if (lineItems.length === 0) {
+    const regels: ReparatieRegelInput[] = [
+      ...parseStoredReparatieRegels(order.reparatie_regels_json),
+    ];
+    const voorrij =
+      order.voorrij_bedrag != null && Number.isFinite(Number(order.voorrij_bedrag))
+        ? Number(order.voorrij_bedrag)
+        : 0;
+    if (voorrij >= 0.01) {
+      regels.push({
+        kind: "voorrijkosten",
+        naam: "Voorrijkosten",
+        voorrij_bedrag: voorrij,
+      });
+    }
+    lineItems = buildReparatieShopifyLineItems(regels);
+  }
+
+  return lineItems
+    .filter((li) => {
+      const n = String(li.name).toLowerCase();
+      return n !== "producten nog niet bekend" && !n.startsWith("vrije tekst");
+    })
+    .map((li) => ({
+      description: String(li.name ?? ""),
+      priceIncl:
+        typeof li.price === "number"
+          ? li.price
+          : parseFloat(String(li.price ?? 0)) || 0,
+      quantity: Math.max(1, Math.floor(Number(li.quantity ?? 1))),
+      shopifyProductId:
+        li.product_id != null ? Number(li.product_id) || null : null,
+    }));
 }
 
 function fnArgs(tc: OpenAI.Chat.Completions.ChatCompletionMessageToolCall): {
@@ -381,6 +543,222 @@ async function handleSetSlots(
   };
 }
 
+async function handleMaakFactuur(
+  supabase: Db,
+  ownerEmail: string,
+  rawArgs: string
+): Promise<{ content: string; invoiceCreated: boolean; invoiceSent: boolean }> {
+  if (!mayCreateMoneybirdInvoicesForOwner(ownerEmail)) {
+    return {
+      content: JSON.stringify({
+        error: "Dit account mag geen Moneybird-facturen aanmaken.",
+      }),
+      invoiceCreated: false,
+      invoiceSent: false,
+    };
+  }
+  if (!isMoneybirdConfigured()) {
+    return {
+      content: JSON.stringify({ error: "Moneybird niet geconfigureerd." }),
+      invoiceCreated: false,
+      invoiceSent: false,
+    };
+  }
+
+  let args: {
+    order_nummer?: string;
+    order_id?: string;
+    ook_versturen?: boolean;
+    email?: string;
+  };
+  try {
+    args = JSON.parse(rawArgs);
+  } catch {
+    return {
+      content: JSON.stringify({ error: "Ongeldige parameters." }),
+      invoiceCreated: false,
+      invoiceSent: false,
+    };
+  }
+
+  const order = await findOrderForInvoice(supabase, ownerEmail, args);
+  if (!order?.id) {
+    return {
+      content: JSON.stringify({ error: "Order niet gevonden." }),
+      invoiceCreated: false,
+      invoiceSent: false,
+    };
+  }
+
+  const ookVersturen = Boolean(args.ook_versturen);
+  const emailOverride = String(args.email ?? "").trim() || null;
+  const isReparatie =
+    String(order.source ?? "").toLowerCase() === "reparatie" ||
+    String(order.type ?? "").startsWith("reparatie_");
+  const isShopify = String(order.source ?? "").toLowerCase() === "shopify";
+
+  try {
+    let invoiceId = String(order.moneybird_invoice_id ?? "").trim();
+    let createdOrUpdated = false;
+
+    if (isReparatie) {
+      const lines = reparatieLinesFromOrder(order);
+      if (lines.length === 0) {
+        return {
+          content: JSON.stringify({
+            error:
+              "Geen factuurregels op deze reparatie-order. Vul eerst producten/kosten in de app.",
+          }),
+          invoiceCreated: false,
+          invoiceSent: false,
+        };
+      }
+      const inv = await upsertReparatieSalesInvoice({
+        orderId: order.id,
+        orderNummer: String(order.order_nummer ?? order.id),
+        existingInvoiceId: invoiceId || null,
+        contact: {
+          email: String(order.email ?? "onbekend@koopjefatbike.nl"),
+          lastname: String(order.naam ?? "Klant"),
+          phone: String(order.telefoon_e164 ?? order.telefoon_nummer ?? ""),
+          address1: String(order.volledig_adres ?? ""),
+        },
+        lines,
+      });
+      if (!inv?.id) {
+        return {
+          content: JSON.stringify({
+            error: "Moneybird-factuur aanmaken mislukt (geen id terug).",
+          }),
+          invoiceCreated: false,
+          invoiceSent: false,
+        };
+      }
+      invoiceId = inv.id;
+      createdOrUpdated = true;
+      await supabase
+        .from("orders")
+        .update({
+          moneybird_invoice_id: inv.id,
+          reparatie_betaalwijze: "factuur",
+        })
+        .eq("id", order.id)
+        .eq("owner_email", ownerEmail);
+    } else if (isShopify) {
+      const shopifyOrderId = String(order.order_id ?? "").trim();
+      if (!/^\d+$/.test(shopifyOrderId)) {
+        return {
+          content: JSON.stringify({
+            error:
+              "Shopify order_id ontbreekt of is ongeldig — kan geen factuur syncen.",
+          }),
+          invoiceCreated: false,
+          invoiceSent: false,
+        };
+      }
+      const shopifyOrder = await fetchShopifyOrderById(shopifyOrderId);
+      if (!shopifyOrder) {
+        return {
+          content: JSON.stringify({
+            error: `Shopify-order ${shopifyOrderId} niet gevonden via Admin API.`,
+          }),
+          invoiceCreated: false,
+          invoiceSent: false,
+        };
+      }
+      const inv = await createSalesInvoiceFromShopifyOrder(
+        supabase,
+        shopifyOrder
+      );
+      if (!inv?.id) {
+        return {
+          content: JSON.stringify({
+            error:
+              "Shopify→Moneybird factuur aanmaken mislukt (mogelijk lock of configuratie).",
+          }),
+          invoiceCreated: false,
+          invoiceSent: false,
+        };
+      }
+      invoiceId = inv.id;
+      createdOrUpdated = true;
+      await supabase
+        .from("orders")
+        .update({ moneybird_invoice_id: inv.id })
+        .eq("id", order.id)
+        .eq("owner_email", ownerEmail);
+    } else {
+      return {
+        content: JSON.stringify({
+          error:
+            "Factuur aanmaken ondersteund voor reparatie- en Shopify-orders. MP/winkel: meestal handmatig in Moneybird.",
+          source: order.source,
+          type: order.type,
+        }),
+        invoiceCreated: false,
+        invoiceSent: false,
+      };
+    }
+
+    let sent = false;
+    let sendInfo: Record<string, unknown> | null = null;
+    if (ookVersturen && invoiceId) {
+      if (isReparatie) {
+        const sendRes = await sendReparatieSalesInvoice({
+          orderId: order.id,
+          invoiceId,
+          email: emailOverride || order.email,
+        });
+        sent = Boolean(sendRes.sent);
+        sendInfo = {
+          sent: sendRes.sent,
+          skipped: sendRes.skipped,
+          error: sendRes.error,
+        };
+      } else {
+        const full = await fetchSalesInvoiceById(invoiceId);
+        if (full?.id && isDraftMoneybirdInvoice(full)) {
+          const s = await sendSalesInvoiceByEmail(full.id, {
+            emailAddress: emailOverride || order.email,
+          });
+          sent = true;
+          sendInfo = { sent: true, invoiceId: s.id ?? full.id };
+        } else {
+          sendInfo = {
+            sent: false,
+            skipped: full
+              ? `state_${String(full.state ?? "unknown").toLowerCase()}`
+              : "no_invoice",
+          };
+        }
+      }
+    }
+
+    return {
+      content: JSON.stringify({
+        ok: true,
+        order_nummer: order.order_nummer,
+        invoiceId,
+        createdOrUpdated,
+        message: createdOrUpdated
+          ? "Moneybird-conceptfactuur aangemaakt/bijgewerkt."
+          : "Klaar.",
+        send: sendInfo,
+      }),
+      invoiceCreated: createdOrUpdated,
+      invoiceSent: sent,
+    };
+  } catch (e) {
+    return {
+      content: JSON.stringify({
+        error: e instanceof Error ? e.message : "Factuur aanmaken mislukt.",
+      }),
+      invoiceCreated: false,
+      invoiceSent: false,
+    };
+  }
+}
+
 async function handleStuurFactuur(
   supabase: Db,
   ownerEmail: string,
@@ -411,42 +789,8 @@ async function handleStuurFactuur(
     };
   }
 
-  const orderIdRaw = String(args.order_id ?? "").trim();
-  const onr = String(args.order_nummer ?? "").trim();
   const emailOverride = String(args.email ?? "").trim() || null;
-
-  let order: {
-    id: string;
-    order_nummer: string | null;
-    email: string | null;
-    moneybird_invoice_id: string | null;
-    source: string | null;
-    type: string | null;
-  } | null = null;
-
-  if (orderIdRaw) {
-    const { data } = await supabase
-      .from("orders")
-      .select(
-        "id, order_nummer, email, moneybird_invoice_id, source, type"
-      )
-      .eq("owner_email", ownerEmail)
-      .eq("id", orderIdRaw)
-      .maybeSingle();
-    order = data;
-  } else if (onr) {
-    const alt = onr.startsWith("#") ? onr.slice(1) : `#${onr}`;
-    const { data } = await supabase
-      .from("orders")
-      .select(
-        "id, order_nummer, email, moneybird_invoice_id, source, type"
-      )
-      .eq("owner_email", ownerEmail)
-      .or(`order_nummer.eq.${onr},order_nummer.eq.${alt}`)
-      .limit(1)
-      .maybeSingle();
-    order = data;
-  }
+  const order = await findOrderForInvoice(supabase, ownerEmail, args);
 
   if (!order?.id) {
     return {
@@ -460,7 +804,7 @@ async function handleStuurFactuur(
     return {
       content: JSON.stringify({
         error:
-          "Deze order heeft nog geen Moneybird-factuur-id. Maak/verstuur eerst via de normale flow.",
+          "Deze order heeft nog geen Moneybird-factuur-id. Gebruik eerst maak_moneybird_factuur.",
       }),
       invoiceSent: false,
     };
@@ -591,6 +935,7 @@ export async function POST(request: NextRequest) {
 
     let slotsUpdated = false;
     let invoiceSent = false;
+    let invoiceCreated = false;
     let lastContent = "";
     let maxRounds = 6;
 
@@ -706,6 +1051,22 @@ export async function POST(request: NextRequest) {
           continue;
         }
 
+        if (parsed.name === "maak_moneybird_factuur") {
+          const r = await handleMaakFactuur(
+            supabase,
+            ownerEmail,
+            parsed.arguments
+          );
+          if (r.invoiceCreated) invoiceCreated = true;
+          if (r.invoiceSent) invoiceSent = true;
+          toolResults.push({
+            role: "tool",
+            tool_call_id: parsed.id,
+            content: r.content,
+          });
+          continue;
+        }
+
         if (parsed.name === "stuur_moneybird_factuur") {
           const r = await handleStuurFactuur(
             supabase,
@@ -736,6 +1097,7 @@ export async function POST(request: NextRequest) {
       role: "assistant",
       slotsUpdated,
       invoiceSent,
+      invoiceCreated,
     });
   } catch (e) {
     console.error("[api/planning-agent]", e);

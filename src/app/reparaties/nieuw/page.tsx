@@ -66,7 +66,16 @@ export default function ReparatieNieuwPage() {
   const [soort, setSoort] = useState<ReparatieSoort>("reparatie_deur");
   const [betaalwijze, setBetaalwijze] = useState<ReparatieBetaalwijze>("factuur");
   const [vrijeTekst, setVrijeTekst] = useState("");
-  const [fietsOokOpgehaald, setFietsOokOpgehaald] = useState(false);
+  const [heeftAlOfferte, setHeeftAlOfferte] = useState(false);
+  const [offerteNummer, setOfferteNummer] = useState("");
+  const [offerteLoading, setOfferteLoading] = useState(false);
+  const [offerteError, setOfferteError] = useState<string | null>(null);
+  const [moneybirdEstimateId, setMoneybirdEstimateId] = useState<string | null>(
+    null
+  );
+  const [moneybirdEstimateNumber, setMoneybirdEstimateNumber] = useState<
+    string | null
+  >(null);
   const [arbeidBedragStr, setArbeidBedragStr] = useState("");
   const [arbeidManual, setArbeidManual] = useState(false);
 
@@ -179,12 +188,7 @@ export default function ReparatieNieuwPage() {
     return () => clearTimeout(t);
   }, [refreshVoorrij]);
 
-  const autoVoorrijTotaal =
-    voorrij == null
-      ? null
-      : soort === "reparatie_terugbrengen" && fietsOokOpgehaald
-        ? Math.round(voorrij.bedrag * 2 * 100) / 100
-        : voorrij.bedrag;
+  const autoVoorrijTotaal = voorrij == null ? null : voorrij.bedrag;
 
   useEffect(() => {
     if (voorrijManual) return;
@@ -206,11 +210,7 @@ export default function ReparatieNieuwPage() {
       : {
           km: voorrij?.km ?? null,
           bedrag: voorrijTotaalParsed ?? autoVoorrijTotaal ?? 0,
-          basis:
-            soort === "reparatie_terugbrengen" && fietsOokOpgehaald
-              ? Math.round(((voorrijTotaalParsed ?? autoVoorrijTotaal ?? 0) / 2) * 100) /
-                100
-              : (voorrijTotaalParsed ?? autoVoorrijTotaal ?? 0),
+          basis: voorrijTotaalParsed ?? autoVoorrijTotaal ?? 0,
         };
 
   const arbeidUrenTotaal = useMemo(() => {
@@ -411,17 +411,124 @@ export default function ReparatieNieuwPage() {
     );
   }
 
-  function toggleFietsOokOpgehaald(checked: boolean) {
-    if (voorrijManual) {
-      const current = parseFloat(voorrijBedragStr.replace(",", "."));
-      if (Number.isFinite(current) && current >= 0) {
-        const next = checked
-          ? Math.round(current * 2 * 100) / 100
-          : Math.round((current / 2) * 100) / 100;
-        setVoorrijBedragStr(next.toFixed(2));
-      }
+  function clearOfferteImport() {
+    setMoneybirdEstimateId(null);
+    setMoneybirdEstimateNumber(null);
+    setOfferteError(null);
+  }
+
+  async function loadOfferteFromMoneybird(nummerRaw?: string) {
+    const nummer = String(nummerRaw ?? offerteNummer).trim();
+    if (!nummer) {
+      setOfferteError("Vul een Moneybird-offertenummer in.");
+      return;
     }
-    setFietsOokOpgehaald(checked);
+    setOfferteLoading(true);
+    setOfferteError(null);
+    try {
+      const res = await fetch(
+        `/api/moneybird/estimates?nummer=${encodeURIComponent(nummer)}&t=${Date.now()}`,
+        { cache: "no-store" }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "Offerte ophalen mislukt");
+      }
+      const est = data.estimate as {
+        estimateId: string;
+        estimateNumber: string;
+        contact: {
+          email: string;
+          firstname: string;
+          lastname: string;
+          companyName: string;
+          phone: string;
+          address1: string;
+          zipcode: string;
+          city: string;
+        };
+        lines: Array<{
+          description: string;
+          priceIncl: number;
+          quantity: number;
+        }>;
+        arbeidIncl: number;
+        voorrijIncl: number;
+      };
+
+      const contactNaam =
+        [est.contact.firstname, est.contact.lastname]
+          .filter(Boolean)
+          .join(" ")
+          .trim() ||
+        est.contact.companyName ||
+        "";
+      setNaam(contactNaam);
+      setEmail(est.contact.email);
+      setTelefoon(est.contact.phone);
+
+      const address1 = est.contact.address1.trim();
+      const sh = address1.split(/\s+/).filter(Boolean);
+      const huisnummer = sh.length > 1 ? (sh[sh.length - 1] ?? "") : "";
+      const straatnaam = sh.length > 1 ? sh.slice(0, -1).join(" ") : address1;
+      setAdres({
+        straatnaam,
+        huisnummer,
+        postcode: est.contact.zipcode,
+        woonplaats: est.contact.city,
+      });
+      setSelectedMbContact({
+        email: est.contact.email,
+        naam: contactNaam,
+        telefoon: est.contact.phone,
+        straatnaam,
+        huisnummer,
+        postcode: est.contact.zipcode,
+        woonplaats: est.contact.city,
+        source: "moneybird",
+      });
+
+      const nextRegels: DraftRegel[] = [];
+      for (const line of est.lines ?? []) {
+        const qty = Math.max(1, Math.floor(Number(line.quantity) || 1));
+        for (let i = 0; i < qty; i++) {
+          nextRegels.push({
+            key: mkKey(),
+            mode: "vrij",
+            naam: line.description,
+            onderdelen: [
+              {
+                key: mkKey(),
+                naam: line.description,
+                prijs_incl: String(line.priceIncl ?? 0),
+                shopify_product_id: null,
+                shopify_variant_id: null,
+              },
+            ],
+            arbeid_uren: "0",
+          });
+        }
+      }
+      setRegels(nextRegels);
+      setArbeidManual(true);
+      setArbeidBedragStr(
+        est.arbeidIncl > 0 ? est.arbeidIncl.toFixed(2) : ""
+      );
+      if (est.voorrijIncl > 0) {
+        setVoorrijManual(true);
+        setVoorrijBedragStr(est.voorrijIncl.toFixed(2));
+      }
+      setMoneybirdEstimateId(est.estimateId);
+      setMoneybirdEstimateNumber(est.estimateNumber);
+      setOfferteNummer(est.estimateNumber);
+    } catch (e) {
+      clearOfferteImport();
+      setOfferteError(
+        e instanceof Error ? e.message : "Offerte ophalen mislukt"
+      );
+    } finally {
+      setOfferteLoading(false);
+    }
   }
 
   function currentContactFill(): MoneybirdContactFormFill {
@@ -459,6 +566,14 @@ export default function ReparatieNieuwPage() {
       regels.some((r) => r.mode === "vrij" && !r.naam.trim())
     ) {
       setError("Vul een omschrijving in bij elke vrije tekstregel.");
+      return;
+    }
+    if (
+      soort === "reparatie_terugbrengen" &&
+      heeftAlOfferte &&
+      !moneybirdEstimateId
+    ) {
+      setError("Haal eerst de Moneybird-offerte op met het offertenummer.");
       return;
     }
     if (selectedMbContact) {
@@ -542,8 +657,15 @@ export default function ReparatieNieuwPage() {
           producten_kolom_tekst: needsProducts
             ? productenKolomTekst.trim() || undefined
             : undefined,
-          fiets_ook_opgehaald:
-            soort === "reparatie_terugbrengen" && fietsOokOpgehaald,
+          fiets_ook_opgehaald: false,
+          moneybird_estimate_id:
+            soort === "reparatie_terugbrengen" && heeftAlOfferte
+              ? moneybirdEstimateId || undefined
+              : undefined,
+          moneybird_estimate_number:
+            soort === "reparatie_terugbrengen" && heeftAlOfferte
+              ? moneybirdEstimateNumber || offerteNummer.trim() || undefined
+              : undefined,
           naam,
           email,
           telefoonnummer: telefoon,
@@ -607,7 +729,9 @@ export default function ReparatieNieuwPage() {
                         setVrijeTekst("");
                       }
                       if (value !== "reparatie_terugbrengen") {
-                        setFietsOokOpgehaald(false);
+                        setHeeftAlOfferte(false);
+                        setOfferteNummer("");
+                        clearOfferteImport();
                       }
                       if (!reparatieSoortHeeftProducten(value)) {
                         setRegels([]);
@@ -729,28 +853,75 @@ export default function ReparatieNieuwPage() {
             ) : voorrijWeergave?.km != null ? (
               <p className="text-sm text-koopje-black/60">
                 Afstand ≈ {voorrijWeergave.km} km
-                {soort === "reparatie_terugbrengen" && fietsOokOpgehaald
-                  ? " · ophalen + terugbrengen"
-                  : ""}
                 {voorrijManual ? " · voorrijkosten handmatig" : ""}
               </p>
             ) : null}
 
             {soort === "reparatie_terugbrengen" && (
-              <label className="flex items-start gap-2 rounded-xl border border-koopje-orange/30 bg-koopje-orange-light/30 px-3 py-3 text-sm">
-                <input
-                  type="checkbox"
-                  className="mt-0.5"
-                  checked={fietsOokOpgehaald}
-                  onChange={(e) => toggleFietsOokOpgehaald(e.target.checked)}
-                />
-                <span>
-                  <span className="font-medium text-koopje-black">Fiets is ook opgehaald</span>
-                  <span className="mt-0.5 block text-koopje-black/60">
-                    Voorrijkosten ×2 op de factuur (ophalen + terugbrengen).
+              <div className="space-y-2 rounded-xl border border-koopje-orange/30 bg-koopje-orange-light/30 px-3 py-3">
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={heeftAlOfferte}
+                    onChange={(e) => {
+                      const on = e.target.checked;
+                      setHeeftAlOfferte(on);
+                      if (!on) {
+                        setOfferteNummer("");
+                        clearOfferteImport();
+                      }
+                    }}
+                  />
+                  <span>
+                    <span className="font-medium text-koopje-black">
+                      Order heeft al een offerte
+                    </span>
+                    <span className="mt-0.5 block text-koopje-black/60">
+                      Vul het Moneybird-offertenummer in; klantgegevens en
+                      producten worden overgenomen.
+                    </span>
                   </span>
-                </span>
-              </label>
+                </label>
+                {heeftAlOfferte && (
+                  <div className="space-y-2 pl-6">
+                    <div className="flex flex-wrap gap-2">
+                      <input
+                        className="min-w-[10rem] flex-1 rounded-xl border border-koopje-black/20 bg-white px-3 py-2 text-sm"
+                        value={offerteNummer}
+                        onChange={(e) => {
+                          setOfferteNummer(e.target.value);
+                          clearOfferteImport();
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            void loadOfferteFromMoneybird();
+                          }
+                        }}
+                        placeholder="Offertenummer, bijv. 2024-0042"
+                        aria-label="Moneybird-offertenummer"
+                      />
+                      <button
+                        type="button"
+                        disabled={offerteLoading || !offerteNummer.trim()}
+                        onClick={() => void loadOfferteFromMoneybird()}
+                        className="rounded-xl bg-koopje-orange px-3 py-2 text-sm font-medium text-white hover:bg-koopje-orange/90 disabled:opacity-50"
+                      >
+                        {offerteLoading ? "Laden…" : "Offerte ophalen"}
+                      </button>
+                    </div>
+                    {offerteError && (
+                      <p className="text-xs text-red-600">{offerteError}</p>
+                    )}
+                    {moneybirdEstimateNumber && !offerteError && (
+                      <p className="text-xs text-green-700">
+                        Offerte {moneybirdEstimateNumber} geladen.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
             )}
 
             <label className="block text-sm">
@@ -1099,82 +1270,30 @@ export default function ReparatieNieuwPage() {
                       </li>
                     )}
 
-                    {soort === "reparatie_terugbrengen" && fietsOokOpgehaald ? (
-                      <>
-                        <li className="grid grid-cols-[1fr_auto] items-center gap-2 px-4 py-2.5 text-sm">
-                          <span className="text-koopje-black">
-                            Voorrijkosten ophalen
+                    <li className="grid grid-cols-[1fr_auto] items-center gap-2 px-4 py-2.5 text-sm">
+                      <div>
+                        <span className="text-koopje-black">Voorrijkosten</span>
+                        {voorrijLoading && (
+                          <span className="ml-2 text-xs text-koopje-black/40">
+                            berekenen…
                           </span>
-                          <span className="w-24 text-right tabular-nums text-koopje-black">
-                            €
-                            {(
-                              Math.round(
-                                ((voorrijTotaalParsed ?? 0) / 2) * 100
-                              ) / 100
-                            ).toFixed(2)}
-                          </span>
-                        </li>
-                        <li className="grid grid-cols-[1fr_auto_auto] items-center gap-2 px-4 py-2.5 text-sm">
-                          <span className="text-koopje-black">
-                            Voorrijkosten terugbrengen
-                          </span>
-                          <label className="flex w-24 items-center justify-end gap-1 tabular-nums text-koopje-black">
-                            <span className="text-koopje-black/40">€</span>
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              className="w-16 border-0 bg-transparent p-0 text-right text-sm outline-none"
-                              value={
-                                voorrijTotaalParsed != null
-                                  ? (
-                                      Math.round(
-                                        (voorrijTotaalParsed / 2) * 100
-                                      ) / 100
-                                    ).toFixed(2)
-                                  : voorrijBedragStr
-                              }
-                              onChange={(e) => {
-                                setVoorrijManual(true);
-                                const half =
-                                  parseFloat(
-                                    e.target.value.replace(",", ".")
-                                  ) || 0;
-                                setVoorrijBedragStr(
-                                  (Math.round(half * 2 * 100) / 100).toFixed(2)
-                                );
-                              }}
-                              aria-label="Voorrijkosten per rit"
-                            />
-                          </label>
-                          <span className="w-4" />
-                        </li>
-                      </>
-                    ) : (
-                      <li className="grid grid-cols-[1fr_auto] items-center gap-2 px-4 py-2.5 text-sm">
-                        <div>
-                          <span className="text-koopje-black">Voorrijkosten</span>
-                          {voorrijLoading && (
-                            <span className="ml-2 text-xs text-koopje-black/40">
-                              berekenen…
-                            </span>
-                          )}
-                        </div>
-                        <label className="flex w-24 items-center justify-end gap-1 tabular-nums text-koopje-black">
-                          <span className="text-koopje-black/40">€</span>
-                          <input
-                            type="text"
-                            inputMode="decimal"
-                            className="w-16 border-0 bg-transparent p-0 text-right text-sm outline-none"
-                            value={voorrijBedragStr}
-                            onChange={(e) => {
-                              setVoorrijManual(true);
-                              setVoorrijBedragStr(e.target.value);
-                            }}
-                            aria-label="Voorrijkosten"
-                          />
-                        </label>
-                      </li>
-                    )}
+                        )}
+                      </div>
+                      <label className="flex w-24 items-center justify-end gap-1 tabular-nums text-koopje-black">
+                        <span className="text-koopje-black/40">€</span>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          className="w-16 border-0 bg-transparent p-0 text-right text-sm outline-none"
+                          value={voorrijBedragStr}
+                          onChange={(e) => {
+                            setVoorrijManual(true);
+                            setVoorrijBedragStr(e.target.value);
+                          }}
+                          aria-label="Voorrijkosten"
+                        />
+                      </label>
+                    </li>
                   </ul>
                   <div className="flex items-center justify-between border-t border-koopje-black/15 px-4 py-3 text-sm font-semibold text-koopje-black">
                     <span>Totaal incl. btw</span>

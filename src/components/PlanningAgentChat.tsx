@@ -242,6 +242,10 @@ export default function PlanningAgentChat() {
         dispatchPlanningAgentAction("invoiceSent");
         setActionFeedback("Moneybird-factuur verzonden.");
         setTimeout(() => setActionFeedback(null), 4000);
+      } else if (data.invoiceCreated) {
+        dispatchPlanningAgentAction("invoiceCreated");
+        setActionFeedback("Moneybird-conceptfactuur aangemaakt/bijgewerkt.");
+        setTimeout(() => setActionFeedback(null), 4000);
       }
     } catch {
       setMessages((prev) => [
@@ -318,7 +322,7 @@ export default function PlanningAgentChat() {
                     <p className="text-sm text-koopje-black/70">
                       Hoi! Ik ben Sientje. Vraag me hoe de app werkt, wat
                       Moneybird/Shopify doen, of laat me tijdsloten zetten /
-                      een factuur versturen (na jouw bevestiging).
+                      een factuur aanmaken of versturen (na jouw bevestiging).
                     </p>
                   </div>
                 )}

@@ -21,10 +21,14 @@ Onze Moneybird-koppeling (samenvatting):
 - Producten upsert vanuit Shopify.
 - Webhooks voor betalingsstatus e.d.
 
-Beperkingen voor de agent (v1):
-- Alleen versturen van een bestaande factuur op een order (moneybird_invoice_id aanwezig).
-- Geen willekeurige nieuwe facturen zonder order-flow.
+Agent-tools:
+- maak_moneybird_factuur: conceptfactuur voor bestaande reparatie- of Shopify-order (regels uit order); optioneel ook_versturen.
+- stuur_moneybird_factuur: bestaande conceptfactuur per e-mail versturen.
+
+Beperkingen:
+- Geen vrije facturen zonder Bezorgplanner-order.
 - Geen vrije Moneybird-API-calls buiten de tools.
+- MP/winkel-orders: meestal niet via de agent.
 `.trim();
 
 function isAllowedDocsUrl(url: string): boolean {

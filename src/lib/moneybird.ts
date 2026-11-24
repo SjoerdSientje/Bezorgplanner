@@ -124,6 +124,11 @@ export type MoneybirdSalesInvoiceDetail = {
   amount?: string | null;
   price?: string | null;
   product_id?: string | null;
+  tax_rate_id?: string | null;
+  total_price_excl_tax?: string | null;
+  total_price_incl_tax?: string | null;
+  total_price_excl_tax_with_discount?: string | null;
+  total_price_incl_tax_with_discount?: string | null;
 };
 
 export type MoneybirdPayment = {
@@ -3463,6 +3468,169 @@ export type MoneybirdEstimate = {
   contact_id?: string | null;
   details?: MoneybirdSalesInvoiceDetail[] | null;
 };
+
+export type ReparatieEstimateImportLine = {
+  description: string;
+  priceIncl: number;
+  quantity: number;
+};
+
+export type ReparatieEstimateImport = {
+  estimateId: string;
+  estimateNumber: string;
+  state: string | null;
+  contact: {
+    email: string;
+    firstname: string;
+    lastname: string;
+    companyName: string;
+    phone: string;
+    address1: string;
+    zipcode: string;
+    city: string;
+  };
+  /** Productregels (excl. arbeid/voorrij). */
+  lines: ReparatieEstimateImportLine[];
+  arbeidIncl: number;
+  voorrijIncl: number;
+};
+
+function detailPriceIncl(d: MoneybirdSalesInvoiceDetail): number {
+  const rawIncl =
+    d.total_price_incl_tax_with_discount ?? d.total_price_incl_tax ?? null;
+  if (rawIncl != null && String(rawIncl).trim() !== "") {
+    const n = parseFloat(String(rawIncl).replace(",", "."));
+    if (Number.isFinite(n)) return Math.round(n * 100) / 100;
+  }
+  const unitExcl = parseFloat(String(d.price ?? "0").replace(",", ".")) || 0;
+  const qty = Math.max(1, parseFloat(String(d.amount ?? "1").replace(",", ".")) || 1);
+  const title = String(d.description ?? "");
+  const mult = isMoneybirdReducedVatProductTitle(title) ? 1.09 : 1.21;
+  return Math.round(unitExcl * qty * mult * 100) / 100;
+}
+
+function isArbeidEstimateLine(description: string): boolean {
+  return /^arbeid/i.test(description.trim());
+}
+
+function isVoorrijEstimateLine(description: string): boolean {
+  return /voorrij/i.test(description.trim());
+}
+
+export async function fetchMoneybirdEstimateById(
+  estimateId: string
+): Promise<MoneybirdEstimate | null> {
+  if (!isMoneybirdConfigured()) return null;
+  const id = String(estimateId ?? "").trim();
+  if (!id) return null;
+  try {
+    return await moneybirdFetch<MoneybirdEstimate>(`/estimates/${id}.json`);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Zoek offerte op zichtbaar offertenummer (estimate_id, bijv. 2024-0042).
+ */
+export async function findMoneybirdEstimateByNumber(
+  nummer: string
+): Promise<MoneybirdEstimate | null> {
+  if (!isMoneybirdConfigured()) return null;
+  const raw = String(nummer ?? "").trim().replace(/^#/, "");
+  if (!raw) return null;
+
+  const candidates = Array.from(
+    new Set([raw, raw.replace(/\s+/g, ""), raw.replace(/^0+/, "") || raw])
+  );
+
+  for (const c of candidates) {
+    try {
+      const list = await moneybirdFetch<MoneybirdEstimate[]>(
+        `/estimates.json?filter=estimate_id:${encodeURIComponent(c)}&per_page=10`
+      );
+      const match = (list ?? []).find(
+        (e) =>
+          String(e.estimate_id ?? "").trim() === c ||
+          String(e.estimate_id ?? "").trim() === raw
+      );
+      if (match?.id) {
+        return (await fetchMoneybirdEstimateById(match.id)) ?? match;
+      }
+    } catch (err) {
+      console.warn("[moneybird] estimate zoeken op nummer mislukt", c, err);
+    }
+  }
+
+  // Fallback: id als UUID/numeriek Moneybird-id
+  if (/^\d{10,}$/.test(raw) || /^[0-9a-f-]{20,}$/i.test(raw)) {
+    return fetchMoneybirdEstimateById(raw);
+  }
+  return null;
+}
+
+/** Offerte + contact omzetten naar invulbare terugbreng-gegevens. */
+export async function importReparatieEstimateByNumber(
+  nummer: string
+): Promise<ReparatieEstimateImport | null> {
+  const estimate = await findMoneybirdEstimateByNumber(nummer);
+  if (!estimate?.id) return null;
+
+  const contactId = String(estimate.contact_id ?? "").trim();
+  const contact = contactId ? await getMoneybirdContactById(contactId) : null;
+
+  const lines: ReparatieEstimateImportLine[] = [];
+  let arbeidIncl = 0;
+  let voorrijIncl = 0;
+
+  for (const d of estimate.details ?? []) {
+    const description = String(d.description ?? "").trim();
+    if (!description) continue;
+    // Strip eventuele " ( #REP… )" suffix die wij zelf toevoegen
+    const clean = description.replace(/\s*\([^)]*#REP[^)]*\)\s*$/i, "").trim();
+    const priceIncl = detailPriceIncl(d);
+    const quantity = Math.max(
+      1,
+      Math.floor(parseFloat(String(d.amount ?? "1").replace(",", ".")) || 1)
+    );
+
+    if (isArbeidEstimateLine(clean) || isArbeidEstimateLine(description)) {
+      arbeidIncl += priceIncl;
+      continue;
+    }
+    if (isVoorrijEstimateLine(clean) || isVoorrijEstimateLine(description)) {
+      voorrijIncl += priceIncl;
+      continue;
+    }
+    lines.push({
+      description: clean || description,
+      priceIncl:
+        quantity > 1
+          ? Math.round((priceIncl / quantity) * 100) / 100
+          : priceIncl,
+      quantity,
+    });
+  }
+
+  return {
+    estimateId: estimate.id,
+    estimateNumber: String(estimate.estimate_id ?? nummer).trim(),
+    state: estimate.state != null ? String(estimate.state) : null,
+    contact: {
+      email: String(contact?.email ?? "").trim(),
+      firstname: String(contact?.firstname ?? "").trim(),
+      lastname: String(contact?.lastname ?? "").trim(),
+      companyName: String(contact?.company_name ?? "").trim(),
+      phone: String(contact?.phone ?? "").trim(),
+      address1: String(contact?.address1 ?? "").trim(),
+      zipcode: String(contact?.zipcode ?? "").trim(),
+      city: String(contact?.city ?? "").trim(),
+    },
+    lines,
+    arbeidIncl: Math.round(arbeidIncl * 100) / 100,
+    voorrijIncl: Math.round(voorrijIncl * 100) / 100,
+  };
+}
 
 export function reparatieEstimateReferenceForOrderId(orderId: string): string {
   return `reparatie-offerte:${String(orderId ?? "").trim()}`;

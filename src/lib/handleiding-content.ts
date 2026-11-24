@@ -137,7 +137,7 @@ export const HANDLEIDING_SECTIONS: HandleidingSection[] = [
       },
       {
         heading: "Terugbrengorder — belangrijk",
-        body: "Kies factuur of contant.\nVoorraad wordt meteen afgeschreven bij aanmaken. De order is daarna niet meer aanpasbaar — we gaan ervan uit dat de reparatie klaar is.\n\nKies je factuur? Factuur wordt meteen verstuurd bij opslaan (klant kan al betalen). Maak dus geen aparte factuur erbij!",
+        body: "Kies factuur of contant.\nVoorraad wordt meteen afgeschreven bij aanmaken. De order is daarna niet meer aanpasbaar — we gaan ervan uit dat de reparatie klaar is.\n\nKies je factuur? Factuur wordt meteen verstuurd bij opslaan (klant kan al betalen). Maak dus geen aparte factuur erbij!\n\nAl een Moneybird-offerte? Vink “Order heeft al een offerte” aan, vul het offertenummer in en haal de offerte op — klantgegevens en producten worden ingevuld.",
       },
       {
         heading: "Bewerken",

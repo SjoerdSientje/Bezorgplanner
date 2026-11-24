@@ -118,8 +118,8 @@ Onder €490 + fulfilled: conceptfactuur kan automatisch gemaild worden. ≥ €
       "send_invoice",
       "e-mail",
     ],
-    body: `De agent kan een bestaande Moneybird-factuur van een order per e-mail versturen (tool stuur_moneybird_factuur), alleen als de order al een moneybird_invoice_id heeft en het account Moneybird mag gebruiken.
-Nieuwe facturen aanmaken zonder bestaande order-flow kan de agent in v1 niet. Voor "kan Moneybird X?" gebruikt de agent raadpleeg_moneybird_api.`,
+    body: `De agent kan voor een bestaande reparatie- of Shopify-order een Moneybird-conceptfactuur aanmaken/bijwerken (maak_moneybird_factuur) en die per e-mail versturen (stuur_moneybird_factuur of ook_versturen).
+Regels komen uit de order (producten/reparatieregels). Geen vrije factuur zonder order. MP/winkel meestal handmatig. Voor "kan Moneybird X?" gebruikt de agent raadpleeg_moneybird_api.`,
   },
   {
     id: "planning-ritjes",
