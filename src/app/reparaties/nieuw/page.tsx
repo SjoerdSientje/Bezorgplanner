@@ -968,8 +968,11 @@ export default function ReparatieNieuwPage() {
                 className="mt-1 w-full rounded-xl border border-koopje-black/20 px-3 py-2.5"
                 value={bezorgtijd}
                 onChange={(e) => setBezorgtijd(e.target.value)}
-                placeholder="bijv. na 14:00"
+                placeholder="bijv. na 14:00 of x"
               />
+              <span className="mt-1 block text-xs text-koopje-black/50">
+                Vul &apos;x&apos; in als de klant geen voorkeur heeft
+              </span>
             </label>
             <label className="block text-sm">
               Datum voorkeur
@@ -977,8 +980,11 @@ export default function ReparatieNieuwPage() {
                 className="mt-1 w-full rounded-xl border border-koopje-black/20 px-3 py-2.5"
                 value={datumVoorkeur}
                 onChange={(e) => setDatumVoorkeur(e.target.value)}
-                placeholder="datum of x voor vandaag"
+                placeholder="bijv. 14 april of x"
               />
+              <span className="mt-1 block text-xs text-koopje-black/50">
+                Vul &apos;x&apos; in voor vandaag
+              </span>
             </label>
             <OrderMedewerkerPicker
               value={aangemaaktDoor}
@@ -1004,13 +1010,17 @@ export default function ReparatieNieuwPage() {
             </label>
 
             <label className="block text-sm">
-              Opmerking
+              Opmerking klant / Sjoerd
               <textarea
                 className="mt-1 w-full rounded-xl border border-koopje-black/20 px-3 py-2.5"
                 rows={3}
                 value={opmerking}
                 onChange={(e) => setOpmerking(e.target.value)}
+                placeholder="bijv. bellen voor aankomst of x"
               />
+              <span className="mt-1 block text-xs text-koopje-black/50">
+                Vul &apos;x&apos; in als er geen opmerking is
+              </span>
             </label>
             <label className="block text-sm">
               Achtergrondverhaal

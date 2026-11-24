@@ -407,6 +407,14 @@ export async function POST(request: NextRequest) {
       String(body.datum_voorkeur ?? "").trim().toLowerCase() === "x"
         ? "vandaag"
         : String(body.datum_voorkeur ?? "").trim() || null;
+    const bezorgtijdVoorkeur =
+      String(body.bezorgtijd_voorkeur ?? "").trim().toLowerCase() === "x"
+        ? "geen"
+        : String(body.bezorgtijd_voorkeur ?? "").trim() || null;
+    const opmerkingenKlant =
+      String(body.opmerking ?? "").trim().toLowerCase() === "x"
+        ? "geen opmerking"
+        : String(body.opmerking ?? "").trim() || null;
 
     const insert = {
       owner_email: ownerEmail,
@@ -421,9 +429,9 @@ export async function POST(request: NextRequest) {
       volledig_adres: volledigAdres,
       adres_url: mapsUrl,
       bel_link: belLink,
-      bezorgtijd_voorkeur: String(body.bezorgtijd_voorkeur ?? "").trim() || null,
+      bezorgtijd_voorkeur: bezorgtijdVoorkeur,
       datum_opmerking: datumOpmerking,
-      opmerkingen_klant: String(body.opmerking ?? "").trim() || null,
+      opmerkingen_klant: opmerkingenKlant,
       achtergrondverhaal: String(body.achtergrondverhaal ?? "").trim() || null,
       aangemaakt_door: aangemaaktDoor,
       model: modelnaam,
@@ -905,6 +913,18 @@ export async function PATCH(request: NextRequest) {
           ? "vandaag"
           : String(body.datum_voorkeur).trim() || null
         : existing.datum_opmerking;
+    const bezorgtijdVoorkeur =
+      body.bezorgtijd_voorkeur != null
+        ? String(body.bezorgtijd_voorkeur).trim().toLowerCase() === "x"
+          ? "geen"
+          : String(body.bezorgtijd_voorkeur).trim() || null
+        : existing.bezorgtijd_voorkeur;
+    const opmerkingenKlant =
+      body.opmerking != null
+        ? String(body.opmerking).trim().toLowerCase() === "x"
+          ? "geen opmerking"
+          : String(body.opmerking).trim() || null
+        : existing.opmerkingen_klant;
 
     const update = {
       type: soort,
@@ -915,15 +935,9 @@ export async function PATCH(request: NextRequest) {
       volledig_adres: volledigAdres || existing.volledig_adres,
       adres_url: mapsUrl,
       bel_link: e164 ? `https://call.ctrlq.org/${e164}` : existing.bel_link,
-      bezorgtijd_voorkeur:
-        body.bezorgtijd_voorkeur != null
-          ? String(body.bezorgtijd_voorkeur).trim() || null
-          : existing.bezorgtijd_voorkeur,
+      bezorgtijd_voorkeur: bezorgtijdVoorkeur,
       datum_opmerking: datumOpmerking,
-      opmerkingen_klant:
-        body.opmerking != null
-          ? String(body.opmerking).trim() || null
-          : existing.opmerkingen_klant,
+      opmerkingen_klant: opmerkingenKlant,
       model: modelnaam,
       producten,
       line_items_json: buildReparatieLineItemsJson(lineItems),

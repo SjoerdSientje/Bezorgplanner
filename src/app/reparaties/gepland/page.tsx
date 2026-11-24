@@ -301,10 +301,14 @@ export default function ReparatiesGeplandPage() {
       huisnummer: adres.huisnummer,
       postcode: adres.postcode,
       woonplaats: adres.woonplaats,
-      bezorgtijd_voorkeur: o.bezorgtijd_voorkeur ?? "",
+      bezorgtijd_voorkeur:
+        o.bezorgtijd_voorkeur === "geen" ? "x" : (o.bezorgtijd_voorkeur ?? ""),
       datum_voorkeur: o.datum_opmerking ?? "",
       model: o.model ?? "",
-      opmerking: o.opmerkingen_klant ?? "",
+      opmerking:
+        o.opmerkingen_klant === "geen opmerking"
+          ? "x"
+          : (o.opmerkingen_klant ?? ""),
       producten_nog_niet_bekend:
         soort === "reparatie_deur" && Boolean(o.producten_nog_niet_bekend),
       producten_vrije_tekst:
@@ -849,6 +853,7 @@ export default function ReparatiesGeplandPage() {
                       onChange={(e) =>
                         setEdit({ ...edit, bezorgtijd_voorkeur: e.target.value })
                       }
+                      placeholder="bijv. na 14:00 of x"
                     />
                   </label>
                   <label className="block">
@@ -859,6 +864,7 @@ export default function ReparatiesGeplandPage() {
                       onChange={(e) =>
                         setEdit({ ...edit, datum_voorkeur: e.target.value })
                       }
+                      placeholder="bijv. 14 april of x"
                     />
                   </label>
                   <label className="block">
@@ -874,7 +880,7 @@ export default function ReparatiesGeplandPage() {
                     />
                   </label>
                   <label className="block">
-                    Opmerking
+                    Opmerking klant / Sjoerd
                     <textarea
                       className="mt-1 w-full rounded border px-2 py-2"
                       rows={2}
@@ -882,6 +888,7 @@ export default function ReparatiesGeplandPage() {
                       onChange={(e) =>
                         setEdit({ ...edit, opmerking: e.target.value })
                       }
+                      placeholder="bijv. bellen voor aankomst of x"
                     />
                   </label>
 
