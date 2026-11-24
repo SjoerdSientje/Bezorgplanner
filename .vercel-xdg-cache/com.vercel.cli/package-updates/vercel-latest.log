@@ -1,0 +1,15 @@
+[2026-09-05T13:23:07.179Z] [debug] Notifying parent we're ready
+[2026-09-05T13:23:07.426Z] [debug] Received message from parent: {
+  cacheFile: '/Users/crimsonchin/Downloads/Bezorgplanner/.vercel-xdg-cache/com.vercel.cli/package-updates/vercel-latest.json',
+  distTag: 'latest',
+  name: 'vercel',
+  updateCheckInterval: 86400000
+}
+[2026-09-05T13:23:07.426Z] [debug] Disconnecting from parent
+[2026-09-05T13:23:07.427Z] [debug] Checking lock file: /Users/crimsonchin/Downloads/Bezorgplanner/.vercel-xdg-cache/com.vercel.cli/package-updates/vercel-latest.lock
+[2026-09-05T13:23:07.427Z] [debug] Initializing lock file with pid 69156
+[2026-09-05T13:23:07.428Z] [debug] Fetching dist-tags for vercel
+[2026-09-05T13:23:07.749Z] [debug] Found dist tag "latest" with version "59.11.7"
+[2026-09-05T13:23:07.749Z] [debug] Writing cache file: /Users/crimsonchin/Downloads/Bezorgplanner/.vercel-xdg-cache/com.vercel.cli/package-updates/vercel-latest.json
+[2026-09-05T13:23:07.753Z] [debug] Releasing lock file: /Users/crimsonchin/Downloads/Bezorgplanner/.vercel-xdg-cache/com.vercel.cli/package-updates/vercel-latest.lock
+[2026-09-05T13:23:07.754Z] [debug] Worker finished successfully!
