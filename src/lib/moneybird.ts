@@ -3532,6 +3532,8 @@ export async function fetchMoneybirdEstimateById(
 
 /**
  * Zoek offerte op zichtbaar offertenummer (estimate_id, bijv. 2024-0042).
+ * Gebruikt GET /estimates/find_by_estimate_id/{estimate_id} — list-filter
+ * ondersteunt estimate_id niet.
  */
 export async function findMoneybirdEstimateByNumber(
   nummer: string
@@ -3541,29 +3543,31 @@ export async function findMoneybirdEstimateByNumber(
   if (!raw) return null;
 
   const candidates = Array.from(
-    new Set([raw, raw.replace(/\s+/g, ""), raw.replace(/^0+/, "") || raw])
+    new Set([
+      raw,
+      raw.replace(/\s+/g, ""),
+      // Soms typen mensen 20240042 i.p.v. 2024-0042
+      raw.includes("-") ? raw : raw.replace(/^(\d{4})(\d+)$/, "$1-$2"),
+    ])
   );
 
   for (const c of candidates) {
     try {
-      const list = await moneybirdFetch<MoneybirdEstimate[]>(
-        `/estimates.json?filter=estimate_id:${encodeURIComponent(c)}&per_page=10`
+      const found = await moneybirdFetch<MoneybirdEstimate>(
+        `/estimates/find_by_estimate_id/${encodeURIComponent(c)}.json`
       );
-      const match = (list ?? []).find(
-        (e) =>
-          String(e.estimate_id ?? "").trim() === c ||
-          String(e.estimate_id ?? "").trim() === raw
-      );
-      if (match?.id) {
-        return (await fetchMoneybirdEstimateById(match.id)) ?? match;
-      }
+      if (found?.id) return found;
     } catch (err) {
-      console.warn("[moneybird] estimate zoeken op nummer mislukt", c, err);
+      const msg = err instanceof Error ? err.message : String(err);
+      // 404 = dit kandidaatnummer bestaat niet; andere errors loggen
+      if (!/Moneybird 404/i.test(msg)) {
+        console.warn("[moneybird] estimate find_by_estimate_id mislukt", c, err);
+      }
     }
   }
 
-  // Fallback: id als UUID/numeriek Moneybird-id
-  if (/^\d{10,}$/.test(raw) || /^[0-9a-f-]{20,}$/i.test(raw)) {
+  // Fallback: intern Moneybird-id (lang numeriek)
+  if (/^\d{10,}$/.test(raw)) {
     return fetchMoneybirdEstimateById(raw);
   }
   return null;
@@ -3573,8 +3577,12 @@ export async function findMoneybirdEstimateByNumber(
 export async function importReparatieEstimateByNumber(
   nummer: string
 ): Promise<ReparatieEstimateImport | null> {
-  const estimate = await findMoneybirdEstimateByNumber(nummer);
+  let estimate = await findMoneybirdEstimateByNumber(nummer);
   if (!estimate?.id) return null;
+  // Zorg voor volledige details (find_by kan soms compact zijn).
+  if (!Array.isArray(estimate.details) || estimate.details.length === 0) {
+    estimate = (await fetchMoneybirdEstimateById(estimate.id)) ?? estimate;
+  }
 
   const contactId = String(estimate.contact_id ?? "").trim();
   const contact = contactId ? await getMoneybirdContactById(contactId) : null;
