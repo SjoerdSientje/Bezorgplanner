@@ -3501,11 +3501,25 @@ export async function ensureReparatieContact(
 export type MoneybirdEstimate = {
   id: string;
   estimate_id?: string | null;
+  /** Alleen bij draft: Moneybird toont dit als concept-{n}. */
+  draft_id?: number | string | null;
   state?: string | null;
   reference?: string | null;
   contact_id?: string | null;
   details?: MoneybirdSalesInvoiceDetail[] | null;
 };
+
+/** Zichtbaar offertenummer: estimate_id, of concept-{draft_id} bij drafts. */
+export function moneybirdEstimateDisplayNumber(
+  estimate: Pick<MoneybirdEstimate, "estimate_id" | "draft_id"> | null | undefined
+): string | null {
+  if (!estimate) return null;
+  const numbered = String(estimate.estimate_id ?? "").trim();
+  if (numbered) return numbered;
+  const draft = estimate.draft_id;
+  if (draft == null || String(draft).trim() === "") return null;
+  return `concept-${String(draft).trim()}`;
+}
 
 export type ReparatieEstimateImportLine = {
   description: string;
@@ -3660,7 +3674,10 @@ export async function importReparatieEstimateByNumber(
 
   return {
     estimateId: estimate.id,
-    estimateNumber: String(estimate.estimate_id ?? nummer).trim(),
+    estimateNumber:
+      moneybirdEstimateDisplayNumber(estimate) ||
+      String(nummer).trim() ||
+      estimate.id,
     state: estimate.state != null ? String(estimate.state) : null,
     contact: {
       email: String(contact?.email ?? "").trim(),
@@ -3733,25 +3750,33 @@ export async function createReparatieEstimate(params: {
     }),
   });
 
-  const state = String(created.state ?? "").trim().toLowerCase();
+  // Create-response mist soms estimate_id/draft_id — herladen voor zekerheid.
+  let estimate = created;
+  if (created?.id && !moneybirdEstimateDisplayNumber(created)) {
+    const refreshed = await fetchMoneybirdEstimateById(String(created.id));
+    if (refreshed) estimate = refreshed;
+  }
+
+  const displayNumber = moneybirdEstimateDisplayNumber(estimate);
+  const state = String(estimate.state ?? "").trim().toLowerCase();
   if (state && state !== "draft") {
     console.warn(
       "[moneybird] reparatie-offerte onverwachte state (verwacht draft)",
-      created.id,
-      created.estimate_id,
+      estimate.id,
+      displayNumber,
       state,
       reference
     );
   } else {
     console.info(
       "[moneybird] reparatie conceptofferte aangemaakt (draft, niet verzonden)",
-      created.id,
-      created.estimate_id,
+      estimate.id,
+      displayNumber,
       state || "draft",
       reference
     );
   }
-  return created;
+  return estimate;
 }
 
 /** Verwijder conceptofferte (alleen draft). */

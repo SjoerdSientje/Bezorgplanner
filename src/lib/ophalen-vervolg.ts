@@ -28,6 +28,7 @@ import {
 } from "@/lib/reparaties";
 import {
   createReparatieEstimate,
+  moneybirdEstimateDisplayNumber,
   deleteReparatieEstimate,
   sendReparatieSalesInvoice,
   upsertReparatieSalesInvoice,
@@ -502,10 +503,16 @@ export async function completeWinkelafhaalFromOphalen(
       },
       lines: lineItemsToInvoiceLines(lineItems),
     });
-    estimateId = estimate?.id ?? null;
-    estimateNumber = String(estimate?.estimate_id ?? "").trim() || null;
+    estimateId = estimate?.id ? String(estimate.id) : null;
+    estimateNumber = moneybirdEstimateDisplayNumber(estimate);
     if (!estimateId) {
       throw new Error("Moneybird-conceptofferte aanmaken mislukt.");
+    }
+    if (!estimateNumber) {
+      console.warn(
+        "[ophalen-vervolg] conceptofferte zonder zichtbaar nummer",
+        estimateId
+      );
     }
   }
 
