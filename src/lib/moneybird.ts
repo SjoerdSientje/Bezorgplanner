@@ -725,12 +725,15 @@ async function findContactByEmail(email: string): Promise<MoneybirdContact | nul
 }
 
 function toContactSuggestion(contact: MoneybirdContact): MoneybirdContactSuggestion | null {
+  if (!contact.id) return null;
   const email = String(contact.email ?? "").trim().toLowerCase();
-  if (!email || !contact.id) return null;
+  const displayName = moneybirdContactDisplayName(contact);
+  // E-mail of naam nodig om nuttig te zijn in het orderformulier
+  if (!email && (!displayName || displayName === "Onbekende klant")) return null;
   return {
     id: String(contact.id),
     email,
-    displayName: moneybirdContactDisplayName(contact),
+    displayName,
     firstname: String(contact.firstname ?? "").trim(),
     lastname: String(contact.lastname ?? "").trim(),
     companyName: String(contact.company_name ?? "").trim(),
@@ -742,9 +745,43 @@ function toContactSuggestion(contact: MoneybirdContact): MoneybirdContactSuggest
   };
 }
 
+function contactMatchesQuery(
+  suggestion: MoneybirdContactSuggestion,
+  q: string
+): "prefix" | "includes" | null {
+  const email = suggestion.email;
+  const first = suggestion.firstname.toLowerCase();
+  const last = suggestion.lastname.toLowerCase();
+  const company = suggestion.companyName.toLowerCase();
+  const display = suggestion.displayName.toLowerCase();
+  const fullName = [first, last].filter(Boolean).join(" ");
+
+  if (
+    (email && email.startsWith(q)) ||
+    first.startsWith(q) ||
+    last.startsWith(q) ||
+    company.startsWith(q) ||
+    display.startsWith(q) ||
+    fullName.startsWith(q)
+  ) {
+    return "prefix";
+  }
+  if (
+    (email && email.includes(q)) ||
+    first.includes(q) ||
+    last.includes(q) ||
+    company.includes(q) ||
+    display.includes(q) ||
+    fullName.includes(q)
+  ) {
+    return "includes";
+  }
+  return null;
+}
+
 /**
- * Zoek Moneybird-contacten waarvan het e-mailadres begint met de getypte query.
- * Moneybird `query` is breed; we filteren zelf op e-mail-prefix.
+ * Zoek Moneybird-contacten op e-mail, voornaam, achternaam of bedrijfsnaam.
+ * Moneybird `query` is breed; we ranken zelf op prefix vs substring.
  */
 export async function searchMoneybirdContactsByEmailPrefix(
   query: string,
@@ -768,8 +805,9 @@ export async function searchMoneybirdContactsByEmailPrefix(
     const suggestion = toContactSuggestion(contact);
     if (!suggestion || seen.has(suggestion.id)) continue;
     seen.add(suggestion.id);
-    if (suggestion.email.startsWith(q)) prefixHits.push(suggestion);
-    else if (suggestion.email.includes(q)) otherHits.push(suggestion);
+    const match = contactMatchesQuery(suggestion, q);
+    if (match === "prefix") prefixHits.push(suggestion);
+    else if (match === "includes") otherHits.push(suggestion);
   }
 
   return [...prefixHits, ...otherHits].slice(0, limit);

@@ -813,6 +813,7 @@ export default function ReparatieNieuwPage() {
             <label className="block text-sm">
               E-mail
               <MoneybirdContactEmailAutocomplete
+                field="email"
                 value={email}
                 onChange={(next) => {
                   setEmail(next);
@@ -835,16 +836,33 @@ export default function ReparatieNieuwPage() {
                 }}
               />
               <span className="mt-1 block text-xs text-koopje-black/50">
-                Typ een e-mail om Moneybird-klanten of eerdere MP-klanten te
+                Typ e-mail of naam om Moneybird-klanten of eerdere MP-klanten te
                 zoeken. Klik een klant om alle gegevens over te nemen.
               </span>
             </label>
             <label className="block text-sm">
               Naam *
-              <input
-                className="mt-1 w-full rounded-xl border border-koopje-black/20 px-3 py-2.5"
+              <MoneybirdContactEmailAutocomplete
+                field="naam"
                 value={naam}
-                onChange={(e) => setNaam(e.target.value)}
+                onChange={(next) => {
+                  setNaam(next);
+                  setSelectedMbContact(null);
+                }}
+                onSelectContact={(fill) => {
+                  setSelectedMbContact(
+                    fill.source === "mp" ? null : fill
+                  );
+                  setEmail(fill.email);
+                  setNaam(fill.naam);
+                  setTelefoon(fill.telefoon);
+                  setAdres({
+                    straatnaam: fill.straatnaam,
+                    huisnummer: fill.huisnummer,
+                    postcode: fill.postcode,
+                    woonplaats: fill.woonplaats,
+                  });
+                }}
               />
             </label>
             <label className="block text-sm">

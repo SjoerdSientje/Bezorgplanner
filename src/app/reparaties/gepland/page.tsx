@@ -669,6 +669,7 @@ export default function ReparatiesGeplandPage() {
                   <label className="block">
                     E-mail
                     <MoneybirdContactEmailAutocomplete
+                      field="email"
                       className="mt-1 w-full rounded border px-2 py-2"
                       value={edit.email}
                       onChange={(email) => {
@@ -699,10 +700,33 @@ export default function ReparatiesGeplandPage() {
                   </label>
                   <label className="block">
                     Naam
-                    <input
+                    <MoneybirdContactEmailAutocomplete
+                      field="naam"
                       className="mt-1 w-full rounded border px-2 py-2"
                       value={edit.naam}
-                      onChange={(e) => setEdit({ ...edit, naam: e.target.value })}
+                      onChange={(naam) => {
+                        setSelectedMbContact(null);
+                        setEdit((prev) => (prev ? { ...prev, naam } : prev));
+                      }}
+                      onSelectContact={(fill) => {
+                        setSelectedMbContact(
+                          fill.source === "mp" ? null : fill
+                        );
+                        setEdit((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                email: fill.email,
+                                naam: fill.naam,
+                                telefoonnummer: fill.telefoon,
+                                straatnaam: fill.straatnaam,
+                                huisnummer: fill.huisnummer,
+                                postcode: fill.postcode,
+                                woonplaats: fill.woonplaats,
+                              }
+                            : prev
+                        );
+                      }}
                     />
                   </label>
                   <label className="block">

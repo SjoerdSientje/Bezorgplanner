@@ -486,6 +486,7 @@ export default function MarktplaatsGeplandClient() {
                     Email
                   </label>
                   <MoneybirdContactEmailAutocomplete
+                    field="email"
                     value={edit.email}
                     onChange={(email) =>
                       setEdit((prev) => (prev ? { ...prev, email } : prev))
@@ -509,18 +510,39 @@ export default function MarktplaatsGeplandClient() {
                     className="w-full rounded-xl border border-koopje-black/20 px-3 py-2.5 text-sm focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
                   />
                   <p className="mt-1 text-xs text-koopje-black/50">
-                    Zoekt Moneybird- en eerdere MP-klanten. Alleen invullen voor
-                    order/aankoopbewijs — Moneybird blijft ongewijzigd.
+                    Zoekt Moneybird- en eerdere MP-klanten op e-mail of naam.
+                    Alleen invullen voor order/aankoopbewijs — Moneybird blijft
+                    ongewijzigd.
                   </p>
                 </div>
                 <div>
                   <label className="mb-1 block text-sm font-medium text-koopje-black">
                     Naam klant<span className="ml-1 text-koopje-orange">*</span>
                   </label>
-                  <input
+                  <MoneybirdContactEmailAutocomplete
+                    field="naam"
                     value={edit.naam}
-                    onChange={(e) => setEdit({ ...edit, naam: e.target.value })}
+                    onChange={(naam) =>
+                      setEdit((prev) => (prev ? { ...prev, naam } : prev))
+                    }
+                    onSelectContact={(fill) =>
+                      setEdit((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              email: fill.email,
+                              naam: fill.naam,
+                              telefoonnummer: fill.telefoon,
+                              straatnaam: fill.straatnaam,
+                              huisnummer: fill.huisnummer,
+                              postcode: fill.postcode,
+                              woonplaats: fill.woonplaats,
+                            }
+                          : prev
+                      )
+                    }
                     className="w-full rounded-xl border border-koopje-black/20 px-3 py-2.5 text-sm focus:border-koopje-orange focus:outline-none focus:ring-1 focus:ring-koopje-orange"
+                    placeholder="Voor- en achternaam"
                   />
                 </div>
                 <div>

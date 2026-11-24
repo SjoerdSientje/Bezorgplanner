@@ -9,12 +9,17 @@ import {
 
 export type { MoneybirdContactFormFill };
 
+export type ContactAutocompleteField = "email" | "naam";
+
 type Props = {
   value: string;
-  onChange: (email: string) => void;
-  /** Vervangt alle klantvelden met de gekozen Moneybird-klant. */
+  onChange: (value: string) => void;
+  /** Vervangt alle klantvelden met de gekozen Moneybird-/MP-klant. */
   onSelectContact: (fill: MoneybirdContactFormFill) => void;
+  /** Zoekveld: e-mail of voor-/achternaam. */
+  field?: ContactAutocompleteField;
   className?: string;
+  placeholder?: string;
 };
 
 const DEBOUNCE_MS = 280;
@@ -38,11 +43,20 @@ function suggestionToFill(item: MoneybirdContactSuggestion): MoneybirdContactFor
   };
 }
 
+function selectedKey(
+  field: ContactAutocompleteField,
+  fill: MoneybirdContactFormFill
+): string {
+  return field === "naam" ? fill.naam : fill.email;
+}
+
 export default function MoneybirdContactEmailAutocomplete({
   value,
   onChange,
   onSelectContact,
+  field = "email",
   className,
+  placeholder,
 }: Props) {
   const [suggestions, setSuggestions] = useState<MoneybirdContactSuggestion[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -53,7 +67,12 @@ export default function MoneybirdContactEmailAutocomplete({
   const fetchGenRef = useRef(0);
   const focusedRef = useRef(false);
   /** Na selectie geen nieuwe zoekronde op dezelfde waarde. */
-  const selectedEmailRef = useRef<string | null>(null);
+  const selectedValueRef = useRef<string | null>(null);
+
+  const defaultPlaceholder =
+    field === "naam"
+      ? "typ voor- of achternaam om klant te zoeken…"
+      : "typ e-mail om klant te zoeken…";
 
   useEffect(() => {
     function handler(e: MouseEvent) {
@@ -74,8 +93,8 @@ export default function MoneybirdContactEmailAutocomplete({
       return;
     }
     if (
-      selectedEmailRef.current &&
-      selectedEmailRef.current.toLowerCase() === q.toLowerCase()
+      selectedValueRef.current &&
+      selectedValueRef.current.toLowerCase() === q.toLowerCase()
     ) {
       setSuggestions([]);
       setShowSuggestions(false);
@@ -109,16 +128,17 @@ export default function MoneybirdContactEmailAutocomplete({
   }
 
   function selectSuggestion(item: MoneybirdContactSuggestion) {
-    selectedEmailRef.current = item.email;
+    const fill = suggestionToFill(item);
+    selectedValueRef.current = selectedKey(field, fill);
     setShowSuggestions(false);
     setSuggestions([]);
     setActiveIndex(-1);
-    onSelectContact(suggestionToFill(item));
+    onSelectContact(fill);
   }
 
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     const next = e.target.value;
-    selectedEmailRef.current = null;
+    selectedValueRef.current = null;
     onChange(next);
     scheduleFetch(next);
   }
@@ -133,7 +153,7 @@ export default function MoneybirdContactEmailAutocomplete({
       setActiveIndex((i) => Math.max(i - 1, -1));
     } else if (e.key === "Enter" && activeIndex >= 0) {
       e.preventDefault();
-      selectSuggestion(suggestions[activeIndex]);
+      selectSuggestion(suggestions[activeIndex]!);
     } else if (e.key === "Escape") {
       setShowSuggestions(false);
     }
@@ -142,7 +162,7 @@ export default function MoneybirdContactEmailAutocomplete({
   return (
     <div ref={containerRef} className="relative">
       <input
-        type="email"
+        type={field === "email" ? "email" : "text"}
         autoComplete="off"
         className={
           className ??
@@ -159,7 +179,7 @@ export default function MoneybirdContactEmailAutocomplete({
           focusedRef.current = false;
           setShowSuggestions(false);
         }}
-        placeholder="typ e-mail om klant te zoeken…"
+        placeholder={placeholder ?? defaultPlaceholder}
       />
       {loading && (
         <span className="absolute right-3 top-[calc(50%+0.125rem)] -translate-y-1/2 text-stone-300">
@@ -207,7 +227,9 @@ export default function MoneybirdContactEmailAutocomplete({
                     </span>
                   )}
                 </span>
-                <span className="text-xs text-stone-500">{item.email}</span>
+                {item.email ? (
+                  <span className="text-xs text-stone-500">{item.email}</span>
+                ) : null}
                 {(item.city || item.zipcode || item.phone) && (
                   <span className="text-xs text-stone-400">
                     {[item.zipcode, item.city].filter(Boolean).join(" ")}

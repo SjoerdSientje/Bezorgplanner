@@ -13,7 +13,7 @@ import { searchMpOrderCustomersByEmailPrefix } from "@/lib/mp-order-customers";
 export const dynamic = "force-dynamic";
 
 /**
- * Zoek klanten op e-mailprefix:
+ * Zoek klanten op e-mail, voornaam of achternaam:
  * - Moneybird-contacten (als geconfigureerd + toegestaan)
  * - Klanten uit afgeronde MP-orders
  * Zelfde e-mail in beide → alleen Moneybird tonen (geen dubbel).
@@ -42,14 +42,29 @@ export async function GET(request: NextRequest) {
     const mpContacts =
       mpResult.status === "fulfilled" ? mpResult.value : [];
 
-    const seenEmails = new Set(
-      mbContacts.map((c) => c.email.trim().toLowerCase()).filter(Boolean)
+    const seenKeys = new Set(
+      mbContacts.map((c) => {
+        const email = c.email.trim().toLowerCase();
+        return email || `id:${c.id}`;
+      })
     );
 
     const mpOnly = mpContacts.filter((c) => {
       const email = c.email.trim().toLowerCase();
-      if (!email || seenEmails.has(email)) return false;
-      seenEmails.add(email);
+      const key = email || `id:${c.id}`;
+      if (seenKeys.has(key)) return false;
+      // Zonder e-mail: ook dedupe op weergavenaam t.o.v. MB
+      if (
+        !email &&
+        mbContacts.some(
+          (m) =>
+            m.displayName.trim().toLowerCase() ===
+            c.displayName.trim().toLowerCase()
+        )
+      ) {
+        return false;
+      }
+      seenKeys.add(key);
       return true;
     });
 
