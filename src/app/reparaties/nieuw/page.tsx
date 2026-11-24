@@ -585,6 +585,20 @@ export default function ReparatieNieuwPage() {
         if (!ok) return;
       }
     }
+
+    // Bij bestaande offerte: altijd order + factuur; Ja = offerte eerst weg, Nee = offerte blijft.
+    let deleteMoneybirdEstimate = false;
+    if (
+      soort === "reparatie_terugbrengen" &&
+      heeftAlOfferte &&
+      moneybirdEstimateId
+    ) {
+      const nr = moneybirdEstimateNumber || offerteNummer.trim() || "";
+      deleteMoneybirdEstimate = window.confirm(
+        `Offerte verwijderen?${nr ? `\n\nOffertenummer: ${nr}` : ""}\n\nJa = offerte verwijderen uit Moneybird, daarna factuur versturen.\nNee = offerte blijft bestaan naast de verzonden factuur.\n\nDe terugbreng-order wordt in beide gevallen aangemaakt.`
+      );
+    }
+
     setSaving(true);
     try {
       // Arbeidskosten: bedrag → uren, alles op eerste regel.
@@ -665,6 +679,12 @@ export default function ReparatieNieuwPage() {
           moneybird_estimate_number:
             soort === "reparatie_terugbrengen" && heeftAlOfferte
               ? moneybirdEstimateNumber || offerteNummer.trim() || undefined
+              : undefined,
+          delete_moneybird_estimate:
+            soort === "reparatie_terugbrengen" &&
+            heeftAlOfferte &&
+            Boolean(moneybirdEstimateId)
+              ? deleteMoneybirdEstimate
               : undefined,
           naam,
           email,

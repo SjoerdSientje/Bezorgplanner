@@ -569,6 +569,43 @@ export async function POST(request: NextRequest) {
         console.error("[reparaties] inventory deduct (terugbrengen):", invErr);
       }
 
+      // Bestaande offerte: op verzoek eerst verwijderen (vóór factuur versturen).
+      const estimateIdToDelete = String(
+        body.moneybird_estimate_id ?? ""
+      ).trim();
+      if (
+        allowMoneybird &&
+        Boolean(body.delete_moneybird_estimate) &&
+        estimateIdToDelete
+      ) {
+        try {
+          const { deleteMoneybirdEstimateById } = await import(
+            "@/lib/moneybird"
+          );
+          const del = await deleteMoneybirdEstimateById(estimateIdToDelete);
+          if (!del.deleted) {
+            console.warn(
+              "[reparaties] offerte verwijderen overgeslagen/mislukt:",
+              del
+            );
+          } else {
+            await supabase
+              .from("orders")
+              .update({
+                moneybird_estimate_id: null,
+                moneybird_estimate_number: null,
+              })
+              .eq("id", order.id)
+              .eq("owner_email", ownerEmail);
+          }
+        } catch (delEstErr) {
+          console.warn(
+            "[reparaties] offerte verwijderen mislukt (order/factuur gaan door):",
+            delEstErr
+          );
+        }
+      }
+
       if (allowMoneybird && betaalwijze === "factuur") {
         if (!moneybirdInvoiceId) {
           return NextResponse.json(
@@ -580,6 +617,7 @@ export async function POST(request: NextRequest) {
             { status: 500 }
           );
         }
+
         const sendRes = await sendReparatieSalesInvoice({
           orderId: order.id,
           invoiceId: moneybirdInvoiceId,

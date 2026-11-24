@@ -3768,3 +3768,46 @@ export async function deleteReparatieEstimate(params: {
   console.info("[moneybird] reparatie conceptofferte verwijderd", id, orderId);
   return { deleted: true, estimateId: id };
 }
+
+/**
+ * Verwijder een Moneybird-offerte op id (ook open/accepted indien API dat toelaat).
+ * Gebruikt bij terugbrengen met bestaande offerte + bevestiging "Offerte verwijderen?".
+ */
+export async function deleteMoneybirdEstimateById(
+  estimateId: string
+): Promise<{ deleted: boolean; estimateId?: string; skipped?: string; error?: string }> {
+  if (!isMoneybirdConfigured()) {
+    return { deleted: false, skipped: "moneybird_not_configured" };
+  }
+  const id = String(estimateId ?? "").trim();
+  if (!id) return { deleted: false, skipped: "no_estimate" };
+
+  try {
+    const full = await moneybirdFetch<MoneybirdEstimate>(
+      `/estimates/${id}.json`
+    );
+    const state = String(full.state ?? "").toLowerCase();
+    // Al gefactureerd: niet verwijderen
+    if (state === "billed") {
+      return { deleted: false, estimateId: id, skipped: "state_billed" };
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/Moneybird 404/i.test(msg)) {
+      return { deleted: false, estimateId: id, skipped: "not_found" };
+    }
+    // Toch delete proberen
+  }
+
+  try {
+    await moneybirdFetch<unknown>(`/estimates/${id}.json`, {
+      method: "DELETE",
+    });
+    console.info("[moneybird] offerte verwijderd (op verzoek)", id);
+    return { deleted: true, estimateId: id };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn("[moneybird] offerte verwijderen mislukt", id, message);
+    return { deleted: false, estimateId: id, error: message };
+  }
+}
